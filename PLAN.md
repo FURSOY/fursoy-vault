@@ -8,10 +8,10 @@
 > bölümleri gözden geçirilir. Günlük tarzı uzun kayıt tutulmaz; belge güncel ve okunabilir kalır.
 
 **Son güncelleme:** 2026-08-03
-**Durum:** Tasarım tamamlandı. **Faz 1 / Deney 1 TAMAMLANDI; Go/No-Go kriteri A karşılandı.**
-**Faz 2 / Deney 2 TAMAMLANDI — manuel Chrome ölçümü 40/43 PASS. Faz 3 / Deney 3 TAMAMLANDI —
-136/136 PASS, 10/10 restore ve §22.3 kriterlerinin tamamı karşılandı.** Sıradaki çalışma Faz 4 /
-Deney 4 duty-cycle ölçümüdür; kullanıcı onayı olmadan başlanmayacaktır.
+**Durum:** Tasarım tamamlandı. **Faz 1–4 deneylerinin tamamı GO.** Deney 1 Go/No-Go kriteri A'yı,
+Deney 2 cookie attribute round-trip kapsamını, Deney 3 §22.3 uçtan uca kriterlerini ve Deney 4
+§22.4 duty-cycle kriterini karşıladı. Sıradaki çalışma Faz 5 tek grup uçtan uca MVP'dir; kullanıcı
+onayı olmadan başlanmayacaktır.
 
 ---
 
@@ -1243,7 +1243,18 @@ uyumluluğu ayrıca ölçülmeden genellenmez.
 Karşılanmazsa: ilgili site profili **izleme** seviyesine düşürülür, mimari değişmez.
 Birden çok hedefte sistematik başarısızlık varsa cookie-only yaklaşımı yeniden değerlendirilir.
 
-### 22.4 Deney 4 (duty cycle) — devam kriteri
+### 22.4 Deney 4 (duty cycle) — ✅ KARŞILANDI
+
+- [x] `unnecessary_exposure / browser_open_time` anlamlı ölçüde düşürüldü — **%0,012**
+- [x] Son ilgili sekme kapanışında otomatik eviction — **1/1 başarılı**
+- [x] Idle başlangıcında otomatik eviction — **1/1 başarılı**
+- [x] Başarısız eviction — **0**
+- [x] Site kaynaklı kendiliğinden cookie oluşumu — **0**
+
+Geçerli beş dakikalık ölçümde `exposure_duty_cycle=%14,011`, `active_exposure=41998 ms` ve
+`unnecessary_exposure=35 ms` ölçüldü. Cookie store'da açık kaldığı 42033 ms'nin yalnız 35 ms'si
+ilgili sekme aktif kullanılmıyorken geçti. Bu sonuç kontrollü localhost dummy oturumuna aittir;
+gerçek site ve uzun günlük kullanım dağılımına kendiliğinden genellenmez.
 
 `unnecessary_exposure / browser_open_time` anlamlı ölçüde düşürülemiyorsa ürünün temel değer
 önerisi doğrulanmamış demektir; tahliye tetikleyicileri yeniden tasarlanır.
@@ -1446,6 +1457,11 @@ notes, caches, metadata, and temporary working files.
 
 **Tarih:** 2026-08-03
 
+**Kilometre taşı:** Faz 1–4 kapsamındaki dört deney de tamamlandı ve **GO** sonucu verdi. TPM/Hello
+temeli, cookie attribute round-trip, gerçek session evict/restore ve duty-cycle tahliye davranışı
+kontrollü ortamlarda doğrulandı. Proje deneysel doğrulama aşamasından Faz 5 tek grup uçtan uca MVP
+uygulamasına geçmeye hazırdır.
+
 ### Tamamlananlar
 
 - Tehdit modeli, güvenlik sınırları, mimari ve deney planı kararlaştırıldı.
@@ -1534,6 +1550,18 @@ notes, caches, metadata, and temporary working files.
   geri yazılması oturumu diriltmedi ve protected endpoint `invalid_session` döndürdü. Kullanıcı
   gözleminde yalnız beklenen localhost sekmesi açılıp kapandı; Chrome çökmesi veya kalıcı profil
   bozulması görülmedi. Deney 3 **TAMAMLANDI** ve §22.3 kriterlerinin tamamı karşılandı.
+- Deney 4 duty-cycle harness'i aynı kontrollü session altyapısında gerçek `tabs.onRemoved`,
+  `chrome.idle`, otomatik inject/evict, reconciliation ve cookie yeniden oluşma olaylarını ölçmek
+  üzere tamamlandı. İlk manuel koşu kullanıcı aktif fazda uzaklaştığı için erken idle'a girdi ve
+  geçersiz ölçüm olarak raporda ayrı tutuldu.
+- İkinci ve geçerli Deney 4 koşusu tam 5 dakika (`300007 ms`) sürdü. Cookie `42033 ms` açık kaldı:
+  `41998 ms` active exposure, yalnız `35 ms` unnecessary exposure ölçüldü. Sonuçlar
+  `exposure_duty_cycle=%14,011` ve ana hedef
+  `unnecessary_exposure / browser_open_time=%0,012` oldu.
+- Son sekme kapanışı ve idle başlangıcı birer kez tetiklendi; `2/2` eviction ve `1/1` inject
+  başarılı oldu. `failed_eviction_count=0`, `site_cookie_recreated_count=0` ölçüldü; kullanıcı
+  çökme, profil bozulması veya beklenmedik davranış gözlemlemedi. Deney 4 **TAMAMLANDI** ve §22.4
+  kriteri karşılandı.
 
 ### Değişen varsayımlar (revizyon 2 — 2026-08-03)
 
@@ -1569,8 +1597,8 @@ Bu düzeltmelerin sonucu olarak üç yeni açık soru eklendi: **Q15** (kalıcı
 | OS | Windows 11 Pro, build 10.0.26200 | Ölçüldü |
 | Rust | rustc 1.96.0 / cargo 1.96.0 | Ölçüldü |
 | Git deposu | `main`, 1 commit (`a87957a Initial commit`) | Ölçüldü |
-| Çalışma alanı | **Temiz değil** — `PLAN.md` değişmiş; Deney 2 raporu ve `poc/cookie-probe/` untracked | 2026-08-03 `git status --short` |
-| Takip edilen dosyalar | `.gitattributes`, `.gitignore`, `LICENSE`, `PLAN.md`, Deney 1 raporu ve `poc/tpm-probe/` dosyaları | 2026-08-03 `git ls-files` |
+| Çalışma alanı | **Temiz değil** — Deney 4 doküman/kod değişiklikleri yerel; commit veya push yok | 2026-08-03 `git status --short` |
+| Takip edilen kapsam | PLAN, Deney 1–3 raporları ve Deney 1–3 POC çalışma alanları; Deney 4 raporu/kod ekleri henüz yerel | 2026-08-03 `git ls-files` |
 | TPM durumu | **TPM 2.0 doğrulandı** — Platform Crypto Provider hardware-only; PCP TPM version `0x00020000` | Deney 1 `status` |
 | Windows Hello kayıt durumu | **Kayıtlı, yalnızca PIN** — Yol C prompt türü PIN; biyometrik donanım yok | Q13 / Deney 1 |
 | Chrome | `150.0.0.0` | Deney 2 manuel raporu |
@@ -1588,6 +1616,8 @@ Bu düzeltmelerin sonucu olarak üç yeni açık soru eklendi: **Q15** (kalıcı
   `FCP-probe-*`, `__Host-FCP-probe` ve `__Secure-FCP-probe` cookie'leri kullanıyor.
 - Deney 3 extension'ı ve kontrollü session test uygulaması `poc/session-probe/` altındadır; extension
   yalnızca `tsc` ile derlenir ve session kimliği rapor/log çıktısına yazılmaz.
+- Deney 4 aynı `poc/session-probe/` çalışma alanındaki gerçek sekme/idle olay motoru ve tam sayfa
+  duty-cycle harness'iyle ölçüldü; sentetik cookie snapshot değeri rapora veya olay loguna yazılmaz.
 - **Commit atılmadı, push yapılmadı, branch oluşturulmadı.**
 
 ### Bilinen regresyonlar
@@ -1601,33 +1631,31 @@ jest doğrulandı. Ancak CNG parola kutusu keylogger'a açık yeni bir sır ve k
 oluşturur. Ürün jesti Yol C Hello capability'den alacak; CNG UI policy kaldırılıp anahtar yalnızca
 fiili unwrap için kullanılacak. Taze-handle kilit ölçümü kilidin davranışı değiştirmediğini kanıtladı;
 Go/No-Go kriteri A karşılandı. Deney 2 gerçek hesap veya gerçek oturum cookie'si kullanmadı; bütün
-probe cleanup kontrolleri geçti. Buna rağmen CHIPS restore uyumluluğu kanıtlanmış kabul edilmez ve
-Q18 kapanmadan partitioned cookie desteği varmış gibi gösterilmez.
+probe cleanup kontrolleri geçti. Deney 3 kontrollü session restore'unu, Deney 4 ise kullanılmayan
+cookie'nin `%0,012` browser-open oranına indirildiğini doğruladı. Buna rağmen CHIPS restore
+uyumluluğu kanıtlanmış kabul edilmez ve Q18 kapanmadan partitioned cookie desteği varmış gibi
+gösterilmez.
 
 ---
 
 ## 31. Sonraki Kesin Adım
 
-**Faz 4 / Deney 4 — Duty cycle ölçümü.**
+**Faz 5 — tek grup uçtan uca MVP: vault + native host + browser extension.**
 
-Deney 3 tamamlandı: kontrollü server-backed session üzerinde 136/136 kontrol, 10/10 evict/restore,
-%100 restore, %0 yanlış logout ve 0 güvenlik alarmı ölçüldü; §22.3 kriterlerinin tamamı karşılandı.
-Sıradaki kesin adım, gerçek kullanım zaman çizgisinde inject, son ilgili sekmenin kapanması, idle,
-eviction, reconciliation ve sitenin cookie'yi yeniden üretmesi olaylarını ölçen Deney 4 harness ve
-rapor kapsamını kullanıcıyla netleştirmektir.
+Deney 1–4 tamamlandı ve ilgili bütün devam kapıları GO verdi. Sıradaki kesin adım, doğrulanan
+parçaları tek bir sınırlı MVP akışında birleştirmektir:
 
-- Hedef metrik: `unnecessary_exposure / browser_open_time`
-- Olaylar: inject, last-tab-close, idle başlangıcı, eviction, reconciliation, başarısız eviction,
-  site kaynaklı cookie yeniden oluşumu
-- Deney 3'te doğrulanan portsuz cookie host-permission kuralı bütün sonraki extension manifestlerinde
-  bağlayıcıdır
-- Q18 partitioned cookie desteği ayrı kontrollü top-level site + üçüncü-taraf iframe deneyi olmadan
-  varmış gibi gösterilmez
-- Q8 çoklu profil/incognito ve Q5 lease zamanlayıcısı açık kalır; Deney 4 kapsamı belirlenirken yeniden
-  değerlendirilir
+- Bir kontrollü hesap grubu için provisional vault formatını somutlaştırmak
+- Yol C Windows Hello kullanıcı varlığı ile TPM-backed anahtar/DEK akışını native host'ta bağlamak
+- Native Messaging protokolünü extension ile uygulamak
+- Extension tarafında portsuz host permissions, snapshot/inject/evict ve reconciliation kurallarını
+  kullanmak
+- Deney 3'teki stale-session kontrolünü ve Deney 4'teki last-tab/idle tahliye davranışını MVP
+  kabul testlerine taşımak
+- Q18 partitioned cookie, Q8 çoklu profil/incognito ve Q15 kalıcı Windows agent konularını mevcut
+  açık kararlar olarak korumak; destek doğrulanmadan özellik iddiasında bulunmamak
 
-**Kullanıcının açık onayı olmadan Deney 4 implementasyonuna veya yeni bir site ölçümüne
-başlanmayacaktır.**
+**Kullanıcının açık onayı olmadan Faz 5 implementasyonuna başlanmayacaktır.**
 
 ---
 

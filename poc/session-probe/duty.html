@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>FURSOY Duty-cycle Probe</title>
+    <link rel="stylesheet" href="styles.css" />
+    <link rel="stylesheet" href="duty.css" />
+  </head>
+  <body>
+    <main>
+      <header>
+        <p class="eyebrow">FURSOY Cookie Protector · Experiment 4</p>
+        <h1>Cookie exposure duty-cycle probe</h1>
+        <p class="warning">
+          This harness uses only the synthetic <code>FCP-session-probe</code> cookie and the
+          local dummy session server. It measures one observed browser-open window; it does not
+          claim production-site compatibility or a whole-day duty cycle.
+        </p>
+      </header>
+
+      <section class="controls" aria-labelledby="configuration-heading">
+        <h2 id="configuration-heading">Simulation</h2>
+        <div class="control-grid">
+          <label>Duration (minutes)<input id="duration-minutes" type="number" min="1" max="30" value="5" /></label>
+          <label>Active phase (seconds)<input id="active-seconds" type="number" min="10" max="300" value="30" /></label>
+          <label>Closed-tab phase (seconds)<input id="closed-seconds" type="number" min="5" max="300" value="20" /></label>
+          <label>Idle threshold (seconds)<input id="idle-seconds" type="number" min="15" max="300" value="30" /></label>
+        </div>
+        <p class="instruction">
+          The harness opens the local site, logs in once, keeps it active, closes the last relevant
+          tab, then reopens it to exercise automatic restore. After reopening, do not use the
+          mouse or keyboard until the run ends so the real <code>chrome.idle</code> trigger can fire.
+        </p>
+        <div class="actions">
+          <button id="run-duty" type="button">Run duty-cycle simulation</button>
+          <button id="stop-duty" type="button" disabled>Stop measurement</button>
+          <button id="copy-duty" type="button" disabled>Copy report as text</button>
+        </div>
+        <p id="status" role="status">Ready. Start <code>npm run serve</code> before running.</p>
+      </section>
+
+      <section class="metrics" aria-labelledby="metrics-heading">
+        <h2 id="metrics-heading">Live metrics</h2>
+        <div class="metric-grid">
+          <div><span>Browser-open window</span><strong id="browser-open">—</strong></div>
+          <div><span>Cookie present</span><strong id="cookie-present">—</strong></div>
+          <div><span>Exposure duty cycle</span><strong id="duty-cycle">—</strong></div>
+          <div><span>Active exposure</span><strong id="active-exposure">—</strong></div>
+          <div><span>Unnecessary exposure</span><strong id="unnecessary-exposure">—</strong></div>
+          <div><span>Unnecessary / browser open</span><strong id="unnecessary-ratio">—</strong></div>
+        </div>
+      </section>
+
+      <section aria-labelledby="events-heading">
+        <h2 id="events-heading">Event log</h2>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr><th>#</th><th>Timestamp</th><th>Event</th><th>Detail</th><th>Duration (ms)</th></tr>
+            </thead>
+            <tbody id="event-body">
+              <tr><td colspan="5">No measurement yet.</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+    </main>
+    <script type="module" src="dist/duty.js"></script>
+  </body>
+</html>

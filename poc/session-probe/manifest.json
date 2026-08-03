@@ -1,13 +1,13 @@
 {
   "manifest_version": 3,
-  "name": "FURSOY Session Round-trip Probe",
-  "version": "0.1.0",
-  "description": "Tests whether a synthetic server-backed session survives cookie eviction and restoration.",
+  "name": "FURSOY Session and Duty-cycle Probe",
+  "version": "0.2.0",
+  "description": "Measures synthetic session eviction/restoration and cookie exposure duty cycle.",
   "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAu3YKU3UsJ/om/P5BiClbHWoBL+LCLh3gmA2APIBeJeaLSEnxiBfyKO8QU3kIWUL/VfUuLcCSQBBNcyG4FXTmwBzuYIPQNGirCqEKoPlsrmdZfCL4IDdv0GKH7uJDjGQi0vr2m0pOt4Wdo7OM3EeKg3HN9ubQQGZ0LiU/C4gNQXoYyUrFWvUsvjL3PuhUs4fpJlc1JV33yrnCgzUf1knaocfTsSXLqzHH+kpcH15IkCk3pyti63Q413XU9sp0+VLGN83Kz4g7HCkUJcMK0XLHRrJhuPmhcNDYmnud+mZ1ltq8t/CbTkAVDwHzJJSREjIVe6Oi3B+3ps/YzDSuMPZDPQIDAQAB",
-  "permissions": ["cookies"],
+  "permissions": ["alarms", "cookies", "idle", "storage", "tabs"],
   "host_permissions": ["http://localhost/*", "http://127.0.0.1/*"],
   "action": {
-    "default_title": "Open session round-trip probe"
+    "default_title": "Open duty-cycle probe"
   },
   "background": {
     "service_worker": "dist/background.js",

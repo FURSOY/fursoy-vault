@@ -1,0 +1,61 @@
+.controls,
+.metrics {
+  margin-bottom: 28px;
+  padding: 20px;
+  border: 1px solid #2c3b50;
+  border-radius: 10px;
+  background: #151c27;
+}
+
+h2 {
+  margin: 0 0 16px;
+  font-size: 1.2rem;
+}
+
+.control-grid,
+.metric-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  gap: 14px;
+}
+
+.control-grid label,
+.metric-grid > div {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+
+.control-grid input {
+  width: auto;
+}
+
+.metric-grid > div {
+  padding: 14px;
+  border-radius: 8px;
+  background: #1c2635;
+}
+
+.metric-grid span,
+.instruction {
+  color: #aebfd2;
+}
+
+.metric-grid strong {
+  font-size: 1.2rem;
+}
+
+.instruction {
+  max-width: 920px;
+  line-height: 1.55;
+}
+
+button#run-duty {
+  border-color: #36a37d;
+  background: #167154;
+}
+
+button#stop-duty {
+  border-color: #b56b6b;
+  background: #713636;
+}

@@ -2,6 +2,7 @@ declare namespace chrome {
   namespace runtime {
     const lastError: { message?: string } | undefined;
     function getURL(path: string): string;
+    function sendMessage(message: unknown, callback: (response: unknown) => void): void;
 
     interface MessageSender {
       tab?: tabs.Tab;
@@ -16,6 +17,10 @@ declare namespace chrome {
         ) => boolean | void,
       ): void;
     };
+
+    const onStartup: {
+      addListener(callback: () => void): void;
+    };
   }
 
   namespace action {
@@ -26,10 +31,17 @@ declare namespace chrome {
 
   namespace tabs {
     interface Tab {
+      active?: boolean;
       id?: number;
       incognito: boolean;
+      status?: "loading" | "complete";
       url?: string;
       windowId: number;
+    }
+
+    interface TabChangeInfo {
+      status?: "loading" | "complete";
+      url?: string;
     }
 
     function create(
@@ -38,8 +50,71 @@ declare namespace chrome {
     ): void;
     function getCurrent(callback: (tab?: Tab) => void): void;
     function get(tabId: number, callback: (tab: Tab) => void): void;
+    function query(
+      queryInfo: { active?: boolean; lastFocusedWindow?: boolean; url?: string[] },
+      callback: (tabs: Tab[]) => void,
+    ): void;
     function sendMessage(tabId: number, message: unknown, callback: (response: unknown) => void): void;
     function remove(tabId: number, callback?: () => void): void;
+
+    const onActivated: {
+      addListener(callback: (activeInfo: { tabId: number; windowId: number }) => void): void;
+    };
+    const onRemoved: {
+      addListener(callback: (tabId: number, removeInfo: { isWindowClosing: boolean; windowId: number }) => void): void;
+    };
+    const onUpdated: {
+      addListener(callback: (tabId: number, changeInfo: TabChangeInfo, tab: Tab) => void): void;
+    };
+  }
+
+  namespace windows {
+    interface Window {
+      focused: boolean;
+      id?: number;
+      tabs?: tabs.Tab[];
+    }
+
+    const WINDOW_ID_NONE: number;
+    function getLastFocused(
+      getInfo: { populate?: boolean },
+      callback: (window: Window) => void,
+    ): void;
+    const onFocusChanged: {
+      addListener(callback: (windowId: number) => void): void;
+    };
+  }
+
+  namespace idle {
+    type IdleState = "active" | "idle" | "locked";
+    function queryState(detectionIntervalInSeconds: number, callback: (state: IdleState) => void): void;
+    function setDetectionInterval(intervalInSeconds: number): void;
+    const onStateChanged: {
+      addListener(callback: (newState: IdleState) => void): void;
+    };
+  }
+
+  namespace storage {
+    interface StorageArea {
+      get(keys: string | string[] | null, callback: (items: Record<string, unknown>) => void): void;
+      set(items: Record<string, unknown>, callback?: () => void): void;
+      remove(keys: string | string[], callback?: () => void): void;
+    }
+
+    const session: StorageArea;
+  }
+
+  namespace alarms {
+    interface Alarm {
+      name: string;
+      scheduledTime: number;
+    }
+
+    function create(name: string, alarmInfo: { when: number }): void;
+    function clear(name: string, callback?: (wasCleared: boolean) => void): void;
+    const onAlarm: {
+      addListener(callback: (alarm: Alarm) => void): void;
+    };
   }
 
   namespace cookies {
@@ -106,5 +181,10 @@ declare namespace chrome {
       callback: (details: { name: string; storeId: string; url: string } | null) => void,
     ): void;
     function getAllCookieStores(callback: (stores: CookieStore[]) => void): void;
+    const onChanged: {
+      addListener(
+        callback: (changeInfo: { removed: boolean; cookie: Cookie; cause: string }) => void,
+      ): void;
+    };
   }
 }
