@@ -1,0 +1,19 @@
+{
+  "manifest_version": 3,
+  "name": "FURSOY Cookie Attribute Probe",
+  "version": "0.1.0",
+  "description": "Tests chrome.cookies attribute round-trip behavior using synthetic probe cookies only.",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAu3YKU3UsJ/om/P5BiClbHWoBL+LCLh3gmA2APIBeJeaLSEnxiBfyKO8QU3kIWUL/VfUuLcCSQBBNcyG4FXTmwBzuYIPQNGirCqEKoPlsrmdZfCL4IDdv0GKH7uJDjGQi0vr2m0pOt4Wdo7OM3EeKg3HN9ubQQGZ0LiU/C4gNQXoYyUrFWvUsvjL3PuhUs4fpJlc1JV33yrnCgzUf1knaocfTsSXLqzHH+kpcH15IkCk3pyti63Q413XU9sp0+VLGN83Kz4g7HCkUJcMK0XLHRrJhuPmhcNDYmnud+mZ1ltq8t/CbTkAVDwHzJJSREjIVe6Oi3B+3ps/YzDSuMPZDPQIDAQAB",
+  "permissions": ["cookies"],
+  "host_permissions": [
+    "http://localhost:43117/*",
+    "https://localhost:43117/*"
+  ],
+  "action": {
+    "default_title": "Open cookie attribute probe"
+  },
+  "background": {
+    "service_worker": "dist/background.js",
+    "type": "module"
+  }
+}

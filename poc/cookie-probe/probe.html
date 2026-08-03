@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>FURSOY Cookie Attribute Probe</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <main>
+      <header>
+        <p class="eyebrow">Experiment 2</p>
+        <h1>Cookie attribute probe</h1>
+        <p class="warning">
+          This suite uses only synthetic <code>FCP-probe-*</code> cookies on
+          <code>localhost:43117</code>. Attribute matches prove API round-trip compatibility only;
+          they do not prove that a real session survives eviction and restore.
+        </p>
+        <div class="actions">
+          <button id="run-probe" type="button">Run probe suite</button>
+          <button id="copy-report" type="button" disabled>Copy report as text</button>
+        </div>
+        <p id="status" role="status" aria-live="polite">Ready.</p>
+      </header>
+
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Test case</th>
+              <th>Attribute</th>
+              <th>Expected</th>
+              <th>Actual</th>
+              <th>Result</th>
+            </tr>
+          </thead>
+          <tbody id="result-body"></tbody>
+        </table>
+      </div>
+    </main>
+    <script type="module" src="dist/probe.js"></script>
+  </body>
+</html>

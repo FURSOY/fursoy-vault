@@ -9,7 +9,8 @@
 
 **Son güncelleme:** 2026-08-03
 **Durum:** Tasarım tamamlandı. **Faz 1 / Deney 1 TAMAMLANDI; Go/No-Go kriteri A karşılandı.**
-Faz 2 / Deney 2 kullanıcı onayını bekliyor.
+**Faz 2 / Deney 2 TAMAMLANDI — manuel Chrome ölçümü 40/43 PASS.** Faz 3 / Deney 3 kullanıcı
+onayını bekliyor.
 
 ---
 
@@ -895,7 +896,7 @@ Bu nedenle doğrulama iki ayrı katmanda yapılır:
 |------|---------------|---------------|-----|
 | `name` | var | var | — |
 | `value` | var | var | — |
-| `domain` | var | opsiyonel | **`hostOnly` ile birlikte ele alınır** |
+| `domain` | var | opsiyonel | **`hostOnly` ile birlikte ele alınır**; Chrome 150 `localhost` ölçümünde domain verilmesine rağmen host-only'ye düştü, gerçek eTLD+1 davranışı doğrulanmadı |
 | `hostOnly` | var | **yok** | Türetilir: `domain` verilirse `false`, verilmezse `true` |
 | `path` | var | var | — |
 | `secure` | var | var | — |
@@ -903,8 +904,8 @@ Bu nedenle doğrulama iki ayrı katmanda yapılır:
 | `sameSite` | `no_restriction`/`lax`/`strict`/`unspecified` | aynı | `no_restriction` için `secure=true` zorunlu |
 | `session` | var | **yok** | `expirationDate` verilmezse session cookie olur |
 | `expirationDate` | var (session değilse) | opsiyonel | — |
-| `partitionKey` | var (CHIPS) | var | Güncel Chrome'da round-trip eder; doğrulanacak |
-| `storeId` | var | var | Çoklu profil / incognito ayrımı |
+| `partitionKey` | var (CHIPS) | var | Chrome 150 `localhost` ölçümünde `set` cookie döndürmedi; bağlam gereksinimi [Q18](#24-açık-teknik-sorular) olarak açık |
+| `storeId` | var | var | Tek normal profilde `storeId=0` round-trip doğrulandı; çoklu profil / incognito doğrulanmadı |
 | `url` | — | **zorunlu** | `domain` + `path` + `secure`'dan üretilir |
 
 ### 18.3 Prefix kuralları
@@ -1045,6 +1046,13 @@ Doğrulanacak alanlar: `hostOnly`, `domain`, `path`, `secure`, `httpOnly`, `same
 `expirationDate`, `partitionKey`, `storeId`, prefix kuralları.
 
 Bu test **oturumun çalışacağını kanıtlamaz**; yalnızca API round-trip uyumluluğunu test eder.
+
+**Ölçülmüş sonuç (2026-08-03):** Windows 11 Pro build `10.0.26200` ve Chrome `150.0.0.0`
+üzerinde **40/43 PASS**. Host-only, path/HttpOnly, Secure, dört SameSite değeri,
+session/expirationDate, normal profil `storeId=0` ve prefix kuralları doğrulandı. `localhost`
+domain cookie isteği host-only olarak geri döndü; bunun gerçek eTLD+1 domain'lere genellenip
+genellenemeyeceği doğrulanmadı. CHIPS `partitionKey` yazımı cookie döndürmedi ve [Q18](#24-açık-teknik-sorular)
+olarak açık kaldı. Ayrıntılar `docs/experiments/exp-02-cookie-attributes.md` içindedir.
 
 ### Deney 3 — Disposable profile uçtan uca
 
@@ -1235,8 +1243,8 @@ işaretlenir.
 | **Q5** | MV3 service worker'ı boşta sonlandırılıyor. Lease zamanlayıcısını ne zorlayacak? `chrome.alarms` granülaritesi yeterli mi? Açık native messaging port'u SW ömrünü ne kadar uzatıyor? | **Tahliye hassasiyeti — kritik** | Küçük extension deneyi (Deney 2'ye eklenebilir) |
 | **Q6** | Host, Chrome tarafından başlatılan bir process olarak Windows lock bildirimini nasıl alacak? (`WTSRegisterSessionNotification` pencere handle'ı ister; gizli mesaj penceresi mi kurulacak?) Host kalıcı olmadığı için bu bildirim yalnızca port açıkken anlamlıdır (§9.2.1). | Lock tahliyesinin best-effort yolu | Deney 1'e ek |
 | **Q7** | Cookie tahliye edildikten sonra hâlâ çalışan bir service worker veya background fetch cookie'yi yeniden oluşturuyor mu? | Duty cycle doğruluğu | Deney 3/4 metriği |
-| **Q8** | Çoklu Chrome profili ve incognito `storeId` davranışı nasıl ele alınacak? | Kapsam | Deney 2 |
-| **Q9** | Extension ID pinlenmesi: unpacked geliştirme uzantısı rastgele ID alır. Manifest `key` alanı ile sabitlenecek mi? | Kurulum / native host manifest | Deney 2 öncesi karar |
+| **Q8** | 🟡 Kısmen ölçüldü — Tek normal Chrome profilinde `storeId=0` yazma/okuma round-trip'i doğrulandı. Çoklu profil ve incognito store kimlikleri ile geçiş davranışı henüz doğrulanmadı. | Kapsam | Çoklu profil / incognito desteği ele alınmadan önce ayrı ölçüm |
+| **Q9** | ✅ Kapandı — Manifest `key` alanıyla unpacked extension ID'si `dokhjkpkdknopgnjdmaogjhlelcaiigo` olarak sabitlendi ve manuel reload/test akışında kullanıldı. | Kurulum / native host manifest | Deney 2 |
 | **Q10** | ✅ Kapandı — Rust binary için `Cargo.lock` repoda tutulacak. | Repo hijyeni | §8.2.1 |
 | **Q11** | Mevcut lisans GPL-3.0 (repoda hazır). Bu bilinçli bir tercih mi, teyit edilmeli. | Dağıtım | Kullanıcı teyidi |
 | **Q12** | Audit log'da cookie **isimleri** bile hash'lenecekse, hash tuzu nerede saklanacak? (Tuz kasada olursa log kasasız okunamaz) | Log tasarımı | Vault implementasyonu öncesi |
@@ -1245,6 +1253,7 @@ işaretlenir.
 | **Q15** | **Kalıcı bir Windows user agent eklenecek mi?** Standart NMH host'u kalıcı değildir (§9.2.1); Chrome kapalıyken lease expiry takibi, lock tahliyesi ve reconciliation tetikleme yapılamaz. Kalıcı agent bunu çözer ancak yeni saldırı yüzeyi, autostart ve güncelleme yükü getirir. | **Mimari — lease zorlama modeli** | [ADR-013](#adr-013--kalıcı-windows-user-agent-açık-karar); Deney 4 duty cycle sonuçları karar girdisi olacak |
 | **Q16** | Wrapped DEK grup dosyasında mı (Aday A) manifest'te mi (Aday B) saklanacak? | Vault formatının dondurulması | Deney 1 — KEK tipi ve wrap çıktısı boyutu belirlendiğinde ([§12.0](#120-tek-doğruluk-kaynağı-ilkesi-bağlayıcı)) |
 | **Q17** | Extension kaldırıldığında veya devre dışı bırakıldığında kullanıcı `degraded` durumdan nasıl haberdar edilecek? Host kalıcı değil ve UI'ı yok; extension da yoksa bildirim kanalı kalmıyor. | Kullanıcının yanlış güven hissine kapılmaması | Q15 kararına bağlı; kalıcı agent varsa çözülür |
+| **Q18** | CHIPS/partitioned cookie'ler yalnızca gerçek üçüncü-taraf bağlamında mı yazılabiliyor; extension bağlamından `chrome.cookies.set` ile doğrudan `partitionKey` verildiğinde neden cookie dönmüyor? Chrome 150 `localhost` ölçümünde yazım sessizce başarısız oldu. | Partitioned cookie restore uyumluluğu | Kontrollü top-level site + üçüncü-taraf iframe deneyi; extension ve sayfa bağlamlarını karşılaştır |
 
 ---
 
@@ -1254,7 +1263,7 @@ işaretlenir.
 |-----|--------|-------|------|
 | **Faz 0** | Plan ve karar kaydı | `PLAN.md` | ✅ Tamamlandı |
 | **Faz 1** | Deney 1 — TPM/Hello probe (Rust) | `poc/tpm-probe/`, `docs/experiments/exp-01-*.md` | ✅ Tamamlandı — §22.1 kriter A karşılandı |
-| **Faz 2** | Deney 2 — Cookie attribute probe (extension) + Q5, Q8, Q9 | `poc/cookie-probe/`, exp-02 raporu | ⏳ Kullanıcı onayı bekleniyor; round-trip uyumluluğu |
+| **Faz 2** | Deney 2 — Cookie attribute probe (extension) + Q5, Q8, Q9 | `poc/cookie-probe/`, exp-02 raporu | ✅ Tamamlandı — 40/43 PASS; Q9 kapandı, Q8 kısmi, Q5 ve yeni Q18 açık |
 | **Faz 3** | Deney 3 — Disposable profile uçtan uca | exp-03 raporu | §22.3 kriterleri |
 | **Faz 4** | Deney 4 — Duty cycle ölçümü | exp-04 raporu | §22.4 kriteri |
 | **Faz 5** | Tek grup, uçtan uca MVP (vault + host + extension) | Çalışan dikey dilim | Manuel kabul |
@@ -1403,6 +1412,27 @@ notes, caches, metadata, and temporary working files.
   3541.494 ms ölçtü; iki tarafta da jest gözlendi. Kilit durumu davranışı değiştirmiyor.
 - Nihai model doğrulandı: jest yalnızca handle'a bağlıdır; yeni handle yeni jest, aynı handle cache'li
   kullanım üretir. Deney 1 **TAMAMLANDI** ve §22.1 kriter A karşılandı.
+- `poc/cookie-probe/` altında yalnızca `tsc` ile derlenen MV3 Deney 2 uzantısı, sabit
+  `localhost:43117` test sitesi ve tam sayfa rapor harness'i oluşturuldu. Manifest `key` alanıyla
+  extension ID'si `dokhjkpkdknopgnjdmaogjhlelcaiigo` olarak sabitlendi; böylece **Q9 kapandı**.
+- Deney 2 manuel Chrome ölçümü Windows 11 Pro build `10.0.26200`, Chrome `150.0.0.0`, tek normal
+  profil `storeId=0` ortamında tamamlandı: **40/43 PASS**.
+- Host-only, path/HttpOnly, Secure, dört SameSite değeri, session/expirationDate ilişkisi,
+  `storeId=0`, URL üretimi ve `__Host-` / `__Secure-` prefix kuralları round-trip etti.
+- `domain: "localhost"` verilen cookie doğrulanmış biçimde `hostOnly=true`, `domain="localhost"`
+  olarak döndü. Bunun `localhost` özel-host davranışı olduğu olasıdır; gerçek eTLD+1 domain'lerde
+  tekrarlanıp tekrarlanmadığı **doğrulanmadı**.
+- CHIPS `partitionKey` yazımı cookie döndürmedi. Başarısız sonuç silinmedi; gerçek üçüncü-taraf
+  bağlam gereksinimini araştırmak üzere **Q18** açıldı.
+
+### Değişen varsayımlar (revizyon 2 — 2026-08-03)
+
+| Önceki varsayım | Ölçülmüş / güncel durum |
+|---|---|
+| `domain` verilmesi her test hostunda `hostOnly=false` üretir | `localhost` üzerinde yanlış: Chrome 150 cookie'yi host-only olarak geri döndürdü. Bu sonuç gerçek eTLD+1 domain'lere genellenmez; onlar doğrulanmadı. |
+| CHIPS `partitionKey` güncel Chrome'da doğrudan round-trip eder | Bu test bağlamında doğrulanmadı: `chrome.cookies.set` cookie döndürmedi. Bağlam gereksinimi Q18 olarak açık. |
+| Deney 2, Q8'i tümüyle kapatır | Yalnızca tek normal profil `storeId=0` ölçüldü; çoklu profil ve incognito kısmı açık kaldı. |
+| Unpacked extension ID'si kararsız kalabilir | Manifest `key` alanı ile sabit ID doğrulandı; Q9 kapandı. |
 
 ### Değişen varsayımlar (revizyon 1 — 2026-08-02)
 
@@ -1427,10 +1457,13 @@ Bu düzeltmelerin sonucu olarak üç yeni açık soru eklendi: **Q15** (kalıcı
 | OS | Windows 11 Pro, build 10.0.26200 | Ölçüldü |
 | Rust | rustc 1.96.0 / cargo 1.96.0 | Ölçüldü |
 | Git deposu | `main`, 1 commit (`a87957a Initial commit`) | Ölçüldü |
-| Çalışma alanı | **Temiz değil** — `PLAN.md` untracked (`?? PLAN.md`) | Ölçüldü |
-| Takip edilen dosyalar | `.gitattributes`, `LICENSE` (GPL-3.0) — `PLAN.md` **dahil değil** | Ölçüldü |
+| Çalışma alanı | **Temiz değil** — `PLAN.md` değişmiş; Deney 2 raporu ve `poc/cookie-probe/` untracked | 2026-08-03 `git status --short` |
+| Takip edilen dosyalar | `.gitattributes`, `.gitignore`, `LICENSE`, `PLAN.md`, Deney 1 raporu ve `poc/tpm-probe/` dosyaları | 2026-08-03 `git ls-files` |
 | TPM durumu | **TPM 2.0 doğrulandı** — Platform Crypto Provider hardware-only; PCP TPM version `0x00020000` | Deney 1 `status` |
 | Windows Hello kayıt durumu | **Kayıtlı, yalnızca PIN** — Yol C prompt türü PIN; biyometrik donanım yok | Q13 / Deney 1 |
+| Chrome | `150.0.0.0` | Deney 2 manuel raporu |
+| Cookie probe extension ID | `dokhjkpkdknopgnjdmaogjhlelcaiigo` | Manifest `key` / Deney 2 manuel yükleme |
+| Cookie store | `storeId=0`, tek normal profil, incognito değil | Deney 2 manuel raporu |
 
 ### Kod durumu
 
@@ -1439,6 +1472,8 @@ Bu düzeltmelerin sonucu olarak üç yeni açık soru eklendi: **Q15** (kalıcı
 - `windows 0.62.2` ve `zeroize 1.9.0` bağımlılıkları gerekçeleriyle eklendi; `Cargo.lock` tutuluyor.
 - Platform ve Passport provider yolları ayrıldı; hardware/software ayrımı provider seviyesinde
   doğrulanıyor. Platform hardware-only olmalıdır; Passport dual-capability (`0x3`) bildirebilir.
+- Deney 2 extension'ı yalnızca `tsc` ile derleniyor; bundler yok. Probe yalnızca sentetik
+  `FCP-probe-*`, `__Host-FCP-probe` ve `__Secure-FCP-probe` cookie'leri kullanıyor.
 - **Commit atılmadı, push yapılmadı, branch oluşturulmadı.**
 
 ### Bilinen regresyonlar
@@ -1451,22 +1486,29 @@ Yol A için software KSP fallback reddi, TPM-backed/non-exportable anahtar, wrap
 jest doğrulandı. Ancak CNG parola kutusu keylogger'a açık yeni bir sır ve kabul edilmesi zor UX
 oluşturur. Ürün jesti Yol C Hello capability'den alacak; CNG UI policy kaldırılıp anahtar yalnızca
 fiili unwrap için kullanılacak. Taze-handle kilit ölçümü kilidin davranışı değiştirmediğini kanıtladı;
-Go/No-Go kriteri A karşılandı.
+Go/No-Go kriteri A karşılandı. Deney 2 gerçek hesap veya gerçek oturum cookie'si kullanmadı; bütün
+probe cleanup kontrolleri geçti. Buna rağmen CHIPS restore uyumluluğu kanıtlanmış kabul edilmez ve
+Q18 kapanmadan partitioned cookie desteği varmış gibi gösterilmez.
 
 ---
 
 ## 31. Sonraki Kesin Adım
 
-**Faz 2 / Deney 2 — Cookie attribute probe.**
+**Faz 3 / Deney 3 — Disposable profile uçtan uca.**
 
-Deney 1 tamamlandı ve §22.1 Go/No-Go kriteri A karşılandı. Sıradaki adım, gerçek cookie silinmeden
-önce aynı attribute'larla probe cookie yazıp geri okuyacak extension deneyidir.
+Deney 2 tamamlandı: attribute round-trip sonucu 40/43 PASS, Q9 kapalı, Q8 yalnızca tek normal profil
+için ölçülmüş ve CHIPS davranışı Q18 olarak açıktır. Sıradaki ana deney, önce kendi kontrolümüzdeki
+test uygulamasında ve disposable Chrome profilinde cookie snapshot → eviction → logout doğrulaması →
+restore → oturum geri geldi doğrulaması akışıdır.
 
-- Çalışma alanı: `poc/cookie-probe/`
-- Rapor: `docs/experiments/exp-02-cookie-attributes.md`
-- Kapsam: cookie attribute round-trip uyumluluğu ile Q5, Q8 ve Q9 ölçümleri
+- Rapor: `docs/experiments/exp-03-disposable-profile.md`
+- Başlangıç hedefi: partitioned cookie gerektirmeyen, kendi kontrolümüzdeki test uygulaması
+- Q18: partitioned cookie desteği iddia edilmeden önce kontrollü top-level site + üçüncü-taraf iframe
+  bağlamında ayrıca kapatılacak
+- Q8: çoklu profil ve incognito v1 kapsamına alınırsa ayrı ölçüm gerektirir
+- Q5: lease zamanlayıcısı Deney 2'de ölçülmedi ve açık kalır
 
-**Deney 2 başlatılmadı. Kullanıcının ayrıca açık onayı olmadan başlanmayacaktır.**
+**Deney 3'e veya Q18 takip deneyine kullanıcının ayrıca açık onayı olmadan başlanmayacaktır.**
 
 ---
 
