@@ -27,6 +27,9 @@ declare namespace chrome {
   namespace tabs {
     interface Tab {
       id?: number;
+      incognito: boolean;
+      url?: string;
+      windowId: number;
     }
 
     function create(
@@ -34,6 +37,7 @@ declare namespace chrome {
       callback?: (tab: Tab) => void,
     ): void;
     function getCurrent(callback: (tab?: Tab) => void): void;
+    function get(tabId: number, callback: (tab: Tab) => void): void;
     function sendMessage(tabId: number, message: unknown, callback: (response: unknown) => void): void;
     function remove(tabId: number, callback?: () => void): void;
   }

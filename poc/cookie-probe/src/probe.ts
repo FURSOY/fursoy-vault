@@ -3,6 +3,7 @@ const TEST_PORT = 43117;
 const TEST_ORIGIN = `http://${TEST_HOST}:${TEST_PORT}`;
 const PARTITION_TOP_LEVEL_SITE = TEST_ORIGIN;
 const EXPIRATION_TOLERANCE_SECONDS = 2;
+const DOCWRITE_DIAGNOSTIC_COOKIE_NAME = "FCP-docwrite-diagnostic";
 
 type SameSiteStatus = chrome.cookies.SameSiteStatus;
 
@@ -52,6 +53,16 @@ interface RunContext {
   storeId: string;
 }
 
+interface DocWriteDiagnosticResponse {
+  ok: boolean;
+  data?: {
+    cookieName: string;
+    documentCookieNames: string[];
+    visibleInDocumentCookie: boolean;
+  };
+  error?: string;
+}
+
 const runButton = requireElement<HTMLButtonElement>("run-probe");
 const copyButton = requireElement<HTMLButtonElement>("copy-report");
 const statusElement = requireElement<HTMLElement>("status");
@@ -79,6 +90,7 @@ async function runSuite(): Promise<void> {
       storeId,
     };
 
+    rows.push(...(await runDocWriteDiagnostic()));
     for (const probeCase of createCases(context)) {
       rows.push(...(await runCase(probeCase)));
     }
@@ -105,6 +117,128 @@ async function runSuite(): Promise<void> {
   } finally {
     runButton.disabled = false;
   }
+}
+
+async function runDocWriteDiagnostic(): Promise<ResultRow[]> {
+  const rows: ResultRow[] = [];
+  let tabId: number | undefined;
+
+  try {
+    tabId = await createDocWriteTestTab();
+    await sendDocWriteCommand<{ cleaned: boolean }>(tabId, "docwrite-cleanup");
+    const pageResult = await sendDocWriteCommand<{
+      cookieName: string;
+      documentCookieNames: string[];
+      visibleInDocumentCookie: boolean;
+    }>(tabId, "docwrite-diagnostic");
+    rows.push(
+      comparison(
+        "document.cookie source diagnostic",
+        "document.cookie write/read sanity",
+        true,
+        pageResult.visibleInDocumentCookie,
+      ),
+    );
+
+    const cookies = await getAllCookiesWithoutFilters();
+    const cookieNames = cookies.map((cookie) => cookie.name);
+    const visible = cookieNames.includes(DOCWRITE_DIAGNOSTIC_COOKIE_NAME);
+    rows.push(
+      result(
+        "document.cookie source diagnostic",
+        "unfiltered getAll({}) cookie count",
+        ">=1 after document.cookie write",
+        String(cookies.length),
+        cookies.length >= 1,
+      ),
+      result(
+        "document.cookie source diagnostic",
+        "document-written cookie visible in getAll({})",
+        "visible",
+        `${visible ? "visible" : "not visible"}; names=${JSON.stringify(cookieNames)}`,
+        visible,
+      ),
+    );
+  } catch (error) {
+    rows.push(
+      failure(
+        "document.cookie source diagnostic",
+        "diagnostic execution",
+        "document write and unfiltered API read complete",
+        errorMessage(error),
+      ),
+    );
+  } finally {
+    if (tabId !== undefined) {
+      try {
+        await sendDocWriteCommand<{ cleaned: boolean }>(tabId, "docwrite-cleanup");
+      } catch {
+        // The diagnostic result is retained even if best-effort page cleanup cannot run.
+      }
+      await removeTabIgnoringErrors(tabId);
+    }
+  }
+
+  return rows;
+}
+
+async function createDocWriteTestTab(): Promise<number> {
+  const tab = await chromeCall<chrome.tabs.Tab>((resolve) =>
+    chrome.tabs.create({ url: `${TEST_ORIGIN}/`, active: false }, resolve),
+  );
+  if (tab.id === undefined) {
+    throw new Error("Chrome created the docwrite test tab without a tab ID");
+  }
+
+  for (let attempt = 0; attempt < 50; attempt += 1) {
+    try {
+      const pong = await sendDocWriteCommand<{ ready: boolean }>(tab.id, "ping");
+      if (pong.ready) {
+        return tab.id;
+      }
+    } catch {
+      // The content script becomes available after the local document reaches document_idle.
+    }
+    await delayMilliseconds(100);
+  }
+
+  await removeTabIgnoringErrors(tab.id);
+  throw new Error("docwrite test page content script did not become ready");
+}
+
+function sendDocWriteCommand<T>(tabId: number, command: string): Promise<T> {
+  return chromeCall<unknown>((resolve) =>
+    chrome.tabs.sendMessage(
+      tabId,
+      { target: "fcp-cookie-probe", command },
+      resolve,
+    ),
+  ).then((response) => {
+    if (typeof response !== "object" || response === null) {
+      throw new Error(`docwrite ${command} returned an invalid response`);
+    }
+    const envelope = response as DocWriteDiagnosticResponse;
+    if (!envelope.ok || envelope.data === undefined) {
+      throw new Error(`docwrite ${command} failed: ${envelope.error ?? "unknown error"}`);
+    }
+    return envelope.data as T;
+  });
+}
+
+function getAllCookiesWithoutFilters(): Promise<chrome.cookies.Cookie[]> {
+  return chromeCall((resolve) => chrome.cookies.getAll({}, resolve));
+}
+
+async function removeTabIgnoringErrors(tabId: number): Promise<void> {
+  try {
+    await chromeCall<void>((resolve) => chrome.tabs.remove(tabId, resolve));
+  } catch {
+    // The user may have closed the temporary diagnostic tab.
+  }
+}
+
+function delayMilliseconds(milliseconds: number): Promise<void> {
+  return new Promise((resolve) => window.setTimeout(resolve, milliseconds));
 }
 
 function createCases(context: RunContext): ProbeCase[] {

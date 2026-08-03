@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>FURSOY Disposable Profile Session Probe</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <main>
+      <header>
+        <p class="eyebrow">Experiment 3</p>
+        <h1>Disposable profile session probe</h1>
+        <p class="warning">
+          This suite creates one dummy server-backed session on <code>localhost:43118</code>, then
+          repeatedly evicts and restores its cookie. It never uses a real account. Session cookie
+          values are always redacted. The fixed synthetic cookie name may appear in diagnostic
+          metadata; no real account or real session is used.
+        </p>
+        <div class="actions">
+          <label for="cycle-count">Cycles</label>
+          <input id="cycle-count" type="number" min="1" max="100" step="1" value="10" />
+          <button id="run-probe" type="button">Run session probe</button>
+          <button id="copy-report" type="button" disabled>Copy report as text</button>
+        </div>
+        <p id="status" role="status" aria-live="polite">Ready. Start the local server first.</p>
+      </header>
+
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Cycle</th>
+              <th>Check</th>
+              <th>Expected</th>
+              <th>Actual</th>
+              <th>Result</th>
+              <th>Duration (ms)</th>
+            </tr>
+          </thead>
+          <tbody id="result-body"></tbody>
+        </table>
+      </div>
+    </main>
+    <script type="module" src="dist/probe.js"></script>
+  </body>
+</html>

@@ -9,8 +9,9 @@
 
 **Son güncelleme:** 2026-08-03
 **Durum:** Tasarım tamamlandı. **Faz 1 / Deney 1 TAMAMLANDI; Go/No-Go kriteri A karşılandı.**
-**Faz 2 / Deney 2 TAMAMLANDI — manuel Chrome ölçümü 40/43 PASS.** Faz 3 / Deney 3 kullanıcı
-onayını bekliyor.
+**Faz 2 / Deney 2 TAMAMLANDI — manuel Chrome ölçümü 40/43 PASS. Faz 3 / Deney 3 TAMAMLANDI —
+136/136 PASS, 10/10 restore ve §22.3 kriterlerinin tamamı karşılandı.** Sıradaki çalışma Faz 4 /
+Deney 4 duty-cycle ölçümüdür; kullanıcı onayı olmadan başlanmayacaktır.
 
 ---
 
@@ -336,6 +337,18 @@ Extension: chrome.cookies.remove(...) → doğrula
 - Bu risk kapatılamaz; hijyen best-effort'tur
 - MV3 service worker'ı boşta sonlandırılabilir → zamanlayıcı stratejisi kritiktir
   (bkz. [Q5](#24-açık-teknik-sorular))
+
+**Bağlayıcı manifest kuralı — cookie host izinlerinde port kullanılmaz**
+
+- Gerçek ürünün `host_permissions` / `optional_host_permissions` cookie erişim kalıplarında
+  `:443`, `:43118` veya başka bir port **ASLA belirtilmez**; `https://example.com/*`,
+  `http://localhost/*` gibi portsuz kalıplar kullanılır.
+- Cookie'ler port taşımaz. Chromium `chrome.cookies.getAll()` sonucunu host permission ile süzerken
+  cookie scheme+domain alanlarından portsuz URL üretir; portlu kalıp bu URL ile eşleşmez ve cookie
+  hata vermeden sonuçtan elenir.
+- Uygulama ve content-script URL'leri gerektiğinde sabit portla sınırlandırılabilir; bu kural yalnız
+  cookie görünürlüğünü yetkilendiren host permission kalıpları içindir.
+- Ayrıntılı ölçüm ve karar: Deney 3 raporu ve [ADR-015](#adr-015--cookie-host-permission-kalıpları-portsuz-olacaktır).
 
 ### 9.2 Native Host (Rust)
 
@@ -1056,6 +1069,9 @@ olarak açık kaldı. Ayrıntılar `docs/experiments/exp-02-cookie-attributes.md
 
 ### Deney 3 — Disposable profile uçtan uca
 
+**Konum:** `poc/session-probe/`
+**Rapor:** `docs/experiments/exp-03-disposable-profile.md`
+
 - Ayrı Chrome profili
 - Test hesabı
 - Önce **kendi kontrolümüzdeki test uygulaması**, sonra düşük riskli site
@@ -1063,6 +1079,49 @@ olarak açık kaldı. Ayrıntılar `docs/experiments/exp-02-cookie-attributes.md
   oturumun geri geldiğini doğrula
 - Rotation ve background request gözlemi
 - **Aynı oturum üzerinde** tekrar eden evict/restore döngüleri
+
+**İlk manuel çalışma (2026-08-03):** Extension sayfasından yapılan login ve protected fetch'i
+başarılı olmasına rağmen ilk döngüde `url + name + storeId=0` filtreli `chrome.cookies.getAll`
+session cookie'yi bulamadı; 0/10 döngü tamamlandı ve harness kontrollü hata ile durdu. Chrome/profil
+çökmedi. İlk rapor partitioning'i kanıtlamaz çünkü filtresiz metadata yoktur; store veya filtre
+uyuşmazlığı da elenmemiştir.
+
+**Düzeltme:** Eski extension-fetch yolu ayrı bir tanı session'ında filtresiz `getAll({url})`
+metadata'sı üretir. Asıl login ve protected/logout kontrolleri gerçek localhost sekmesindeki content
+script üzerinden first-party bağlamda çalışır; store ID bu web sekmesinin `tabId` değerinden seçilir.
+Snapshot/eviction/restore yine extension `chrome.cookies` API'sindedir. Kesin kök neden yeni tanı
+raporu gelene kadar açık kalır.
+
+**İkinci manuel çalışma (2026-08-03):** Legacy extension-fetch login ve protected kontrolü yeniden
+geçti; filtresiz `chrome.cookies.getAll({url})` ise 0 döndürdü. Böylece ölçülen ortamda extension
+context'inden çapraz-origin fetch ile oluşan cookie'nin Cookies API'ye görünmediği doğrulandı;
+name/storeId filtresi kök neden değildir. Otomatik partitioned/izole storage mekanizması olasıdır
+ancak metadata dönmediği için iç mekanizma doğrudan ölçülmedi. Asıl first-party akış daha sonra
+`/api/reset` çağrısında `403 origin_not_allowed` ile durdu: sunucu yalnız extension origin'ini kabul
+ediyordu. Exact allowlist'e `http://localhost:43118` eklendi; extension origin'i korunuyor.
+
+**Üçüncü manuel çalışma (2026-08-03):** First-party login ve onu izleyen authenticated kontrolü
+geçti, fakat tamamen filtresiz `chrome.cookies.getAll({})` yine 0 döndürdü. Bu sonuç görünmezliği
+yalnız çapraz-origin/extension partitioning açıklamasına bağlayan hipotezi desteklemez. Protected
+yanıtının Cookie header kanıtı ve gecikmeli Cookies API görünümü henüz ölçülmediğinden kök neden açık
+tutulur.
+
+**Dördüncü manuel çalışma (2026-08-03):** Hem `localhost` hem `127.0.0.1` first-party protected
+isteklerinde sunucu gerçek `FCP-session-probe` Cookie header'ını doğruladı; iki origin'de de anlık ve
+250 ms gecikmeli filtresiz `getAll({})` 0 kaldı. Localhost özel-host ve kısa yarış durumu hipotezleri
+ölçülen ortamda elendi. Sıradaki tanı, aynı sayfadan yazılan non-HttpOnly `document.cookie` değerinin
+Cookies API görünürlüğünü izole eder.
+
+**Nihai manuel çalışma (2026-08-03):** Kök neden manifest host permission kalıplarındaki porttu.
+Cookie port taşımadığı ve `getAll()` her aday cookie için portsuz scheme+domain URL'si üzerinden izin
+kontrolü yaptığı için `http://localhost:43118/*` kalıbı bütün adayları sessizce eliyordu. `set()` ve
+URL tabanlı `get()` verilen portlu URL'yi doğrudan kullandığından Deney 2'de çalışmış ve yanlış bir
+“yalnız extension'ın kendi yazdığı cookie görünür” izlenimi oluşturmuştu. İzinler
+`http://localhost/*` ve `http://127.0.0.1/*` olarak düzeltildi. Aynı unpacked, sabit-key extension ile
+**136/136 kontrol PASS**, **10/10 restore**, restore başarı oranı **%100**, yanlış logout **%0** ve
+güvenlik alarmı **0** ölçüldü. Server-side logout sonrası stale cookie restore kontrolü doğru biçimde
+`invalid_session` verdi; manuel gözlemde kalıcı profil bozulması veya beklenmeyen davranış görülmedi.
+Ara hipotezler ve başarısız çalışmalar §26.1 gereği Deney 3 raporunda korunur.
 
 > **Gerçek hesaplarda yüzlerce login/logout yapılmayacaktır.** Yoğun login döngüleri anti-abuse
 > sistemlerini tetikler ve hesap kilitlenmesine/banlanmasına yol açar. Döngü, login değil
@@ -1170,12 +1229,16 @@ Bu durumda "her erişimde Hello-gated vault" iddiası **çıkarılır**. Elde ka
 (cookie'lerin günün büyük kısmında TPM'e bağlı bir kasada olması ve profil klasöründe
 bulunmaması) hâlâ hedef tehditlerin çoğunu karşılar.
 
-### 22.3 Deney 3 (uçtan uca) — devam kriteri
+### 22.3 Deney 3 (uçtan uca) — ✅ KARŞILANDI
 
-- Restore başarı oranı ≥ %99
-- Yanlış logout ≤ %0,1
-- Kalıcı profil bozulması = 0
-- Restore sonrası hesap güvenlik alarmı oluşmaması
+- [x] Restore başarı oranı ≥ %99 — **%100 (10/10)**
+- [x] Yanlış logout ≤ %0,1 — **%0 (0/10)**
+- [x] Kalıcı profil bozulması = 0 — **manuel gözlemde 0**
+- [x] Restore sonrası hesap güvenlik alarmı oluşmaması — **0**
+
+Ek kontrol: server-side logout sonrasında eski cookie yeniden yazıldığında korumalı endpoint
+`logged_out/invalid_session` döndürdü. Sonuç kontrollü loopback uygulaması içindir; gerçek site
+uyumluluğu ayrıca ölçülmeden genellenmez.
 
 Karşılanmazsa: ilgili site profili **izleme** seviyesine düşürülür, mimari değişmez.
 Birden çok hedefte sistematik başarısızlık varsa cookie-only yaklaşımı yeniden değerlendirilir.
@@ -1264,7 +1327,7 @@ işaretlenir.
 | **Faz 0** | Plan ve karar kaydı | `PLAN.md` | ✅ Tamamlandı |
 | **Faz 1** | Deney 1 — TPM/Hello probe (Rust) | `poc/tpm-probe/`, `docs/experiments/exp-01-*.md` | ✅ Tamamlandı — §22.1 kriter A karşılandı |
 | **Faz 2** | Deney 2 — Cookie attribute probe (extension) + Q5, Q8, Q9 | `poc/cookie-probe/`, exp-02 raporu | ✅ Tamamlandı — 40/43 PASS; Q9 kapandı, Q8 kısmi, Q5 ve yeni Q18 açık |
-| **Faz 3** | Deney 3 — Disposable profile uçtan uca | exp-03 raporu | §22.3 kriterleri |
+| **Faz 3** | Deney 3 — Disposable profile uçtan uca | `poc/session-probe/`, exp-03 raporu | ✅ Tamamlandı — 136/136 PASS, 10/10 restore; §22.3 karşılandı |
 | **Faz 4** | Deney 4 — Duty cycle ölçümü | exp-04 raporu | §22.4 kriteri |
 | **Faz 5** | Tek grup, uçtan uca MVP (vault + host + extension) | Çalışan dikey dilim | Manuel kabul |
 | **Faz 6** | Çoklu grup, policy seviyeleri, reconciliation sertleştirme | v0.1 | — |
@@ -1424,6 +1487,53 @@ notes, caches, metadata, and temporary working files.
   tekrarlanıp tekrarlanmadığı **doğrulanmadı**.
 - CHIPS `partitionKey` yazımı cookie döndürmedi. Başarısız sonuç silinmedi; gerçek üçüncü-taraf
   bağlam gereksinimini araştırmak üzere **Q18** açıldı.
+- `poc/session-probe/` altında Deney 3 başlangıç implementasyonu oluşturuldu: bellekte session store
+  kullanan kontrollü localhost uygulaması, tek login üzerinde varsayılan 10 evict/restore döngüsü,
+  korumalı endpoint kontrolleri ve sunucu tarafı logout invalidation kontrolü.
+- Deney 3'ün ilk manuel çalışmasında extension-fetch login/protected kontrolleri geçti, ancak ilk
+  snapshot `chrome.cookies.getAll` ile 0 cookie döndürdü; harness 0/10 döngüde kontrollü hata verdi.
+  Tarayıcı veya profil çökmedi. Partitioning olasıdır fakat filtresiz metadata olmadığı için
+  doğrulanmış kök neden değildir; başarısız deneme Deney 3 raporunda korunur.
+- Harness düzeltildi: legacy extension-fetch için değer-redakte filtresiz metadata tanısı eklendi;
+  asıl login ve oturum kontrolleri gerçek localhost sekmesinde first-party content script'e taşındı;
+  store seçimi test web sekmesinin `tabId` değerine bağlandı.
+- İkinci manuel çalışmada legacy filtresiz `getAll({url})` yine 0 döndürdü. Böylece extension
+  context'inden çapraz-origin fetch ile oluşan cookie'nin ölçülen ortamda Cookies API'ye tamamen
+  görünmediği doğrulandı. Bunun otomatik partitioned/izole storage'dan kaynaklanması olasıdır fakat
+  iç mekanizma metadata ile doğrulanamadı; ürünün first-party kullanıcı login akışına genellenmez.
+- Aynı çalışmanın first-party aşaması `/api/reset` için `Origin: http://localhost:43118` header'ının
+  reddedilmesiyle durdu. Sunucu allowlist'i sabit extension origin'i ile sabit test origin'ini exact
+  olarak kabul edecek biçimde düzeltildi; başka origin açılmadı.
+- Üçüncü manuel çalışmada first-party login ve ayrı protected kontrolü geçtiği halde tamamen filtresiz
+  `chrome.cookies.getAll({})` 0 döndürdü. Bu, görünmezliği yalnız extension çapraz-origin bağlamına
+  bağlayan hipotezi desteklemez; Cookie header ve zamanlama kanıtı olmadan yeni kök neden atanmadı.
+- Körlemesine yeni davranış değişikliği yapılmadan genişletilmiş tanı eklendi: first-party login'den
+  hemen sonra filtresiz `chrome.cookies.getAll({})`, bütün cookie store `id/tabIds` kayıtları, test
+  sekmesinin `url/windowId/incognito` alanları ve content page `document.cookie` adları değer-redakte
+  ham blok olarak raporlanır. Harness bu bloktan otomatik kök neden sonucu çıkarmaz.
+- Çelişkili `getAll({})=0` / authenticated bulgusunu ayırmak için tanı genişletildi: anlık filtresiz
+  cookie okumasına ek olarak 250 ms gecikmeli ikinci `getAll({})` sonucu ve sunucunun son 10
+  `/api/login`/`/api/protected` isteğinde Cookie header varlığı ile yalnız cookie adları raporlanır.
+  Bu yalnız tanı değişikliğidir; henüz kalıcı davranış düzeltmesi veya kök neden kararı değildir.
+- `localhost` özel-host hipotezini ayırmak için mevcut akış korunarak `http://127.0.0.1:43118`
+  first-party karşılaştırması eklendi. Her iki origin login → anlık/250 ms filtresiz `getAll({})` →
+  protected → sunucu Cookie-header kanıtı üretir; IP sonucu ayrı ham rapor bölümünde tutulur. Sunucu
+  yalnız IPv6/IPv4 loopback adreslerinde dinler ve host izinleri bu iki sabit origin ile sınırlıdır.
+- Dördüncü manuel ölçümde localhost ve 127.0.0.1 aynı sonucu verdi: sunucu protected isteğindeki
+  session Cookie header'ını doğrularken anlık/250 ms filtresiz Cookies API okumaları 0 kaldı. Hostname
+  hipotezi elendi. Her iki origin'e non-HttpOnly `FCP-docwrite-diagnostic` yaz/oku/API görünürlük
+  tanısı ve redakte gerçek login Set-Cookie header şablonu eklendi; ölçüm gelmeden yeni neden atanmaz.
+- Deney 2 kontrol uzantısının da dışarıdan `document.cookie` ile yazılmış cookie'yi görememesi,
+  iki POC'un ortak manifest farkını ortaya çıkardı. Chromium'un `getAll()` izin filtresi cookie için
+  portsuz scheme+domain URL'si üretirken POC manifestleri portlu host permission kullanıyordu.
+- Host izinleri portsuz `http://localhost/*` / `http://127.0.0.1/*` kalıplarına çevrildi. Sabit key,
+  statik izin ve özgün tam-sayfa harness korunarak yapılan nihai Deney 3 ölçümü **136/136 PASS** ve
+  **10/10 evict/restore** verdi; restore başarı oranı **%100**, yanlış logout **%0**,
+  `securityAlarmCount=0` ölçüldü.
+- Logout invalidation kontrolü geçti: sunucu session'ı sildikten sonra stale snapshot'ın cookie olarak
+  geri yazılması oturumu diriltmedi ve protected endpoint `invalid_session` döndürdü. Kullanıcı
+  gözleminde yalnız beklenen localhost sekmesi açılıp kapandı; Chrome çökmesi veya kalıcı profil
+  bozulması görülmedi. Deney 3 **TAMAMLANDI** ve §22.3 kriterlerinin tamamı karşılandı.
 
 ### Değişen varsayımlar (revizyon 2 — 2026-08-03)
 
@@ -1433,6 +1543,8 @@ notes, caches, metadata, and temporary working files.
 | CHIPS `partitionKey` güncel Chrome'da doğrudan round-trip eder | Bu test bağlamında doğrulanmadı: `chrome.cookies.set` cookie döndürmedi. Bağlam gereksinimi Q18 olarak açık. |
 | Deney 2, Q8'i tümüyle kapatır | Yalnızca tek normal profil `storeId=0` ölçüldü; çoklu profil ve incognito kısmı açık kaldı. |
 | Unpacked extension ID'si kararsız kalabilir | Manifest `key` alanı ile sabit ID doğrulandı; Q9 kapandı. |
+| Extension sayfasından çapraz-origin login ile oluşan cookie görünmezliği partitioning'i kanıtlar | Yanlış. First-party ve `document.cookie` cookie'leri de aynı sonucu verdi; nihai neden portlu host permission'ın `getAll()` portsuz izin filtresiyle eşleşmemesiydi. Ürün deneyi yine gerçek kullanıcı akışını temsil etmek için first-party site sekmesinde login olmalıdır. |
+| Cookie host permission belirli uygulama portuna daraltılabilir | Yanlış. Cookie port taşımaz ve `getAll()` izin kontrolü portsuz URL üretir. Gerçek ürün cookie host permission kalıpları bağlayıcı olarak portsuz olacaktır. |
 
 ### Değişen varsayımlar (revizyon 1 — 2026-08-02)
 
@@ -1474,6 +1586,8 @@ Bu düzeltmelerin sonucu olarak üç yeni açık soru eklendi: **Q15** (kalıcı
   doğrulanıyor. Platform hardware-only olmalıdır; Passport dual-capability (`0x3`) bildirebilir.
 - Deney 2 extension'ı yalnızca `tsc` ile derleniyor; bundler yok. Probe yalnızca sentetik
   `FCP-probe-*`, `__Host-FCP-probe` ve `__Secure-FCP-probe` cookie'leri kullanıyor.
+- Deney 3 extension'ı ve kontrollü session test uygulaması `poc/session-probe/` altındadır; extension
+  yalnızca `tsc` ile derlenir ve session kimliği rapor/log çıktısına yazılmaz.
 - **Commit atılmadı, push yapılmadı, branch oluşturulmadı.**
 
 ### Bilinen regresyonlar
@@ -1494,21 +1608,26 @@ Q18 kapanmadan partitioned cookie desteği varmış gibi gösterilmez.
 
 ## 31. Sonraki Kesin Adım
 
-**Faz 3 / Deney 3 — Disposable profile uçtan uca.**
+**Faz 4 / Deney 4 — Duty cycle ölçümü.**
 
-Deney 2 tamamlandı: attribute round-trip sonucu 40/43 PASS, Q9 kapalı, Q8 yalnızca tek normal profil
-için ölçülmüş ve CHIPS davranışı Q18 olarak açıktır. Sıradaki ana deney, önce kendi kontrolümüzdeki
-test uygulamasında ve disposable Chrome profilinde cookie snapshot → eviction → logout doğrulaması →
-restore → oturum geri geldi doğrulaması akışıdır.
+Deney 3 tamamlandı: kontrollü server-backed session üzerinde 136/136 kontrol, 10/10 evict/restore,
+%100 restore, %0 yanlış logout ve 0 güvenlik alarmı ölçüldü; §22.3 kriterlerinin tamamı karşılandı.
+Sıradaki kesin adım, gerçek kullanım zaman çizgisinde inject, son ilgili sekmenin kapanması, idle,
+eviction, reconciliation ve sitenin cookie'yi yeniden üretmesi olaylarını ölçen Deney 4 harness ve
+rapor kapsamını kullanıcıyla netleştirmektir.
 
-- Rapor: `docs/experiments/exp-03-disposable-profile.md`
-- Başlangıç hedefi: partitioned cookie gerektirmeyen, kendi kontrolümüzdeki test uygulaması
-- Q18: partitioned cookie desteği iddia edilmeden önce kontrollü top-level site + üçüncü-taraf iframe
-  bağlamında ayrıca kapatılacak
-- Q8: çoklu profil ve incognito v1 kapsamına alınırsa ayrı ölçüm gerektirir
-- Q5: lease zamanlayıcısı Deney 2'de ölçülmedi ve açık kalır
+- Hedef metrik: `unnecessary_exposure / browser_open_time`
+- Olaylar: inject, last-tab-close, idle başlangıcı, eviction, reconciliation, başarısız eviction,
+  site kaynaklı cookie yeniden oluşumu
+- Deney 3'te doğrulanan portsuz cookie host-permission kuralı bütün sonraki extension manifestlerinde
+  bağlayıcıdır
+- Q18 partitioned cookie desteği ayrı kontrollü top-level site + üçüncü-taraf iframe deneyi olmadan
+  varmış gibi gösterilmez
+- Q8 çoklu profil/incognito ve Q5 lease zamanlayıcısı açık kalır; Deney 4 kapsamı belirlenirken yeniden
+  değerlendirilir
 
-**Deney 3'e veya Q18 takip deneyine kullanıcının ayrıca açık onayı olmadan başlanmayacaktır.**
+**Kullanıcının açık onayı olmadan Deney 4 implementasyonuna veya yeni bir site ölçümüne
+başlanmayacaktır.**
 
 ---
 
@@ -1816,5 +1935,44 @@ Yol C — DEK unwrap yapamadığı için reddedildi. Passport KSP üzerinden do�
 
 **Sonuç:** Yetkilendirme Hello capability ile, kriptografik unwrap TPM-backed CNG anahtarıyla
 gerçekleşir. CNG handle'ları transaction kapsamının dışına taşmaz.
+
+---
+
+### ADR-015 — Cookie host permission kalıpları portsuz olacaktır
+
+**Durum:** Kabul edildi
+
+**Bağlam:** Deney 3'ün ilk dört manuel çalışmasında server ve `document.cookie` tarafından yazıldığı
+kanıtlanan cookie'ler `chrome.cookies.getAll()` sonucunda görünmedi. Deney 2'nin kendi
+`chrome.cookies.set()` çağrısıyla yazdığı cookie'leri okuyabilmesi; partitioning, store, profil,
+popup, izin türü, manifest key ve unpacked/Web Store hipotezlerine yol açtı. Chromium uygulaması
+incelendiğinde `getAll()` sonucundaki her cookie'nin izninin cookie scheme+domain alanlarından
+üretilen portsuz URL ile denetlendiği görüldü. POC manifestlerindeki
+`http://localhost:43118/*` gibi portlu kalıplar bu URL ile eşleşmiyor ve cookie'leri sessizce
+eliyordu. `set()` ve URL tabanlı `get()` verilen portlu URL'yi doğrudan kullandığından aynı kalıpla
+çalışabiliyordu.
+
+**Karar:** Cookie erişimi yetkilendiren bütün `host_permissions` ve `optional_host_permissions`
+kalıpları portsuz yazılacaktır. Uygulama URL'leri ile `content_scripts.matches` gerektiğinde belirli
+porta bağlı kalabilir; ancak Cookies API host izni `https://example.com/*`,
+`http://localhost/*` veya `http://127.0.0.1/*` biçiminde olacaktır. CI/manifest doğrulaması ileride
+cookie host izinlerinde açık port bulunmasını hata saymalıdır.
+
+**Gerekçe:** Cookie kapsamı porttan bağımsızdır. Portlu izin `set()`/`get()` ve `getAll()` arasında
+yanıltıcı, sessiz bir davranış farkı üretir; snapshot/eviction/reconciliation güvenilirliğini
+bozar. Portu kaldırmak gereksiz bir cookie yetki genişlemesi değildir; tarayıcının cookie güvenlik
+modeliyle uyumlu doğru yetkilendirmedir.
+
+**Ölçüm dayanağı:** İzinler portsuz kalıplara çevrildikten sonra aynı unpacked ve sabit-key Deney 3
+extension'ı 136/136 kontrolü geçti; aynı session üzerinde 10/10 restore, %0 yanlış logout ve 0
+güvenlik alarmı ölçüldü. Server-side logout sonrası stale restore `invalid_session` verdi.
+
+**Alternatifler:** Portlu host permission'ı koruyup yalnız URL filtreli `get()` kullanmak — snapshot
+ve domain genelindeki cookie keşfini eksik bırakacağı için reddedildi. `<all_urls>` — gereksiz geniş
+yetki olduğu için reddedildi. Web Store dağıtımına güvenmek — kök neden dağıtım kaynağı olmadığı için
+reddedildi.
+
+**Sonuç:** Deney 3 tamamlandı ve §22.3 kriterleri karşılandı. Bu kural ürün manifesti için
+bağlayıcıdır; ihlali cookie'lerin sessizce snapshot dışında kalmasına yol açabilir.
 
 ---
