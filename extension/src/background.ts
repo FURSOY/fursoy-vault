@@ -15,6 +15,9 @@ interface RuntimeState {
   recoveryReconnectPending?: boolean;
   invalidationPending?: boolean;
   invalidationReason?: SessionInvalidationReason;
+  pendingNavigationUnlocks?: Record<string, string>;
+  navigationUnlockRequestTabId?: number;
+  navigationUnlockError?: string;
 }
 const STATE_KEY = "fcp-mvp-runtime-v1";
 const IDLE_SECONDS = 30;
@@ -22,6 +25,8 @@ const LEASE_EXPIRY_ALARM = "fcp-mvp-lease-expiry";
 const RELEVANT_TAB_QUERY_PATTERNS = ["https://wikipedia.org/*", "https://*.wikipedia.org/*"];
 const ENROLLMENT_STABLE_MS = 3_000;
 const ENROLLMENT_TIMEOUT_MS = 20_000;
+const UNLOCK_PAGE_URL = chrome.runtime.getURL("unlock.html");
+const NAVIGATION_LOAD_TIMEOUT_MS = 20_000;
 let queue: Promise<void> = Promise.resolve();
 let client: NativeClient | undefined;
 let mutationDepth = 0;
@@ -36,6 +41,23 @@ class RedactedCookieSetFailure extends Error {
 
 chrome.idle.setDetectionInterval(IDLE_SECONDS);
 
+chrome.webNavigation.onBeforeNavigate.addListener((details) => {
+  if (details.frameId !== 0 || !isRelevant(details.url)) return;
+  enqueue(() => interceptSealedNavigation(details.tabId, details.url));
+});
+
+chrome.runtime.onMessage.addListener((message, sender, respond) => {
+  if (!isUnlockPageMessage(message)) return;
+  enqueue(async () => {
+    try {
+      respond(await handleUnlockPageMessage(message.type, sender.tab?.id));
+    } catch {
+      respond({ ok: false, status: "error", error: "unlock_controller_failed" });
+    }
+  });
+  return true;
+});
+
 chrome.tabs.onUpdated.addListener((tabId, change, tab) => enqueue(async () => {
   if (change.status !== "complete" && change.url === undefined) return;
   const state = await loadState();
@@ -47,12 +69,15 @@ chrome.tabs.onUpdated.addListener((tabId, change, tab) => enqueue(async () => {
     state.injectAfterReconciliation = true;
   }
   await saveState(state);
-  if (relevant && tab.status === "complete" && state.groupState === "sealed" && !state.reconciliation) await requestLease("inject");
+  const navigationUnlockPending = state.pendingNavigationUnlocks?.[String(tabId)] !== undefined;
+  if (relevant && tab.status === "complete" && state.groupState === "sealed" && !state.reconciliation && !navigationUnlockPending) await requestLease("inject");
   else if (relevant && tab.status === "complete" && state.groupState === "degraded") await requestRecoveryReconnect();
 }));
 
 chrome.tabs.onRemoved.addListener((tabId) => enqueue(async () => {
   const state = await loadState();
+  delete state.pendingNavigationUnlocks?.[String(tabId)];
+  if (state.navigationUnlockRequestTabId === tabId) state.navigationUnlockRequestTabId = undefined;
   // storage.session can contain a stale/missed tab id after a worker restart. Query Chrome's
   // current tab set instead of requiring the removed id to have been observed previously.
   state.relevantTabs = await relevantTabIds();
@@ -190,7 +215,13 @@ async function handleHostMessage(message: WireMessage): Promise<void> {
       state.evictionRequestPending = false;
       if (deniedEviction) state.groupState = "degraded";
       else if (deniedLease === "enroll") state.groupState = "uninitialized";
-      else if (deniedLease === "inject") state.groupState = "sealed";
+      else if (deniedLease === "inject") {
+        state.groupState = "sealed";
+        if (state.navigationUnlockRequestTabId !== undefined) {
+          state.navigationUnlockRequestTabId = undefined;
+          state.navigationUnlockError = "hello_rejected_or_unlock_denied";
+        }
+      }
       state.lastEvent = `lease_deny:${requiredString(message.payload, "reason")}`;
       await saveState(state);
       break;
@@ -227,6 +258,9 @@ async function handleHostMessage(message: WireMessage): Promise<void> {
       state.recoveryReconnectPending = false;
       state.invalidationPending = false;
       state.invalidationReason = undefined;
+      state.pendingNavigationUnlocks = {};
+      state.navigationUnlockRequestTabId = undefined;
+      state.navigationUnlockError = undefined;
       state.lastEvent = cleanupSucceeded ? "session_invalidated" : "session_invalidated_cleanup_failed";
       await saveState(state);
       break;
@@ -260,12 +294,24 @@ async function injectCookies(payload: Record<string, unknown>, state: RuntimeSta
         expectedIdentities.some((identity, index) => identity !== installedIdentities[index])) {
       health = "cookie_roundtrip_failed";
     } else {
-      stage = "health_tab_query";
-      state.relevantTabs = await relevantTabIds();
-      await saveState(state);
-      const tabId = state.relevantTabs[0];
-      stage = "health_execution";
-      health = tabId === undefined ? "no_relevant_tab" : await healthCheckWithBackoff(tabId);
+      const navigationTabId = state.navigationUnlockRequestTabId;
+      const navigationTarget = navigationTabId === undefined
+        ? undefined
+        : state.pendingNavigationUnlocks?.[String(navigationTabId)];
+      if (navigationTabId !== undefined && navigationTarget !== undefined) {
+        stage = "navigation_gate_redirect";
+        await updateTab(navigationTabId, navigationTarget);
+        await waitForRelevantTabComplete(navigationTabId);
+        stage = "health_execution";
+        health = await healthCheckWithBackoff(navigationTabId);
+      } else {
+        stage = "health_tab_query";
+        state.relevantTabs = await relevantTabIds();
+        await saveState(state);
+        const tabId = state.relevantTabs[0];
+        stage = "health_execution";
+        health = tabId === undefined ? "no_relevant_tab" : await healthCheckWithBackoff(tabId);
+      }
     }
     success = health === "authenticated";
   } catch (error: unknown) {
@@ -289,9 +335,30 @@ async function injectCookies(payload: Record<string, unknown>, state: RuntimeSta
   state.leaseId = leaseId;
   state.invalidationPending = health === "logged_out" || health === "invalid_session";
   state.invalidationReason = state.invalidationPending ? "restore_rejected" : undefined;
+  if (success) {
+    const completedTabId = state.navigationUnlockRequestTabId;
+    if (completedTabId !== undefined) {
+      const remainingUnlocks = Object.entries(state.pendingNavigationUnlocks ?? {})
+        .filter(([tabId]) => Number(tabId) !== completedTabId);
+      state.pendingNavigationUnlocks = {};
+      state.navigationUnlockRequestTabId = undefined;
+      state.navigationUnlockError = undefined;
+      for (const [tabId, targetUrl] of remainingUnlocks) {
+        if (isRelevant(targetUrl)) void updateTab(Number(tabId), targetUrl).catch(() => undefined);
+      }
+    }
+  } else if (state.navigationUnlockRequestTabId !== undefined) {
+    state.navigationUnlockRequestTabId = undefined;
+    state.navigationUnlockError = `inject_failed:${health}`;
+  }
   state.lastEvent = `inject:${health}`;
   await saveState(state);
   send("inject.result", { account_group_id: GROUP_ID, lease_id: leaseId, success, health_check: health });
+  if (!success && state.pendingNavigationUnlocks !== undefined && Object.keys(state.pendingNavigationUnlocks).length > 0) {
+    // The host persists Degraded after inject.result. Reconnect shortly afterwards so startup
+    // reconciliation returns it to Sealed and the interstitial button can be retried.
+    setTimeout(() => enqueue(requestRecoveryReconnect), 250);
+  }
 }
 
 async function finishEviction(payload: Record<string, unknown>, state: RuntimeState): Promise<void> {
@@ -368,6 +435,73 @@ async function requestLease(purpose: LeasePurpose): Promise<void> {
   state.lastEvent = `lease_request_pending:${purpose}`;
   await saveState(state);
   send("lease.request", { account_group_id: GROUP_ID, purpose, requested_duration_ms: 300_000 });
+}
+
+async function interceptSealedNavigation(tabId: number, targetUrl: string): Promise<void> {
+  const state = await loadState();
+  if (state.groupState !== "sealed" || state.reconciliation || state.invalidationPending === true ||
+      state.pendingLeaseRequest !== undefined || state.evictionRequestPending === true) return;
+  if (!isRelevant(targetUrl)) return;
+
+  state.pendingNavigationUnlocks ??= {};
+  state.pendingNavigationUnlocks[String(tabId)] = targetUrl;
+  state.navigationUnlockError = undefined;
+  state.lastEvent = "navigation_unlock_intercepted";
+  await saveState(state);
+  try {
+    await updateTab(tabId, UNLOCK_PAGE_URL);
+  } catch {
+    const latest = await loadState();
+    delete latest.pendingNavigationUnlocks?.[String(tabId)];
+    latest.lastEvent = "navigation_unlock_redirect_failed";
+    await saveState(latest);
+  }
+}
+
+async function handleUnlockPageMessage(type: "unlock.status" | "unlock.start", tabId: number | undefined): Promise<Record<string, unknown>> {
+  if (tabId === undefined) return { ok: false, status: "error", error: "missing_tab_context" };
+  const state = await loadState();
+  const targetUrl = state.pendingNavigationUnlocks?.[String(tabId)];
+  if (targetUrl === undefined || !isRelevant(targetUrl)) {
+    return { ok: false, status: "error", error: "navigation_context_missing" };
+  }
+
+  if (state.groupState === "leased") {
+    delete state.pendingNavigationUnlocks?.[String(tabId)];
+    await saveState(state);
+    await updateTab(tabId, targetUrl);
+    return { ok: true, status: "redirecting" };
+  }
+
+  if (type === "unlock.status") {
+    if (state.groupState === "sealed" && state.pendingLeaseRequest === undefined) {
+      return {
+        ok: true,
+        status: state.navigationUnlockError === undefined ? "ready" : "error",
+        error: state.navigationUnlockError,
+      };
+    }
+    if (state.groupState === "unlocking" && state.navigationUnlockRequestTabId === tabId) {
+      return { ok: true, status: "unlocking" };
+    }
+    return { ok: true, status: "recovering" };
+  }
+
+  if (state.groupState !== "sealed" || state.pendingLeaseRequest !== undefined ||
+      state.evictionRequestPending === true || state.reconciliation) {
+    return { ok: false, status: "recovering", error: "group_not_ready" };
+  }
+  if (!client?.connected) {
+    connect();
+    return { ok: false, status: "error", error: "native_host_not_connected" };
+  }
+
+  state.navigationUnlockRequestTabId = tabId;
+  state.navigationUnlockError = undefined;
+  state.lastEvent = "navigation_unlock_user_gesture";
+  await saveState(state);
+  await requestLease("inject");
+  return { ok: true, status: "unlocking" };
 }
 
 async function requestEviction(reason: string, leaseId: string | undefined): Promise<void> {
@@ -581,6 +715,18 @@ async function healthCheckWithBackoff(tabId: number): Promise<string> {
 }
 function callbackPromise<T>(invoke: (done: (value: T) => void) => void): Promise<T> { return new Promise((resolve, reject) => invoke((value) => { const error = chrome.runtime.lastError; error === undefined ? resolve(value) : reject(new Error(error.message ?? "Chrome API failed")); })); }
 function delay(milliseconds: number): Promise<void> { return new Promise((resolve) => setTimeout(resolve, milliseconds)); }
+function updateTab(tabId: number, url: string): Promise<chrome.tabs.Tab> {
+  return callbackPromise<chrome.tabs.Tab>((done) => chrome.tabs.update(tabId, { url }, done));
+}
+async function waitForRelevantTabComplete(tabId: number): Promise<void> {
+  const deadline = Date.now() + NAVIGATION_LOAD_TIMEOUT_MS;
+  while (Date.now() < deadline) {
+    const tab = await callbackPromise<chrome.tabs.Tab>((done) => chrome.tabs.get(tabId, done));
+    if (tab.status === "complete" && isRelevant(tab.url)) return;
+    await delay(100);
+  }
+  throw new Error("navigation gate target did not complete in time");
+}
 function enqueue(task: () => Promise<void>): void {
   queue = queue.then(task, task).catch(() => console.error("FCP fail-closed controller error"));
 }
@@ -593,6 +739,11 @@ function isRelevant(url?: string): boolean {
   } catch {
     return false;
   }
+}
+function isUnlockPageMessage(value: unknown): value is { type: "unlock.status" | "unlock.start" } {
+  if (typeof value !== "object" || value === null) return false;
+  const type = (value as { type?: unknown }).type;
+  return type === "unlock.status" || type === "unlock.start";
 }
 function unique(values: number[]): number[] { return [...new Set(values)]; }
 function markExpectedRemoval(cookie: chrome.cookies.Cookie): void {

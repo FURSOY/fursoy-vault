@@ -1,10 +1,10 @@
 {
   "manifest_version": 3,
   "name": "FURSOY Cookie Protector MVP",
-  "version": "0.1.11",
-  "description": "Single Wikipedia account-group real-site compatibility slice.",
+  "version": "0.1.12",
+  "description": "Single Wikipedia account-group MVP with a navigation unlock gate prototype.",
   "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAudTNjBf91r1PbVuve4P5R6TA4PuWaRuQ6xOkk0bkPj44i3uoIezAc3nPyEnhPHtt7bzOTOoRak/7/DF1qHZh9hZ0FefApEqeO1W6+fyXsVtraIiLnnNZ2jZE4xijZ+RPgthkbaGg5DA3oU4Dba0x8OWHuaEQC/kkc0NHVYBN/rtBioSmINdfgBxSv9knMj9BblL0nSghw03+0IUuM/gQJ9xE9hCp4JAv0A2PsxEtALswuKOs3Ru8cMvAtxjijfSGjQYuNHHzboDqDOegNIu/c/Dspksc1R2eDK/z4zVJ3D91V5NB/ydXSy2kwbhkPFXqxHN9LqBdGjNTPsTT8LHvqQIDAQAB",
-  "permissions": ["nativeMessaging", "cookies", "idle", "storage", "tabs", "scripting", "alarms"],
+  "permissions": ["nativeMessaging", "cookies", "idle", "storage", "tabs", "scripting", "alarms", "webNavigation"],
   "host_permissions": ["https://tr.wikipedia.org/*", "https://wikipedia.org/*", "https://*.wikipedia.org/*"],
   "background": { "service_worker": "dist/background.js", "type": "module" },
   "action": { "default_title": "FURSOY MVP status" }

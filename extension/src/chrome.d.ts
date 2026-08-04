@@ -2,10 +2,12 @@ declare namespace chrome {
   namespace runtime {
     const id: string;
     const lastError: { message?: string } | undefined;
+    function getURL(path: string): string;
     interface Port { postMessage(message: unknown): void; disconnect(): void;
       onMessage: { addListener(callback: (message: unknown) => void): void };
       onDisconnect: { addListener(callback: () => void): void }; }
     function connectNative(name: string): Port;
+    function sendMessage(message: unknown, callback?: (response: unknown) => void): void;
     interface MessageSender { tab?: tabs.Tab }
     const onMessage: { addListener(callback: (message: unknown, sender: MessageSender, respond: (value: unknown) => void) => boolean | void): void };
     const onStartup: { addListener(callback: () => void): void };
@@ -13,9 +15,15 @@ declare namespace chrome {
   namespace tabs {
     interface Tab { id?: number; url?: string; status?: "loading" | "complete"; active?: boolean }
     function query(query: { url?: string[] }, callback: (tabs: Tab[]) => void): void;
+    function get(tabId: number, callback: (tab: Tab) => void): void;
+    function update(tabId: number, properties: { url: string }, callback: (tab: Tab) => void): void;
     function sendMessage(tabId: number, message: unknown, callback: (response: unknown) => void): void;
     const onRemoved: { addListener(callback: (tabId: number) => void): void };
     const onUpdated: { addListener(callback: (tabId: number, change: { status?: string; url?: string }, tab: Tab) => void): void };
+  }
+  namespace webNavigation {
+    interface NavigationDetails { tabId: number; frameId: number; url: string }
+    const onBeforeNavigate: { addListener(callback: (details: NavigationDetails) => void): void };
   }
   namespace idle {
     type IdleState = "active" | "idle" | "locked";

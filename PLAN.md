@@ -13,8 +13,9 @@ kontrollü uygulama ve düşük-riskli gerçek site manuel kabul testlerini tam 
 inject'e özel tek kullanımlık Hello capability/replay ledger'ı, gerçek vault transaction/lease dispatcher'ı,
 Native Messaging host'u, ürün extension'ı ve kontrollü oturum uygulaması kodlandı. Dikey dilim
 kontrollü oturumda `0.1.9`, `tr.wikipedia.org` üzerinde çoklu-cookie oturumuyla `0.1.11` sürümünde
-TPM/Hello ile uçtan uca doğrulandı. Inject sonrası sayfanın otomatik yenilenmemesi açık UX borcudur;
-bu küçük iş ve Faz 6 kullanıcı onayını beklemektedir.
+TPM/Hello ile uçtan uca doğrulandı. Faz 5.1 navigasyon-öncesi unlock gate prototipi `0.1.12` manuel
+testini tam geçti ve F5 gereksinimini kaldırarak Q21'i kapattı. Sıradaki adım Faz 6'dır ve kullanıcı
+onayını beklemektedir.
 
 ---
 
@@ -1409,7 +1410,7 @@ işaretlenir.
 | **Q18** | CHIPS/partitioned cookie'ler yalnızca gerçek üçüncü-taraf bağlamında mı yazılabiliyor; extension bağlamından `chrome.cookies.set` ile doğrudan `partitionKey` verildiğinde neden cookie dönmüyor? Chrome 150 `localhost` ölçümünde yazım sessizce başarısız oldu. | Partitioned cookie restore uyumluluğu | Kontrollü top-level site + üçüncü-taraf iframe deneyi; extension ve sayfa bağlamlarını karşılaştır |
 | **Q19** | Ürün idle eşiği §14 policy seviyelerine nasıl bağlanacak? Faz 5'teki `30 s` yalnız manuel test değeridir; üretim aralığı policy'ye göre `1–15 dk` olmalıdır. | Erken tahliye ile gereksiz maruziyet arasındaki UX/güvenlik dengesi | Faz 6 policy implementasyonunda ölçümlü varsayılanlar ve kullanıcıya açıklanan seviye eşlemesi belirle |
 | **Q20** | Sistem idle sinyali, medya oynatma veya görünür sayfadaki pasif ama gerçek kullanımı nasıl ayırt edecek? YouTube/video gibi senaryolarda klavye-fare olmaması yanlış erken tahliye üretebilir. | Aktif pasif kullanımda oturumun gereksiz kilitlenmesi | Faz 6'da tab visibility, audible/media state ve site aktivitesini güvenlik sınırını gevşetmeden değerlendiren policy tasarla |
-| **Q21** | Başarılı inject ve health check sonrasında açık site sekmesinin görünür auth durumunu güvenli biçimde nasıl yenileyeceğiz? Deney 5'te restore başarılı olduğu halde Wikipedia sayfası F5 gerektirdi. | Restore UX'i; yanlış/tekrarlı reload döngüsü riski | Faz 5.1 küçük UX işinde yalnız başarılı inject sonrasında tek kontrollü reload ve logout/no-session durumunda sıfır reload ile doğrula |
+| **Q21** | ✅ Kapandı — `webNavigation.onBeforeNavigate`, yalnız `sealed + yeni ana-frame navigasyonu` durumunda tam hedef URL'yi saklayıp sekmeyi tek düğmeli `unlock.html` ara sayfasına yönlendirir. Inject yalnız “Cookie ile giriş yap” kullanıcı jestiyle başlar; Hello ve cookie round-trip başarısından sonra sekme path/query korunarak hedefe döner. `leased` navigasyonlara dokunulmaz; ret ara sayfada tekrar denenebilir. | Restore UX'i; F5 gereksinimi kaldırıldı | Faz 5.1 `0.1.12` Wikipedia manuel testi: ana akış, leased, Hello reddi/tekrar ve idle senaryoları PASS |
 
 ---
 
@@ -1423,6 +1424,7 @@ işaretlenir.
 | **Faz 3** | Deney 3 — Disposable profile uçtan uca | `poc/session-probe/`, exp-03 raporu | ✅ Tamamlandı — 136/136 PASS, 10/10 restore; §22.3 karşılandı |
 | **Faz 4** | Deney 4 — Duty cycle ölçümü | exp-04 raporu | ✅ Tamamlandı — §22.4 karşılandı; unnecessary exposure %0,012 |
 | **Faz 5** | Tek grup, uçtan uca MVP (vault + host + extension) | Çalışan dikey dilim | ✅ **TAMAMLANDI** — kontrollü uygulama `0.1.9`, düşük-riskli gerçek site `tr.wikipedia.org` `0.1.11`; TPM/Hello + vault + host + extension ve çoklu-cookie group zinciri doğrulandı |
+| **Faz 5.1** | Navigasyon-öncesi kullanıcı kontrollü unlock gate | `webNavigation` yakalama + `unlock.html` + tam URL'ye dönüş | ✅ **TAMAMLANDI** — `0.1.12` manuel test tam geçti; ilk görünür yükleme authenticated, F5 gereksinimi yok |
 | **Faz 6** | Çoklu grup, policy seviyeleri, reconciliation sertleştirme | v0.1 | — |
 | **Faz 7** | Watcher / monitoring katmanı | v0.2 | — |
 | **Faz 8** | Edge / Brave desteği | v0.3 | — |
@@ -1546,7 +1548,10 @@ notes, caches, metadata, and temporary working files.
 MVP hem kontrollü uygulamada (`0.1.9`) hem düşük-riskli gerçek site `tr.wikipedia.org` üzerinde
 (`0.1.11`) manuel kabul testini **tam geçti**. TPM/Hello, şifreli vault, Native Messaging host, MV3
 extension, gerçek server-side session ve yerel + CentralAuth çoklu-cookie account group zinciri birlikte
-doğrulandı. §29.1 test sırasının ilk iki kapısı tamamlandı; yüksek riskli gerçek hedefler test edilmedi.
+doğrulandı. Faz 5.1 `0.1.12` navigasyon-öncesi unlock gate manuel testi de tam geçti: sealed oturumda
+gerçek site görünür biçimde commit edilmeden ara sayfa gösterildi, Hello yalnız düğme jestiyle başladı ve hedef path/query ilk görünür
+yüklemede authenticated açıldı. Q21 kapandı. §29.1 test sırasının ilk iki kapısı tamamlandı; yüksek riskli
+gerçek hedefler test edilmedi.
 
 ### Tamamlananlar
 
@@ -1860,9 +1865,26 @@ doğrulandı. §29.1 test sırasının ilk iki kapısı tamamlandı; yüksek ris
   oturumu geri yüklendi.
 - **PASS — external logout:** Wikipedia'nın gerçek “Çıkış yap” işlemi Hello göstermeden vault'u sildi,
   lease'i `UNINITIALIZED` yaptı; sonraki F5 ve reopen logged-out kaldı ve tekrar döngüsü üretmedi.
-- **Açık UX borcu:** inject ve native health başarılı olsa da mevcut Wikipedia sayfası görünür auth
-  durumunu kendiliğinden yenilemedi; bir F5 gerekti. Q21 kapsamında, başarılı inject sonrası tek kontrollü
-  reload ve reload-loop koruması ayrı küçük iş olarak ele alınacaktır.
+- **Çözüldü — Deney 5 UX borcu:** inject ve native health başarılı olsa da mevcut Wikipedia sayfası görünür auth
+  durumunu kendiliğinden yenilemedi; bir F5 gerekti. Bu borç Faz 5.1 `0.1.12` ile kapatıldı.
+
+### Faz 5.1 navigasyon-öncesi unlock gate sonucu (`0.1.12`)
+
+- **PASS — sealed + yeni navigasyon:** `webNavigation.onBeforeNavigate` gerçek sayfa yerine tek
+  “Cookie ile giriş yap” düğmeli ara sayfayı açtı; Hello otomatik başlamadı.
+- **PASS — kullanıcı jesti ve tam URL:** düğme tıklaması tek inject Hello başlattı; onay ve cookie
+  round-trip sonrasında saklanan path/query adresine otomatik dönüldü ve sayfa ilk yüklemede giriş yapılmış
+  halde açıldı. F5 gerekmedi.
+- **PASS — leased ayrımı:** aktif lease sırasında F5 ve site içi linkler gate veya Hello üretmeden normal
+  çalıştı.
+- **PASS — ret/tekrar:** Hello iptalinde ara sayfa korundu, hata gösterildi ve aynı düğmeyle ikinci deneme
+  başarıyla tamamlandı.
+- **PASS — idle:** sessiz idle eviction sonrasındaki yeni navigasyon/F5 gate'i yeniden açtı; düğme
+  tıklanmadan Hello çıkmadı ve onay sonrası hedef F5'siz doğru yüklendi.
+- **Kabul edilen prototip sınırı:** `webNavigation` blocking bir API değildir. `onBeforeNavigate` en erken
+  bildirimde `tabs.update` ile ara sayfaya yönlendirir, ancak “ilk ağ isteği kesinlikle hiç çıkmadı” garantisi
+  vermez. Daha sert bir garanti gerekirse blocking/declarativeNetRequest katmanı ayrıca tasarlanacaktır.
+  Mevcut kapsamda bu güvenlik açığı değil, kabul edilmiş bir UX/timing inceliğidir.
 
 ### Değişen varsayımlar (revizyon 2 — 2026-08-03)
 
@@ -1943,19 +1965,15 @@ daha yüksek riskli sitelere veya farklı auth/storage modellerine kendiliğinde
 
 ## 31. Sonraki Kesin Adım
 
-**Önce Faz 5.1 küçük UX işi — başarılı inject sonrası tek kontrollü sayfa yenileme; ardından Faz 6.**
+**Faz 6 — çoklu grup, policy seviyeleri ve reconciliation sertleştirme.**
 
 Faz 5 tek-grup dikey dilimi kontrollü uygulamada `0.1.9`, düşük-riskli gerçek Wikipedia hesabında
-`0.1.11` manuel kabul testlerini tam geçti ve tamamlandı. Yol haritasındaki sonraki ana faz; çoklu account
-group isolation/rotasyonu, §14 policy seviyeleri ve crash/reconciliation sertleştirmesini içeren Faz 6'dır.
+`0.1.11` manuel kabul testlerini tam geçti. Faz 5.1 `0.1.12` navigasyon-öncesi unlock gate de ana akış,
+leased ayrımı, Hello reddi/tekrar ve idle senaryolarında tam geçti; Q21 ve F5 UX borcu kapandı.
 
-Ancak Deney 5, inject ve health check başarılı olsa bile açık Wikipedia sayfasının görünür oturum
-durumunu kendiliğinden yenilemediğini ve bir F5 gerektiğini gösterdi. Bu sınır dar, ölçülebilir ve Faz 5'in
-tek-grup restore UX'ine aittir; kapsamı Faz 6'nın çoklu-grup değişiklikleriyle karıştırmadan önce ayrı
-**Faz 5.1** işi olarak kapatılacaktır. Kabul koşulu: yalnız başarılı inject + authenticated health
-sonrasında ilgili sekmede en fazla bir kontrollü reload; Hello reddi, invalid session, external logout ve
-already-uninitialized durumlarında sıfır reload; navigation/reconciliation döngüsü yok. **Kullanıcının açık
-onayı olmadan ne Faz 5.1 ne de Faz 6 implementasyonuna başlanacaktır.**
+Sıradaki kesin yol haritası adımı; çoklu account group isolation/rotasyonunu, §14 policy seviyelerini ve
+crash/reconciliation davranışını ürün kapsamına genişleten Faz 6'dır. **Kullanıcının açık onayı olmadan
+Faz 6 implementasyonuna başlanmayacaktır.**
 
 Faz 6 girişinde iki idle-policy sorusu zorunlu olarak ele alınacaktır:
 
@@ -1965,9 +1983,10 @@ Faz 6 girişinde iki idle-policy sorusu zorunlu olarak ele alınacaktır:
    YouTube/video gibi senaryolarda erken tahliyeyi önlemek için tab visibility ve audible/media state
    sinyallerinin güvenliği zayıflatmadan nasıl policy'ye katılacağı kararlaştırılmalıdır (Q20).
 
-Q18 partitioned cookie, Q8 çoklu profil/incognito, Q15 kalıcı Windows agent ve Q21 inject-sonrası yenileme
-da açık kalır; destek veya UX davranışı doğrulanmadan özellik iddiasında bulunulmaz. Faz 5.1 kabulünden
-sonra sıradaki kesin yol haritası adımı Faz 6'dır.
+Q18 partitioned cookie, Q8 çoklu profil/incognito ve Q15 kalıcı Windows agent açık kalır; destek
+doğrulanmadan özellik iddiasında bulunulmaz. Faz 5.1'in blocking olmayan `webNavigation` sınırı kabul
+edilmiştir; ağ seviyesinde kesin pre-request engelleme ileride gerekli görülürse blocking/DNR tasarımı
+ayrı bir iş olarak açılacaktır.
 
 ---
 
