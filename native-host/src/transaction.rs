@@ -2,7 +2,6 @@ use uuid::Uuid;
 
 use crate::audit::unix_ms;
 use crate::crypto::aead::SecretDek;
-use crate::crypto::capability::CapabilitySigner;
 use crate::crypto::hello::HelloAuthorizer;
 use crate::crypto::platform_kek::{KEK_KEY_ID, PlatformKek};
 use crate::lease::state_machine::{CapabilityLedger, ConsumedCapability};
@@ -20,10 +19,6 @@ pub struct VaultTransactions {
     vault_store: VaultStore,
     capability_ledger: CapabilityLedger,
     capability_store: FileCapabilityLedgerStore,
-    // WinRT/KeyCredential teardown is process-lifetime sensitive. Keep one lazily-created
-    // authorizer (and therefore one initialized apartment) alive for the whole native connection
-    // instead of repeatedly RoInitialize/RoUninitialize around each Hello capability.
-    hello_authorizer: Option<HelloAuthorizer>,
 }
 
 impl VaultTransactions {
@@ -44,13 +39,16 @@ impl VaultTransactions {
             vault_store,
             capability_ledger,
             capability_store,
-            hello_authorizer: None,
         })
     }
 
     /// Displays/obtains Windows Hello authorization, verifies all five bound fields, and durably
     /// consumes sequence+nonce. Only the returned linear token can enter an inject vault read.
-    pub fn authorize_inject(&mut self) -> FcpResult<ConsumedCapability> {
+    pub fn authorize_inject(
+        &mut self,
+        authorizer: &HelloAuthorizer,
+        use_cached_hello: bool,
+    ) -> FcpResult<ConsumedCapability> {
         let now = unix_ms()?;
         let payload = self.capability_ledger.reserve(
             CapabilityOperation::Inject,
@@ -58,27 +56,11 @@ impl VaultTransactions {
             CAPABILITY_LIFETIME_MS,
             &mut self.capability_store,
         )?;
-        if self.hello_authorizer.is_none() {
-            match HelloAuthorizer::open_or_create() {
-                Ok(authorizer) => self.hello_authorizer = Some(authorizer),
-                Err(error) => {
-                    self.capability_ledger
-                        .cancel_pending(&mut self.capability_store)?;
-                    return Err(error);
-                }
-            }
-        }
-        let authorizer = match self.hello_authorizer.as_ref() {
-            Some(authorizer) => authorizer,
-            None => {
-                self.capability_ledger
-                    .cancel_pending(&mut self.capability_store)?;
-                return Err(FcpError::Capability(
-                    "Windows Hello authorizer was not initialized".into(),
-                ));
-            }
-        };
-        let signed = match authorizer.sign(payload) {
+        let signed = match if use_cached_hello && authorizer.has_cached_handle(self.group_id) {
+            authorizer.sign_cached(payload)
+        } else {
+            authorizer.sign_fresh(payload)
+        } {
             Ok(signed) => signed,
             Err(error) => {
                 self.capability_ledger

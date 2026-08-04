@@ -126,6 +126,7 @@ pub struct CookieRecord {
 pub struct Handshake {
     pub protocol_version: u16,
     pub extension_id: String,
+    pub config_digest: String,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -143,6 +144,13 @@ pub enum GroupState {
 #[serde(deny_unknown_fields)]
 pub struct HandshakeAck {
     pub protocol_version: u16,
+    pub config_digest: String,
+    pub groups: Vec<HandshakeGroupState>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct HandshakeGroupState {
     pub account_group_id: Uuid,
     pub group_state: GroupState,
     pub reconciliation_required: bool,
@@ -162,7 +170,6 @@ pub enum LeasePurpose {
 pub struct LeaseRequest {
     pub account_group_id: Uuid,
     pub purpose: LeasePurpose,
-    pub requested_duration_ms: u64,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -273,6 +280,13 @@ pub struct SessionInvalidated {
     pub reason: SessionInvalidationReason,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AuthCacheClear {
+    pub account_group_id: Uuid,
+    pub reason: String,
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", content = "payload")]
 pub enum Message {
@@ -302,6 +316,8 @@ pub enum Message {
     SessionInvalidate(SessionInvalidate),
     #[serde(rename = "session.invalidated")]
     SessionInvalidated(SessionInvalidated),
+    #[serde(rename = "auth.cache.clear")]
+    AuthCacheClear(AuthCacheClear),
 }
 
 fn encode_hex(bytes: &[u8]) -> String {

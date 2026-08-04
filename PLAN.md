@@ -14,8 +14,8 @@ inject'e özel tek kullanımlık Hello capability/replay ledger'ı, gerçek vaul
 Native Messaging host'u, ürün extension'ı ve kontrollü oturum uygulaması kodlandı. Dikey dilim
 kontrollü oturumda `0.1.9`, `tr.wikipedia.org` üzerinde çoklu-cookie oturumuyla `0.1.11` sürümünde
 TPM/Hello ile uçtan uca doğrulandı. Faz 5.1 navigasyon-öncesi unlock gate prototipi `0.1.12` manuel
-testini tam geçti ve F5 gereksinimini kaldırarak Q21'i kapattı. Sıradaki adım Faz 6'dır ve kullanıcı
-onayını beklemektedir.
+testini tam geçti ve F5 gereksinimini kaldırarak Q21'i kapattı. **Faz 6 çoklu-grup/policy/reconciliation
+implementasyonu `0.2.0` manuel iki-grup kabulünü 12/12 PASS ile tamamladı; Q4, Q12 ve Q19 kapandı.**
 
 ---
 
@@ -745,6 +745,12 @@ Takas **jest cache süresinde** yapılır; DEK cache'i hiçbir seviyede yoktur.
 > Başlangıç varsayımı olarak **8 saatlik jest cache'i kullanılmaz** — fazla uzundur.
 > Yukarıdaki süreler başlangıç değerleridir ve Deney 4 sonuçlarına göre ayarlanacaktır.
 
+> **Faz 6 ölçüm notu:** Tablodaki Hello cache süresi, uygulamanın aynı grup için aynı
+> `KeyCredential` handle'ını yeniden kullanabileceği üst sınırdır; Windows Hello UI'sının bu süre
+> boyunca kesinlikle gösterilmeyeceği anlamına gelmez. `0.2.0` kabulünde Dengeli grup 10 dakikalık
+> pencere içinde host audit'inde `hello_cached` yolunu kullandığı halde Windows yeniden prompt
+> gösterdi. Last-tab eviction cache'i temizlememiştir; OS credential/UI cache ömrü ayrıca ölçülecektir.
+
 ---
 
 ## 15. Crash ve Reconciliation Modeli
@@ -1393,7 +1399,7 @@ işaretlenir.
 | **Q1** | Chrome native messaging'in host→extension mesaj boyutu limiti nedir ve büyük hesap grupları için chunking gerekli mi? | Protokol tasarımı | Deney 1'e ek küçük ölçüm |
 | **Q2** | KEK için RSA-OAEP mi ECC+ECDH mi? Platform Crypto Provider hangisinde per-use jest veriyor? | Anahtar hiyerarşisi | Deney 1 |
 | **Q3** | ✅ Tam kapandı — Per-use kullanıcı jesti mümkün: Yol A'da her yeni handle, Yol C'de Hello capability işlemi ile doğrulandı; süre, process ve kilit durumu belirleyici değil. | Ürün iddiası | Deney 1 handle-cycle + lock-handle-probe + Hello challenge |
-| **Q4** | Hesap grubu domain kümesi statik mi tanımlanacak, ampirik mi türetilecek? İkisinin karışımı nasıl yönetilir? | Profil modeli | Deney 3 |
+| **Q4** | ✅ Kapandı — Faz 6'da domain, navigation pattern ve exact cookie selector kümeleri sürümlü `account-groups.json` içinde açıkça tanımlanır; ampirik genişletme yapılmaz. Çakışan sahiplik config yüklenirken reddedilir. | Profil modeli | Faz 6 config validator + config-digest handshake |
 | **Q5** | MV3 service worker'ı boşta sonlandırılıyor. Lease zamanlayıcısını ne zorlayacak? `chrome.alarms` granülaritesi yeterli mi? Açık native messaging port'u SW ömrünü ne kadar uzatıyor? | **Tahliye hassasiyeti — kritik** | Küçük extension deneyi (Deney 2'ye eklenebilir) |
 | **Q6** | Host, Chrome tarafından başlatılan bir process olarak Windows lock bildirimini nasıl alacak? (`WTSRegisterSessionNotification` pencere handle'ı ister; gizli mesaj penceresi mi kurulacak?) Host kalıcı olmadığı için bu bildirim yalnızca port açıkken anlamlıdır (§9.2.1). | Lock tahliyesinin best-effort yolu | Deney 1'e ek |
 | **Q7** | Cookie tahliye edildikten sonra hâlâ çalışan bir service worker veya background fetch cookie'yi yeniden oluşturuyor mu? | Duty cycle doğruluğu | Deney 3/4 metriği |
@@ -1401,16 +1407,17 @@ işaretlenir.
 | **Q9** | ✅ Kapandı — Manifest `key` alanıyla unpacked extension ID'si `dokhjkpkdknopgnjdmaogjhlelcaiigo` olarak sabitlendi ve manuel reload/test akışında kullanıldı. | Kurulum / native host manifest | Deney 2 |
 | **Q10** | ✅ Kapandı — Rust binary için `Cargo.lock` repoda tutulacak. | Repo hijyeni | §8.2.1 |
 | **Q11** | Mevcut lisans GPL-3.0 (repoda hazır). Bu bilinçli bir tercih mi, teyit edilmeli. | Dağıtım | Kullanıcı teyidi |
-| **Q12** | Audit log'da cookie **isimleri** bile hash'lenecekse, hash tuzu nerede saklanacak? (Tuz kasada olursa log kasasız okunamaz) | Log tasarımı | Vault implementasyonu öncesi |
+| **Q12** | ✅ Kapandı — Hash/tuz gereksinimi kaldırıldı: audit DTO'su cookie adı, domain'i, değeri veya serbest hata metni kabul etmez. Yalnız group UUID, bounded event/outcome/detail code ve operation UUID yazılır; cookie korelasyonu gerekiyorsa selector sayısı kullanılır. | Log gizliliği; isim sözlüğü saldırısı yüzeyi yok | Faz 6 grup-bazlı audit şeması ve otomatik schema testi |
 | **Q13** | ✅ Kapandı — Windows Hello kayıtlıdır; Yol A bu mekanizmayı kullanmıyor ve parola tabanlı CNG strong-key protection diyaloğu gösteriyor. Yol C prompt türü yalnızca PIN kayıtlı test ortamında PIN olarak ölçüldü; biyometrik cihaz test edilmedi. | Policy | Deney 1 ikinci tur + Yol C |
 | **Q14** | ✅ Kapandı — Platform Crypto Provider hardware-only ve TPM sürümü `2.0` bildirdi. `Get-Tpm` yönetici istediği için doğrulama doğrudan CNG provider özellikleriyle yapıldı. | Deney 1'in ön koşulu | Deney 1 `status` ölçümü |
 | **Q15** | **Kalıcı bir Windows user agent eklenecek mi?** Standart NMH host'u kalıcı değildir (§9.2.1); Chrome kapalıyken lease expiry takibi, lock tahliyesi ve reconciliation tetikleme yapılamaz. Kalıcı agent bunu çözer ancak yeni saldırı yüzeyi, autostart ve güncelleme yükü getirir. | **Mimari — lease zorlama modeli** | [ADR-013](#adr-013--kalıcı-windows-user-agent-açık-karar); Deney 4 duty cycle sonuçları karar girdisi olacak |
 | **Q16** | ✅ Kapandı — **Aday A:** wrapped DEK yalnız `<group_id>.fcpv` authenticated başlığında saklanır; manifest'te bulunmaz. FCPV v1 RSA-2048-OAEP-SHA256 için 256-byte wrapped DEK ile donduruldu. | Vault formatı donduruldu | Deney 1 + Faz 5 vault v1 implementasyonu ([§12.0](#120-tek-doğruluk-kaynağı-ilkesi-bağlayıcı)) |
 | **Q17** | Extension kaldırıldığında veya devre dışı bırakıldığında kullanıcı `degraded` durumdan nasıl haberdar edilecek? Host kalıcı değil ve UI'ı yok; extension da yoksa bildirim kanalı kalmıyor. | Kullanıcının yanlış güven hissine kapılmaması | Q15 kararına bağlı; kalıcı agent varsa çözülür |
 | **Q18** | CHIPS/partitioned cookie'ler yalnızca gerçek üçüncü-taraf bağlamında mı yazılabiliyor; extension bağlamından `chrome.cookies.set` ile doğrudan `partitionKey` verildiğinde neden cookie dönmüyor? Chrome 150 `localhost` ölçümünde yazım sessizce başarısız oldu. | Partitioned cookie restore uyumluluğu | Kontrollü top-level site + üçüncü-taraf iframe deneyi; extension ve sayfa bağlamlarını karşılaştır |
-| **Q19** | Ürün idle eşiği §14 policy seviyelerine nasıl bağlanacak? Faz 5'teki `30 s` yalnız manuel test değeridir; üretim aralığı policy'ye göre `1–15 dk` olmalıdır. | Erken tahliye ile gereksiz maruziyet arasındaki UX/güvenlik dengesi | Faz 6 policy implementasyonunda ölçümlü varsayılanlar ve kullanıcıya açıklanan seviye eşlemesi belirle |
+| **Q19** | ✅ Kapandı — Kritik/Dengeli/Kullanışlı idle eşikleri sırasıyla `1/5/15 dk`; Chrome'un global 1 dk sinyali sonrası grup-bazlı alarm ve tahliye anında `idle.queryState` doğrulaması kullanılır. Manuel ölçümde Kritik ~70 sn'de tahliye olurken Dengeli leased kaldı; 5+ dk'da Dengeli de sessiz tahliye oldu. Faz 5'teki `30 s` test değeri kaldırıldı. | Policy bazlı idle ayrımı gerçek iki-grup akışında doğrulandı | Faz 6 `0.2.0`, exp-06 Faz E |
 | **Q20** | Sistem idle sinyali, medya oynatma veya görünür sayfadaki pasif ama gerçek kullanımı nasıl ayırt edecek? YouTube/video gibi senaryolarda klavye-fare olmaması yanlış erken tahliye üretebilir. | Aktif pasif kullanımda oturumun gereksiz kilitlenmesi | Faz 6'da tab visibility, audible/media state ve site aktivitesini güvenlik sınırını gevşetmeden değerlendiren policy tasarla |
 | **Q21** | ✅ Kapandı — `webNavigation.onBeforeNavigate`, yalnız `sealed + yeni ana-frame navigasyonu` durumunda tam hedef URL'yi saklayıp sekmeyi tek düğmeli `unlock.html` ara sayfasına yönlendirir. Inject yalnız “Cookie ile giriş yap” kullanıcı jestiyle başlar; Hello ve cookie round-trip başarısından sonra sekme path/query korunarak hedefe döner. `leased` navigasyonlara dokunulmaz; ret ara sayfada tekrar denenebilir. | Restore UX'i; F5 gereksinimi kaldırıldı | Faz 5.1 `0.1.12` Wikipedia manuel testi: ana akış, leased, Hello reddi/tekrar ve idle senaryoları PASS |
+| **Q22** | 🟡 Blocker değil — Uygulama `hello_cached`/aynı `KeyCredential` handle yolunu 10 dakikalık Dengeli pencere içinde doğru seçtiği halde Windows Hello UI yeniden gösterildi. Last-tab eviction cache'i temizlemiyor; uygulama penceresi OS'nin promptsuz credential cache süresini garanti etmiyor. Gerçek OS prompt-cache süresi nedir? | Beklenenden fazla prompt; güvenlik fail-safe kalır | Ayrı süre ölçümü: aynı process/handle ile artan aralıklarda prompt gözlemi |
 
 ---
 
@@ -1425,7 +1432,7 @@ işaretlenir.
 | **Faz 4** | Deney 4 — Duty cycle ölçümü | exp-04 raporu | ✅ Tamamlandı — §22.4 karşılandı; unnecessary exposure %0,012 |
 | **Faz 5** | Tek grup, uçtan uca MVP (vault + host + extension) | Çalışan dikey dilim | ✅ **TAMAMLANDI** — kontrollü uygulama `0.1.9`, düşük-riskli gerçek site `tr.wikipedia.org` `0.1.11`; TPM/Hello + vault + host + extension ve çoklu-cookie group zinciri doğrulandı |
 | **Faz 5.1** | Navigasyon-öncesi kullanıcı kontrollü unlock gate | `webNavigation` yakalama + `unlock.html` + tam URL'ye dönüş | ✅ **TAMAMLANDI** — `0.1.12` manuel test tam geçti; ilk görünür yükleme authenticated, F5 gereksinimi yok |
-| **Faz 6** | Çoklu grup, policy seviyeleri, reconciliation sertleştirme | v0.1 | — |
+| **Faz 6** | Çoklu grup, policy seviyeleri, reconciliation sertleştirme | `0.2.0`, exp-06 kabul raporu | ✅ **TAMAMLANDI** — otomatik kontroller ve iki-grup manuel kabul matrisi 12/12 PASS; Q4/Q12/Q19 kapandı |
 | **Faz 7** | Watcher / monitoring katmanı | v0.2 | — |
 | **Faz 8** | Edge / Brave desteği | v0.3 | — |
 
@@ -1535,7 +1542,8 @@ notes, caches, metadata, and temporary working files.
 - Test fixture'larında gerçek session artefaktı bulunmaz.
 - Kullanıcı verileri loglanmaz.
 - **Audit loglar cookie değerlerini içermez.**
-- Cookie isimleri dahi gerektiğinde hash veya redaction ile tutulur ([Q12](#24-açık-teknik-sorular)).
+- Cookie adları ve domain'leri audit DTO'suna hiç alınmaz; hash/tuz da tutulmaz
+  ([Q12](#24-açık-teknik-sorular)).
 - Debug çıktıları production build'de kapalıdır.
 
 ---
@@ -1550,8 +1558,11 @@ MVP hem kontrollü uygulamada (`0.1.9`) hem düşük-riskli gerçek site `tr.wik
 extension, gerçek server-side session ve yerel + CentralAuth çoklu-cookie account group zinciri birlikte
 doğrulandı. Faz 5.1 `0.1.12` navigasyon-öncesi unlock gate manuel testi de tam geçti: sealed oturumda
 gerçek site görünür biçimde commit edilmeden ara sayfa gösterildi, Hello yalnız düğme jestiyle başladı ve hedef path/query ilk görünür
-yüklemede authenticated açıldı. Q21 kapandı. §29.1 test sırasının ilk iki kapısı tamamlandı; yüksek riskli
-gerçek hedefler test edilmedi.
+yüklemede authenticated açıldı. Q21 kapandı. **Faz 6 `0.2.0` iki-grup manuel kabulü de 12/12 PASS
+ile tamamlandı:** Wikipedia (`balanced`) ve Controlled Session App (`critical`) bağımsız enrollment,
+last-tab, idle, unlock/ret, external logout ve reload reconciliation akışlarında birbirini etkilemedi.
+Q4, Q12 ve Q19 kapandı. §29.1 test sırasının ilk iki kapısı tamamlandı; yüksek riskli gerçek hedefler
+test edilmedi.
 
 ### Tamamlananlar
 
@@ -1809,7 +1820,8 @@ gerçek hedefler test edilmedi.
 - **PASS — reopen/inject:** site yeniden açılınca tam bir adet inject Hello gösterildi; onay sonrası
   cookie restore ve protected health check `authenticated` oldu.
 - **PASS — idle:** `30 s` test eşiğinde Hello göstermeyen idle eviction tamamlandı; sonraki reopen
-  yalnız bir inject Hello istedi. `30 s` üretim policy'si değildir; Q19 ile açıktır.
+  yalnız bir inject Hello istedi. `30 s` üretim policy'si değildi; konu o tarihte Q19'a taşındı ve
+  Faz 6'nın `1/5/15 dk` policy ölçümüyle kapandı.
 - **PASS — gereksiz unlock yok:** server-side logout sonrası F5, geçersiz oturumu açmaya çalışmadı ve
   gereksiz Hello üretmedi.
 - **PASS — ret/iptal:** inject Hello reddi veya iptali cookie vermeden `logged_out` ile fail-closed
@@ -1885,6 +1897,38 @@ gerçek hedefler test edilmedi.
   bildirimde `tabs.update` ile ara sayfaya yönlendirir, ancak “ilk ağ isteği kesinlikle hiç çıkmadı” garantisi
   vermez. Daha sert bir garanti gerekirse blocking/declarativeNetRequest katmanı ayrıca tasarlanacaktır.
   Mevcut kapsamda bu güvenlik açığı değil, kabul edilmiş bir UX/timing inceliğidir.
+
+### Faz 6 nihai kabul sonucu (`0.2.0`)
+
+- Sürüm kontrollü `account-groups.json` içinde Wikipedia (`balanced`) ve Controlled Session App
+  (`critical`) grupları tanımlandı. Config grup/selector sınırlarını ve belirsiz sahipliği reddeder.
+- Native Messaging v2 handshake, aynı config byte'larının SHA-256 digest'ini ve bütün grupların durable
+  state/lease özetini taşır; digest uyuşmazlığı lease verilmeden global fail-closed olur.
+- Host tek dispatcher state'i yerine UUID-keyed `GroupRuntime` haritası kullanır. Vault, lease metadata,
+  capability ledger, pending operation, jest cache ve reconciliation state'i grup bazında ayrıdır.
+- Faz 5 Wikipedia vault UUID'si korundu; eski `mvp-group.json` ve `capability-ledger.json` aynı grubun yeni
+  UUID yollarına tek-seferlik taşınır.
+- Extension cookie/tab/navigation/alarm/external-logout olaylarını config sahipliğine göre gruba yönlendirir.
+  Grup kilitleri bağımsız, browser cookie mutation kuyruğu çakışmayı önlemek için global ve sıralıdır.
+- Policy süreleri host-authoritative hale geldi: Kritik `5 dk lease / 1 dk idle / anında last-tab`, Dengeli
+  `10 dk / 5 dk / 2 dk grace`, Kullanışlı `30 dk / 15 dk / 5 dk grace`; İzleme cookie mutasyonu yapmaz.
+- Jest cache DEK cache'i değildir. Her inject yeni sequence/nonce capability tüketir; yalnız aynı grup için
+  policy-süreli Hello handle'ı tekrar kullanılabilir. Tek process-lifetime WinRT apartment korunur, cached
+  handle'lar apartment'tan önce drop edilir ve lock'ta grup bazında temizlenir.
+- Reconciliation bariyeri grup bazındadır: bir grubun business-operation hatası yalnız o grubu `degraded`
+  yapar. Config/framing/nonce ihlali bağlantı-geneli fail-closed kalır.
+- Audit şeması cookie adı/değeri kabul etmez; Q12 isim hash'i yerine veri-minimizasyonu ile kapatıldı.
+- Otomatik Rust testleri iki grup handshake/config, state ayrımı ve bir grubun invalidation'ının diğer vault'u
+  değiştirmediğini kapsar.
+- **Manuel kabul 12/12 PASS:** migrate edilmiş Wikipedia vault'u gate ile açıldı; controlled app sessiz
+  enroll oldu; Kritik last-tab anında, Dengeli last-tab 2 dk grace ile; Kritik idle ~70 sn'de, Dengeli
+  idle 5+ dk'da tahliye oldu. Ret/retry, group-doğru gate, external logout izolasyonu ve extension reload
+  reconciliation beklenen grup sınırlarında çalıştı.
+- **Hello cache gözlemi:** Wikipedia'nın ikinci inject'i ilkinden yaklaşık 8 dk 23 sn sonra audit'te
+  `hello_cached` kaydedildi; yani last-tab eviction cache'i temizlemedi ve aynı handle yolu seçildi. Windows
+  buna rağmen yeniden Hello UI gösterdi. Uygulamadaki 10 dk değer OS'nin promptsuz kalma garantisi değil,
+  handle yeniden kullanım üst sınırıdır. Güvenlik açısından fail-safe, UX açısından Q22 ile izlenecek bir
+  açık ölçümdür; Faz 6'yı bloklamaz.
 
 ### Değişen varsayımlar (revizyon 2 — 2026-08-03)
 
@@ -1965,28 +2009,20 @@ daha yüksek riskli sitelere veya farklı auth/storage modellerine kendiliğinde
 
 ## 31. Sonraki Kesin Adım
 
-**Faz 6 — çoklu grup, policy seviyeleri ve reconciliation sertleştirme.**
+**Faz 7 kapsam kararı — watcher / monitoring katmanı.**
 
-Faz 5 tek-grup dikey dilimi kontrollü uygulamada `0.1.9`, düşük-riskli gerçek Wikipedia hesabında
-`0.1.11` manuel kabul testlerini tam geçti. Faz 5.1 `0.1.12` navigasyon-öncesi unlock gate de ana akış,
-leased ayrımı, Hello reddi/tekrar ve idle senaryolarında tam geçti; Q21 ve F5 UX borcu kapandı.
+Faz 6 `0.2.0` otomatik kontrolleri ve iki-grup manuel kabul matrisi 12/12 PASS ile tamamlandı. Sıradaki
+yol haritası adımı Faz 7'dir; ancak watcher'ın kalıcı Windows user agent olup olmayacağı Q15'i, extension
+yokken bildirim kanalı Q17'yi ve yeni saldırı yüzeyi/kurulum/güncelleme modelini etkiler. Bu nedenle önce
+dar bir Faz 7 tasarım ve implementasyon planı kullanıcıya sunulacaktır.
 
-Sıradaki kesin yol haritası adımı; çoklu account group isolation/rotasyonunu, §14 policy seviyelerini ve
-crash/reconciliation davranışını ürün kapsamına genişleten Faz 6'dır. **Kullanıcının açık onayı olmadan
-Faz 6 implementasyonuna başlanmayacaktır.**
+**Kullanıcının açık onayı olmadan Faz 7 kodu, gerçek hesap testi veya yüksek riskli site testi
+başlatılmayacaktır.**
 
-Faz 6 girişinde iki idle-policy sorusu zorunlu olarak ele alınacaktır:
-
-1. Mevcut `30 s` yalnız manuel test eşiğidir. Üretim eşikleri §14'teki policy seviyelerine göre
-   `1–15 dk` aralığında belirlenmeli, ölçülmeli ve kullanıcıya anlaşılır biçimde sunulmalıdır (Q19).
-2. `chrome.idle` tek başına medya oynatma veya görünür sekmedeki pasif gerçek kullanımı ayırt etmez.
-   YouTube/video gibi senaryolarda erken tahliyeyi önlemek için tab visibility ve audible/media state
-   sinyallerinin güvenliği zayıflatmadan nasıl policy'ye katılacağı kararlaştırılmalıdır (Q20).
-
-Q18 partitioned cookie, Q8 çoklu profil/incognito ve Q15 kalıcı Windows agent açık kalır; destek
-doğrulanmadan özellik iddiasında bulunulmaz. Faz 5.1'in blocking olmayan `webNavigation` sınırı kabul
-edilmiştir; ağ seviyesinde kesin pre-request engelleme ileride gerekli görülürse blocking/DNR tasarımı
-ayrı bir iş olarak açılacaktır.
+Q20 medya/pasif görünür kullanım, Q18 partitioned cookie, Q8 çoklu profil/incognito ve Q15/Q17 kalıcı
+agent/bildirim açık kalır. Q22, Windows'un aynı-handle promptsuz cache süresini ayrıca ölçer ve Faz 7 için
+blocker değildir. Faz 5.1'in blocking olmayan `webNavigation` sınırı kabul edilmiştir; ağ seviyesinde kesin pre-request
+engelleme gerekli görülürse blocking/DNR tasarımı ayrı bir iş olacaktır.
 
 ---
 
@@ -2411,5 +2447,30 @@ karmaşıklaştırır; reddedildi.
 **Sonuç:** Enrollment ve eviction audit outcome'u `started` olur; `authorized` yalnız inject için
 kullanılır. Idle/lock tahliyesi kullanıcı yokken tamamlanabilir. Capability replay/nonce/sequence
 koruması yalnız inject unwrap öncesinde bağlayıcıdır.
+
+---
+
+### ADR-019 — Account group config-authoritative ve çalışma zamanı grup-izole olacaktır
+
+**Durum:** Kabul edildi ve doğrulandı — Faz 6 `0.2.0` manuel kabul 12/12 PASS
+
+**Bağlam:** Faz 5 dispatcher, extension state, cookie selector ve policy değerleri tek Wikipedia UUID'sine
+hardcoded idi. Yalnız sabiti listeye çevirmek; config drift, selector çakışması, bir grubun pending/crash
+durumunun diğerini engellemesi ve iki ayrı WinRT apartment yaşam döngüsü risklerini çözmez.
+
+**Karar:** Sürüm kontrollü `account-groups.json` domain/selector/policy/health sözleşmesinin kaynağıdır.
+Host ve extension aynı byte'ların SHA-256 digest'ini Native Messaging v2 handshake'te bağlar. Host UUID-keyed
+`GroupRuntime`, extension UUID-keyed runtime state kullanır; vault, lease, capability ledger, pending operation,
+alarm ve reconciliation bariyeri grup bazındadır. Cookie mutation ve Hello prompt işleme tek bağlantıda
+sıralı kalır. Tek process-lifetime WinRT apartment içinde Hello handle cache'i grup UUID'sine göre ayrılır.
+
+**Gerekçe:** Config yönetim UI'ı olmadan Faz 6 kapsamını dar tutar; digest deploy edilen iki bileşenin farklı
+selector/policy ile çalışmasını fail-closed engeller. Grup-bazlı state bir business-operation hatasının diğer
+grupları bozmasını önler. Global sıralama ise ortak browser cookie store ve Windows Hello UI'sında yarışları
+engeller.
+
+**Sınırlar:** Dinamik kullanıcı grubu/optional host permission UI'ı, incognito/çoklu profil, kalıcı agent ve
+medya-aware idle sonraki kararlardır. Config/framing/nonce ihlali bağlantı-geneli fail-closed kalır; sıradan
+grup hatası yalnız ilgili grubu `degraded` yapar.
 
 ---

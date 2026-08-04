@@ -99,6 +99,7 @@ mod tests {
             message: Message::Handshake(Handshake {
                 protocol_version: PROTOCOL_VERSION,
                 extension_id: "test".into(),
+                config_digest: "00".repeat(32),
             }),
         };
         assert!(validate_first_envelope(&envelope).is_ok());

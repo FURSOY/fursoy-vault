@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use serde::Serialize;
 use uuid::Uuid;
 
-use crate::{FcpResult, MVP_ACCOUNT_GROUP_ID};
+use crate::FcpResult;
 
 #[derive(Serialize)]
 #[serde(deny_unknown_fields)]
@@ -33,6 +33,7 @@ impl AuditLogger {
     /// error string. Callers can emit only bounded event/outcome/detail codes.
     pub fn record(
         &self,
+        account_group_id: Uuid,
         event: &'static str,
         outcome: &'static str,
         operation_id: Option<Uuid>,
@@ -44,7 +45,7 @@ impl AuditLogger {
         let path = self.directory.join(format!("audit-day-{day}.log"));
         let entry = AuditEntry {
             timestamp_unix_ms: now,
-            account_group_id: MVP_ACCOUNT_GROUP_ID,
+            account_group_id,
             event,
             outcome,
             operation_id,
@@ -73,4 +74,27 @@ pub fn unix_ms() -> FcpResult<u64> {
         .map_err(|_| {
             std::io::Error::new(std::io::ErrorKind::InvalidData, "Unix time exceeds u64")
         })?)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::fs;
+
+    use super::*;
+
+    #[test]
+    fn audit_is_group_scoped_and_schema_cannot_accept_cookie_names() {
+        let root = std::env::temp_dir().join(format!("fcp-audit-test-{}", Uuid::new_v4()));
+        let group = Uuid::new_v4();
+        let logger = AuditLogger::new(&root);
+        logger
+            .record(group, "reconciliation", "success", None, Some("isolated"))
+            .unwrap();
+        let path = fs::read_dir(&root).unwrap().next().unwrap().unwrap().path();
+        let text = fs::read_to_string(path).unwrap();
+        assert!(text.contains(&group.to_string()));
+        assert!(!text.contains("cookie_name"));
+        assert!(!text.contains("cookie_value"));
+        fs::remove_dir_all(root).unwrap();
+    }
 }

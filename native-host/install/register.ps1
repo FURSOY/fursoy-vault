@@ -9,6 +9,9 @@ $installRoot = Join-Path $env:LOCALAPPDATA "FursoyCookieProtector\native-host"
 New-Item -ItemType Directory -Force -Path $installRoot | Out-Null
 $installedExe = Join-Path $installRoot "fcp-host.exe"
 Copy-Item -LiteralPath $sourceExe -Destination $installedExe -Force
+$configRoot = Join-Path $env:LOCALAPPDATA "FursoyCookieProtector\config"
+New-Item -ItemType Directory -Force -Path $configRoot | Out-Null
+Copy-Item -LiteralPath (Join-Path $repoRoot "config\account-groups.json") -Destination (Join-Path $configRoot "account-groups.json") -Force
 $manifestPath = Join-Path $installRoot "com.fursoy.cookie_protector.json"
 $manifest = [ordered]@{
   name = "com.fursoy.cookie_protector"

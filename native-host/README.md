@@ -1,30 +1,27 @@
 # FURSOY Native Host
 
-This is the production-oriented Phase 5 native component. It is intentionally limited to one fixed
-controlled account group.
+Production-oriented Phase 6 native component. It retains the Phase 5 TPM/Hello, FCPV v1 and atomic
+vault transaction security properties while routing operations through independent account-group
+runtimes.
 
 Implemented:
 
-- frozen FCPV v1 group-file format (Candidate A: wrapped DEK only in the group file);
-- AES-256-GCM seal/open with authenticated header and strict parsing;
-- Microsoft Platform Crypto Provider RSA-2048-OAEP-SHA256 KEK primitives, with hardware-only and
-  TPM 2.0 checks and no CNG UI policy;
-- inject-only Windows Hello capability signing/verification over a canonical five-field challenge;
-- one lazily-created WinRT authorizer runtime retained for the complete native connection, while
-  every capability opens a fresh KeyCredential handle to prevent same-handle gesture-cache reuse;
-- durable inject-capability sequence/nonce reservation and consume-before-unwrap replay ledger;
-- verified write-through atomic replacement for vault and ledger files;
-- strict Native Messaging v1 DTOs, envelope validation and framing.
-- consume-before-unwrap vault transactions with transaction-scoped zeroized DEKs;
-- durable lease metadata, startup reconciliation, enrollment, inject and eviction dispatch;
-- external-logout/restore-rejection session invalidation with encrypted-vault deletion and
-  missing-vault crash recovery to `UNINITIALIZED`;
-- four-byte little-endian stdin/stdout framing with connection nonce and sequence validation;
-- redacted JSONL audit events and a per-user Chrome registration script.
+- validated, bounded account-group config and SHA-256 config digest;
+- Native Messaging v2 handshake with the durable state of every configured group;
+- per-group vault, lease metadata, capability ledger, pending operation and reconciliation state;
+- automatic migration of the Phase 5 Wikipedia lease/capability files to UUID-based paths;
+- host-authoritative Critical/Balanced/Convenient/Monitor policy parameters;
+- one process-lifetime WinRT apartment with group-scoped Hello handle caches;
+- fresh single-use sequence/nonce capability for every inject, including cached-gesture injects;
+- cache clearing on Windows lock and process/connection teardown;
+- group-scoped redacted audit events that structurally accept no cookie name or value;
+- failure isolation: a group-level operation error does not mutate another group's runtime.
 
-Deferred beyond the single-group MVP:
+The installer copies the exact account-group config to
+`%LOCALAPPDATA%\FursoyCookieProtector\config\account-groups.json`. The executable also contains the same
+config as a fail-closed fallback.
 
-- real account support, multiple groups, policies, watcher or product UI.
+Still excluded: incognito/multi-profile support, persistent Windows agent and management UI.
 
 ## Checks
 
@@ -32,8 +29,5 @@ Deferred beyond the single-group MVP:
 cargo fmt --check
 cargo check --locked
 cargo test --locked
-cargo clippy --all-targets --locked -- -D warnings
+cargo clippy --all-targets --all-features --locked -- -D warnings
 ```
-
-Automated tests use synthetic payloads only. They do not create a TPM key or display Windows Hello;
-the manual acceptance flow performs those interactive checks.

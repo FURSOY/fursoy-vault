@@ -28,6 +28,7 @@ declare namespace chrome {
   namespace idle {
     type IdleState = "active" | "idle" | "locked";
     function setDetectionInterval(seconds: number): void;
+    function queryState(seconds: number, callback: (state: IdleState) => void): void;
     const onStateChanged: { addListener(callback: (state: IdleState) => void): void };
   }
   namespace storage {

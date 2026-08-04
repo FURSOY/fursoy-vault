@@ -4,7 +4,7 @@ use uuid::Uuid;
 use crate::protocol::messages::{Message, Nonce32};
 use crate::{FcpError, FcpResult};
 
-pub const PROTOCOL_VERSION: u16 = 1;
+pub const PROTOCOL_VERSION: u16 = 2;
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -60,6 +60,7 @@ mod tests {
             message: Message::Handshake(Handshake {
                 protocol_version: PROTOCOL_VERSION,
                 extension_id: "fixed-extension-id".into(),
+                config_digest: "00".repeat(32),
             }),
         };
         assert!(envelope.validate(&nonce, 6).is_ok());
@@ -69,12 +70,12 @@ mod tests {
     #[test]
     fn strict_deserialization_rejects_unknown_payload_fields() {
         let json = r#"{
-            "v":1,
+            "v":2,
             "conn_nonce":"0101010101010101010101010101010101010101010101010101010101010101",
             "seq":1,
             "id":"74b0c995-85c6-4db2-9ff4-c148068461a3",
             "type":"handshake",
-            "payload":{"protocol_version":1,"extension_id":"fixed","unexpected":true}
+            "payload":{"protocol_version":2,"extension_id":"fixed","config_digest":"00","unexpected":true}
         }"#;
         assert!(serde_json::from_str::<Envelope>(json).is_err());
     }

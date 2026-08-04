@@ -1,3 +1,7 @@
+use std::cell::RefCell;
+use std::collections::HashMap;
+
+use uuid::Uuid;
 use windows::Security::Credentials::{
     KeyCredential, KeyCredentialCreationOption, KeyCredentialManager, KeyCredentialStatus,
 };
@@ -16,9 +20,9 @@ use crate::{FcpError, FcpResult};
 const HELLO_CREDENTIAL_NAME: &str = "FURSOY.CookieProtector.Hello.v1";
 
 pub struct HelloAuthorizer {
-    // The apartment lives for the native connection, preventing repeated WinRT teardown crashes.
-    // KeyCredential handles do NOT live here: every capability opens a fresh handle so Windows
-    // Hello's same-handle gesture cache cannot silently authorize a later operation.
+    // Rust drops fields in declaration order. Cached KeyCredential handles must be released while
+    // the apartment is still alive; therefore the apartment is deliberately declared last.
+    cached_credentials: RefCell<HashMap<Uuid, KeyCredential>>,
     _apartment: WinRtApartment,
 }
 
@@ -36,8 +40,38 @@ impl HelloAuthorizer {
         // always obtains a separate fresh handle in sign().
         drop(credential);
         Ok(Self {
+            cached_credentials: RefCell::new(HashMap::new()),
             _apartment: apartment,
         })
+    }
+
+    pub fn sign_fresh(&self, payload: CapabilityPayload) -> FcpResult<SignedCapability> {
+        let group_id = payload.account_group_id;
+        self.clear_cached_handle(group_id);
+        let name = HSTRING::from(HELLO_CREDENTIAL_NAME);
+        let credential = open_credential(&name)?;
+        let signed = sign_with_credential(&credential, payload)?;
+        self.cached_credentials
+            .borrow_mut()
+            .insert(group_id, credential);
+        Ok(signed)
+    }
+
+    pub fn sign_cached(&self, payload: CapabilityPayload) -> FcpResult<SignedCapability> {
+        let group_id = payload.account_group_id;
+        let cached = self.cached_credentials.borrow();
+        let credential = cached.get(&group_id).ok_or_else(|| {
+            FcpError::Capability("Windows Hello cached handle is unavailable".into())
+        })?;
+        sign_with_credential(credential, payload)
+    }
+
+    pub fn has_cached_handle(&self, group_id: Uuid) -> bool {
+        self.cached_credentials.borrow().contains_key(&group_id)
+    }
+
+    pub fn clear_cached_handle(&self, group_id: Uuid) {
+        self.cached_credentials.borrow_mut().remove(&group_id);
     }
 }
 
@@ -61,27 +95,34 @@ fn open_or_create_credential(name: &HSTRING) -> FcpResult<KeyCredential> {
 
 impl CapabilitySigner for HelloAuthorizer {
     fn sign(&self, payload: CapabilityPayload) -> FcpResult<SignedCapability> {
-        payload.validate_shape()?;
-        let name = HSTRING::from(HELLO_CREDENTIAL_NAME);
-        let credential = open_credential(&name)?;
-        let canonical = payload.canonical_bytes();
-        let challenge = CryptographicBuffer::CreateFromByteArray(&canonical)?;
-        let result = credential.RequestSignAsync(&challenge)?.join()?;
-        let status = result.Status()?;
-        if status != KeyCredentialStatus::Success {
-            return Err(FcpError::Capability(format!(
-                "Windows Hello signing returned status {}",
-                status.0
-            )));
-        }
-        let signature_buffer = result.Result()?;
-        let mut signature_array = Array::<u8>::new();
-        CryptographicBuffer::CopyToByteArray(&signature_buffer, &mut signature_array)?;
-        let signature = signature_array.to_vec();
-        let signed = SignedCapability { payload, signature };
-        verify_with_credential(&credential, &signed)?;
-        Ok(signed)
+        self.sign_fresh(payload)
     }
+}
+
+fn sign_with_credential(
+    credential: &KeyCredential,
+    payload: CapabilityPayload,
+) -> FcpResult<SignedCapability> {
+    payload.validate_shape()?;
+    let canonical = payload.canonical_bytes();
+    let challenge = CryptographicBuffer::CreateFromByteArray(&canonical)?;
+    let result = credential.RequestSignAsync(&challenge)?.join()?;
+    let status = result.Status()?;
+    if status != KeyCredentialStatus::Success {
+        return Err(FcpError::Capability(format!(
+            "Windows Hello signing returned status {}",
+            status.0
+        )));
+    }
+    let signature_buffer = result.Result()?;
+    let mut signature_array = Array::<u8>::new();
+    CryptographicBuffer::CopyToByteArray(&signature_buffer, &mut signature_array)?;
+    let signed = SignedCapability {
+        payload,
+        signature: signature_array.to_vec(),
+    };
+    verify_with_credential(credential, &signed)?;
+    Ok(signed)
 }
 
 impl CapabilityVerifier for HelloAuthorizer {
