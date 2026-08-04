@@ -7,11 +7,14 @@
 > [Sonraki Kesin Adım](#31-sonraki-kesin-adım) ve [Karar Günlüğü](#32-karar-günlüğü)
 > bölümleri gözden geçirilir. Günlük tarzı uzun kayıt tutulmaz; belge güncel ve okunabilir kalır.
 
-**Son güncelleme:** 2026-08-03
-**Durum:** Tasarım tamamlandı. **Faz 1–4 deneylerinin tamamı GO.** Deney 1 Go/No-Go kriteri A'yı,
-Deney 2 cookie attribute round-trip kapsamını, Deney 3 §22.3 uçtan uca kriterlerini ve Deney 4
-§22.4 duty-cycle kriterini karşıladı. Sıradaki çalışma Faz 5 tek grup uçtan uca MVP'dir; kullanıcı
-onayı olmadan başlanmayacaktır.
+**Son güncelleme:** 2026-08-04
+**Durum:** Tasarım tamamlandı. **Faz 1–4 deneylerinin tamamı GO; Faz 5 tek grup uçtan uca MVP
+kontrollü uygulama ve düşük-riskli gerçek site manuel kabul testlerini tam geçti.** Q16 Aday A ile kapatıldı; vault v1, crypto temeli, Native Messaging v1 sözleşmesi ve
+inject'e özel tek kullanımlık Hello capability/replay ledger'ı, gerçek vault transaction/lease dispatcher'ı,
+Native Messaging host'u, ürün extension'ı ve kontrollü oturum uygulaması kodlandı. Dikey dilim
+kontrollü oturumda `0.1.9`, `tr.wikipedia.org` üzerinde çoklu-cookie oturumuyla `0.1.11` sürümünde
+TPM/Hello ile uçtan uca doğrulandı. Inject sonrası sayfanın otomatik yenilenmemesi açık UX borcudur;
+bu küçük iş ve Faz 6 kullanıcı onayını beklemektedir.
 
 ---
 
@@ -210,6 +213,9 @@ Bunlar bağlayıcı tasarım ilkeleridir. Bir tasarım kararı bunlarla çelişi
 11. Aynı kullanıcı yetkisindeki malware'e karşı tek gerçek sınır TPM/Hello tabanlı kullanıcı
     jesti ve kısa maruziyet süresidir.
 12. Cookie aktifken koruma seviyesinin Chrome'un sunduğunun üzerine çok sınırlı çıktığı kabul edilir.
+13. Kullanıcı jesti yalnız cookie plaintext'inin browser store'a **açıldığı** `SEALED → UNLOCKING →
+    LEASED` / inject yönünü yetkilendirir. Enrollment, eviction, lock ve reconciliation cookie'yi
+    açığa çıkarmayan veya maruziyeti azaltan fail-closed işlemlerdir; Hello beklemez.
 
 ### 7.1 Bellek hijyeni kademelendirmesi
 
@@ -260,13 +266,27 @@ aşırı hijyen yatırımı yapmak bu tavanı yükseltmez.
 Deney 1 bir Rust binary'sidir. Tekrarlanabilir derlemeler ve incelenebilir bağımlılık çözümlemesi için
 `Cargo.lock` repoda tutulacaktır; böylece **Q10 kapanmıştır**.
 
+### 8.2.2 Faz 5 native host bağımlılıkları
+
+- `aes-gcm 0.10.3`: vault payload'ını AES-256-GCM ile authenticated encryption altında tutmak;
+  detached 16-byte tag ve caller-supplied AAD kullanmak için.
+- `serde 1` / `serde_json 1`: katı Native Messaging JSON sözleşmesi, encrypted vault payload'ı ve
+  secretsiz lease metadata serileştirmesi için.
+- `uuid 1`: protokol message/operation/lease kimlikleri ve sabit account-group kimliği için.
+- `windows 0.62.2`: Deney 1 ile aynı NCrypt, KeyCredentialManager, WinRT ve atomik Windows dosya
+  API'lerini kullanmak için.
+- `zeroize 1.9.0`: DEK ve çözülmüş plaintext buffer'larını transaction sonunda temizlemek için.
+
+`native-host/Cargo.lock` repoda tutulur. Ürün crate'i POC crate'ine bağımlı değildir; Deney 1'de
+doğrulanan primitive'ler üretim modüllerine ayrıştırılarak taşınır.
+
 ### 8.3 Üç katmanlı yaşam süresi ayrımı (merkezi tasarım kararı)
 
 Bu projenin en önemli tasarım kararı, birbirine karıştırılan üç şeyin **ayrılmasıdır**:
 
 | Katman | Ne | Ömrü |
 |--------|-----|------|
-| 1 | **Kullanıcı jesti** (Windows Hello onayı) | Policy'ye göre cache'lenebilir |
+| 1 | **Kullanıcı jesti** (yalnız unlock/inject Windows Hello onayı) | Policy'ye göre cache'lenebilir |
 | 2 | **Grup DEK'inin TPM ile unwrap edilmesi** | **Cache'lenmez** — tek vault transaction |
 | 3 | **Cookie'nin browser store'da bulunması** | Lease ile sınırlı (dakikalar) |
 
@@ -274,6 +294,8 @@ Sonuç: kullanıcı günde 1–3 Hello görür, ancak cookie günün küçük bi
 host belleğinde bekleyen uzun ömürlü bir anahtar yoktur.
 
 Güvenlik/UX takası **1. katmanda** yaşanır; 2. ve 3. katmanda taviz verilmez.
+Katman 1 yalnız sealed verinin browser store'a çıkarılmasına uygulanır. Katman 3'ü kısaltan
+eviction/lock işlemi kullanıcı yokken de tamamlanabilmelidir; bu yönde jest zorunluluğu yoktur.
 
 ### 8.4 Akış diyagramı (kavramsal)
 
@@ -300,7 +322,7 @@ Tetikleyici: son sekme kapandı | idle | Windows lock | lease expiry
         ↓
 Extension: cookie snapshot → Host: cookies.evict(lease_id, snapshot)
         ↓
-Host: DEK unwrap → yeni nonce ile şifrele → atomik yaz → doğrula → DEK zeroize
+Host: Hello göstermeden TPM-backed DEK unwrap → yeni nonce ile şifrele → atomik yaz → doğrula → DEK zeroize
         ↓
 Host → Extension: evict.confirmed
         ↓
@@ -452,6 +474,12 @@ account_group
 └── compatibility_version  (profil şeması sürümü)
 ```
 
+**Gerçek-site doğrulaması (2026-08-04):** Deney 5'te bu model yalnız şema düzeyinde kalmadı.
+`tr.wikipedia.org` yerel session/user cookie'leri ile `.wikipedia.org` CentralAuth cookie'lerinden oluşan
+beş zorunlu `cookie_selectors[]` kaydı aynı account group içinde enrollment, snapshot, eviction ve inject
+boyunca birlikte doğrulandı. Sonuç, çoklu-cookie grup modelini bu düşük-riskli site için doğrular; başka
+sitelerin selector kümelerine veya partitioned cookie desteğine kendiliğinden genellenmez.
+
 ### 10.2 Lease kaydı (diskte, plaintext metadata)
 
 ```text
@@ -481,9 +509,9 @@ lease
 └── config\profiles\*.json     (account-group profilleri)
 ```
 
-> **Wrapped DEK'in yeri bilinçli olarak yukarıda belirtilmemiştir.** Manifest ile grup dosyası
-> arasında **çift doğruluk kaynağı oluşturulması yasaktır**; kesin yerleşim Deney 1 sonucunda
-> belirlenir (bkz. [§12.0](#120-tek-doğruluk-kaynağı-ilkesi-bağlayıcı)).
+> **FCPV v1 kararı:** Wrapped DEK yalnız `groups\<group_id>.fcpv` authenticated başlığındadır.
+> `manifest.json` içine kopyalanmaz; manifest yalnız grup indeksi, format sürümü ve KEK kimliği gibi
+> secretsiz genel metadata taşır (bkz. [§12.0](#120-tek-doğruluk-kaynağı-ilkesi-bağlayıcı)).
 
 `%LOCALAPPDATA%` seçilmiştir çünkü OneDrive / bilinen bulut senkronizasyonu kapsamında değildir.
 Kasa şifreli olsa da senkronize edilmesi gereksiz kopya üretir.
@@ -530,12 +558,10 @@ Hedef: **DEK'in ömrü tek bir vault transaction'ıdır**, daha uzun değil.
 
 ## 12. Vault Formatı
 
-> **⚠ PROVISIONAL — VALIDATION PENDING.**
-> Bu bölüm bir **taslaktır** ve henüz doğrulanmamıştır. Kesin yerleşim, alan boyutları ve
-> özellikle **wrapped DEK'in nerede saklanacağı**, [Deney 1](#19-tpm--hello-deney-planı-deney-1)
-> sonucuna bağlıdır: KEK'in RSA mı ECC mi olacağı, wrap çıktısının boyutu ve wrap/unwrap
-> semantiği ([Q2](#24-açık-teknik-sorular)) belirlenmeden format dondurulmaz.
-> Implementasyona bu bölüm doğrulanmadan başlanmaz.
+> **DONDURULDU — FCPV v1.** Deney 1, TPM-backed/non-exportable RSA-2048 KEK ve
+> RSA-OAEP-SHA256 ile 32-byte DEK wrap/unwrap yolunu doğruladı. Q16 için **Aday A** seçildi:
+> wrapped DEK yalnızca ilgili grup dosyasının authenticated başlığında bulunur. Manifest içinde
+> wrapped DEK bulunması format ihlalidir.
 
 Her hesap grubu ayrı dosyada tutulur. Ayrı dosya seçimi atomik yazmayı kolaylaştırır ve
 bozulmanın etki alanını tek grupla sınırlar.
@@ -546,40 +572,42 @@ bozulmanın etki alanını tek grupla sınırlar.
 `manifest.json` içinde hem grup dosyasında bulunması yasaktır: iki kopya birbirinden ayrışır,
 rotasyon ve kurtarma mantığını belirsizleştirir ve hangisinin geçerli olduğu sorusunu doğurur.
 
-İki aday yerleşim vardır ve **seçim Deney 1'e bırakılmıştır**:
+Değerlendirilen iki yerleşim ve sonuç:
 
 | Aday | Wrapped DEK nerede | Artı | Eksi |
 |------|--------------------|------|------|
-| **A — grup dosyası içinde** | `<group_id>.fcpv` başlığında | Grup dosyası kendi kendine yeter; atomik yazma tek dosyada biter | Manifest yalnızca indeks olur; KEK rotasyonu tüm grup dosyalarını yeniden yazmayı gerektirir |
-| **B — manifest içinde** | `manifest.json` | KEK rotasyonu tek dosyada biter | Manifest ile grup dosyası arasında çapraz tutarlılık ve iki-dosyalı atomiklik gerekir |
+| **A — grup dosyası içinde — SEÇİLDİ** | `<group_id>.fcpv` başlığında | Grup dosyası kendi kendine yeter; atomik yazma tek dosyada biter | KEK rotasyonu grup dosyalarını tek tek yeniden yazmayı gerektirir |
+| **B — manifest içinde — REDDEDİLDİ** | `manifest.json` | KEK rotasyonu tek dosyada biter | Manifest ile grup dosyası arasında çapraz tutarlılık ve iki-dosyalı atomiklik gerekir |
 
-Hangi aday seçilirse seçilsin, diğerinde wrapped DEK **bulunmaz**. Aşağıdaki §12.1 şeması
-**Aday A** varsayımıyla yazılmıştır ve karar değiştiğinde güncellenecektir.
+Tek grup Faz 5 ve ilerideki çoklu grup modeli için tek dosyalı atomiklik, manifest merkezli rotasyon
+kolaylığından daha değerlidir. KEK rotasyonu gerektiğinde her grup dosyası bağımsız atomik transaction
+ile yeniden yazılır. Manifest grup indeksi ve genel şema metadata'sı olarak kalır.
 
-### 12.1 Kayıt düzeni (taslak — v0 şeması, Aday A varsayımı)
+### 12.1 Kayıt düzeni — dondurulmuş FCPV v1
 
 ```text
 offset  alan                 boyut     not
 ------  -------------------  --------  ----------------------------------------
 0       magic                4         "FCPV"
-4       format_version       2         u16, little-endian
-6       group_id             16        UUID
-22      alg_id               2         u16 (1 = AES-256-GCM)
-24      kek_key_id           16        KEK tanımlayıcı (rotasyon için)
-40      nonce                12        benzersiz, asla tekrar kullanılmaz
-52      wrapped_dek_len      2         u16      ← yalnızca Aday A'da bulunur
-54      wrapped_dek          değişken  TPM KEK ile sarmalanmış 32-byte DEK  ← Aday A
-..      ciphertext_len       4         u32
-..      ciphertext           değişken  AEAD çıktısı
+4       format_version       2         u16 LE; sabit 1
+6       header_len           2         u16 LE; v1 için sabit 318
+8       group_id             16        UUID
+24      aead_alg_id          2         u16 LE; 1 = AES-256-GCM
+26      wrap_alg_id          2         u16 LE; 1 = RSA-2048-OAEP-SHA256
+28      kek_key_id           16        KEK tanımlayıcı (rotasyon için)
+44      nonce                12        benzersiz, asla tekrar kullanılmaz
+56      wrapped_dek_len      2         u16 LE; v1 için sabit 256
+58      wrapped_dek          256       TPM KEK ile sarmalanmış 32-byte DEK
+314     ciphertext_len       4         u32 LE; üst sınır 4 MiB
+318     ciphertext           değişken  AES-GCM ciphertext
 ..      tag                  16        GCM authentication tag
 ```
 
-**AAD (Additional Authenticated Data)** = `magic || format_version || group_id || alg_id ||
-kek_key_id || nonce || wrapped_dek`.
-Böylece başlık alanları da kimlik doğrulamasına dahil olur; header üzerinde oynama tespit edilir.
-
-> Aday B seçilirse `wrapped_dek_len` ve `wrapped_dek` alanları kayıttan çıkarılır ve AAD'ye
-> `kek_key_id` ile birlikte manifest kayıt sürümü dahil edilir.
+**AAD (Additional Authenticated Data)**, offset 0–317 arasındaki 318-byte başlığın tamamıdır:
+`magic || format_version || header_len || group_id || aead_alg_id || wrap_alg_id || kek_key_id ||
+nonce || wrapped_dek_len || wrapped_dek || ciphertext_len`. Başlık, algoritmalar, tek yetkili
+wrapped DEK ve uzunluk alanı GCM tag'ine bağlıdır. Bilinmeyen sürüm/algoritma, yanlış sabit uzunluk,
+truncation ve trailing data fail-closed reddedilir.
 
 ### 12.2 Atomik yazma protokolü
 
@@ -636,6 +664,12 @@ değişiklik yoktur; doğru sonuç doğrudan `SEALED`'e dönmektir. `EVICTING` y
 `DEGRADED` durumuna ayrıca başlangıç reconciliation'ının başarısız olması veya
 tamamlanamaması durumunda da girilir (bkz. [§15](#15-crash-ve-reconciliation-modeli)).
 
+**Yönsel yetkilendirme kuralı:** `SEALED → LEASED` inject geçişi cookie plaintext'ini açığa
+çıkardığı için Windows Hello capability zorunludur. `LEASED → EVICTING → SEALED`, enrollment ve
+reconciliation ters yöndedir; Hello istemez. Host TPM-backed KEK ile gereken unwrap/encrypt
+transaction'ını sessiz yürütür, DEK'i transaction sonunda zeroize eder ve doğrulanmış vault yazımı
+olmadan extension'a cookie silme izni vermez.
+
 ### 13.2 Tahliye tetikleyicileri
 
 | Tetikleyici | Açıklama |
@@ -646,6 +680,9 @@ tamamlanamaması durumunda da girilir (bkz. [§15](#15-crash-ve-reconciliation-m
 | `expiry` | Lease süresi doldu |
 | `manual` | Kullanıcı talebi ("şimdi kilitle") |
 | `host_disconnect` | Extension host bağlantısını kaybetti → extension kendi başına tahliye eder |
+
+Bu tetikleyicilerin hiçbiri Hello onayı beklemez. Özellikle `idle` ve `lock`, kullanıcı tanım gereği
+etkileşimde değilken çalışır; prompt beklemek fail-open maruziyet üretir ve yasaktır.
 
 #### 13.2.1 Windows lock: garanti değil, best-effort
 
@@ -725,16 +762,21 @@ Takas **jest cache süresinde** yapılır; DEK cache'i hiçbir seviyede yoktur.
 
 Reconciliation **host'un tek başına yapabileceği bir işlem değildir.** Host browser cookie
 store'unu okuyamaz ve cookie silemez (§9.2.2); bu adımları extension yürütür. Bu nedenle
-reconciliation'ın tetikleyicisi "host başlangıcı" değil, **host ile extension arasındaki
-bağlantının kurulması**dır (`handshake`).
+reconciliation değerlendirmesinin tetikleyicisi "host başlangıcı" değil, **host ile extension
+arasındaki bağlantının kurulması**dır (`handshake`). Handshake yalnız durable host durumunu ve
+lease kimliği/expiry'sini bildirir; browser gözlemi yapılmadan host durumunu `EVICTING`'e taşımaz.
+Extension güncel ilgili sekmeleri ve cookie varlığını okuduktan sonra tek bir eylem seçer: sağlıklı
+`LEASED` + açık ilgili sekme + mevcut cookie lease'i sürdürür; son sekme yoksa gerçek
+`last_tab_closed`, eksik/tutarsız browser durumu veya durable geçiş/degraded state varsa
+`startup_reconciliation` başlatılır. Böylece soğuk MV3 worker handshake'i kendisini uyandıran
+`tabs.onRemoved` olayını gölgelemez.
 
 ```text
  1. Host başlatılır (extension connectNative ile bağlanır)
  2. Handshake tamamlanır
- 3. Host: vault manifest'i ve lease kayıtlarını okur
-       → açık/stale lease var mı?
- 4. Host → Extension: reconcile.request(beklenen açık cookie referansları)
- 5. Extension: chrome.cookies ile browser store snapshot'ı alır
+ 3. Host: vault manifest'i ve lease kayıtlarını okur; handshake.ack ile durable state + lease metadata bildirir
+ 4. Extension: güncel ilgili sekmeleri ve cookie varlığını chrome.tabs/chrome.cookies ile okur
+ 5. Extension: tutarsız/stale durum varsa startup_reconciliation başlatıp browser store snapshot'ı alır
  6. Extension → Host: cookies.snapshot
  7. Host: kasada olması gerekip store'da bulunan cookie'leri tespit eder
  8. Host: cookie'leri vault'a yazar
@@ -766,7 +808,8 @@ ve 12'si yürütülemez. Bu durumda:
 ### 15.4 Kurallar
 
 - Reconciliation tamamlanmadan koruma **aktif gösterilmez**.
-- Reconciliation, host başlangıcında **ve** her extension yeniden bağlantısında çalışır.
+- Reconciliation değerlendirmesi host başlangıcında **ve** her extension yeniden bağlantısında çalışır;
+  doğrulanmış sağlıklı `LEASED` gözlemi gereksiz tahliye/inject döngüsü üretmeden sürdürülür.
 - Reconciliation, o bağlantıda **herhangi bir yeni lease verilmeden önce** tamamlanmalıdır.
 - Lease expiry metadata'sı diske **inject işleminden önce** yazılır; böylece çökme anında
   hangi cookie'nin açıkta olduğu bilinir.
@@ -799,7 +842,14 @@ düşüktür). Büyük hesap gruplarında chunking gerekebilir — bkz. [Q1](#24
 }
 ```
 
-### 16.3 Mesaj tipleri (taslak)
+### 16.3 Mesaj tipleri
+
+Faz 5 v1 dikey diliminde etkin mesajlar aşağıdaki tablonun `handshake`, `handshake.ack`,
+`lease.request`, `lease.grant`, `lease.deny`, `cookies.inject`, `inject.result`, `evict.request`,
+`cookies.snapshot`, `evict.confirmed` ve `evict.result` satırlarıdır. `vault.status`, `lease.renew`,
+ayrı `reconcile.*`, `heartbeat` ve çift yönlü `audit.event` mesajları Faz 6'ya ertelenir. Ancak
+reconciliation davranışı ertelenmez: tek grup başlangıç reconciliation'ı handshake sonrasında,
+mevcut snapshot/eviction mesajlarıyla yeni lease'den önce çalışır.
 
 | Tip | Yön | Amaç |
 |-----|-----|------|
@@ -814,12 +864,41 @@ düşüktür). Büyük hesap gruplarında chunking gerekebilir — bkz. [Q1](#24
 | `lease.renew` | E→H | Aktivite bildirimi ile uzatma |
 | `evict.request` | H→E veya E→H | Tahliye başlat |
 | `cookies.snapshot` | E→H | Tahliye için mevcut cookie durumu |
-| `evict.confirmed` | H→E | Vault yazımı doğrulandı, silmeye izin |
-| `evict.result` | E→H | Silme sonucu |
+| `evict.confirmed` | H→E | Vault yazımı doğrulandı; `cookie_disposition=retain_leased|remove` ile enrollment/tahliye ayrımı |
+| `evict.result` | E→H | İstenen disposition'ın uygulanma sonucu ve kalan cookie sayısı |
 | `reconcile.request` | H→E | Reconciliation başlat; beklenen açık cookie referansları |
 | `reconcile.report` | H→E | Reconciliation sonucu ve grup durumları |
 | `heartbeat` | E→H | Canlılık + SW ömrü |
 | `audit.event` | çift yön | Redakte olay kaydı |
+
+### 16.3.1 Windows Hello capability binding — bağlayıcı
+
+Hello challenge JSON değildir; aşağıdaki sabit canonical binary dizidir:
+
+```text
+"FCPHCAP1"
+|| account_group_id[16]
+|| operation[1]                 # 1=inject; evict capability yoktur
+|| expiry_unix_ms[u64 LE]
+|| monotonic_sequence[u64 LE]
+|| nonce[32]
+```
+
+- Host sequence ve 32-byte nonce'u CSPRNG ile üretir; extension capability alanı seçemez.
+- İmza doğrulaması beş alanın tamamını ve bekleyen lease state-machine geçişini eşleştirir.
+- Capability ömrü Faz 5'te en fazla 60 saniyedir; expired veya aşırı ileri expiry reddedilir.
+- Sequence sıfır olamaz ve kalıcı high-water mark'tan büyük olmalıdır. Kullanılmış nonce'lar replay
+  penceresinde tutulur.
+- Bekleyen payload ile signed payload byte-for-byte aynı olmalıdır. Operation veya başka tek bir alan
+  değişirse doğrulama reddedilir.
+- Doğrulanan sequence/nonce, inject TPM DEK unwrap çağrısından **önce** atomik lease-ledger yazımıyla
+  tüketilir. Aynı capability ikinci kez kullanılamaz; persistence başarısızsa unwrap yapılmaz.
+- `operation` alanı explicit domain binding için korunur fakat v1'de yalnız `inject` kabul eder.
+  `evict` değeri deserialize edilmez. Enrollment/eviction/reconciliation capability ledger'a girmez.
+
+`protocol/messages.rs` capability payload/operation sözleşmesinin, `crypto/hello.rs` canonical
+challenge imzalama/doğrulamasının, `lease/state_machine.rs` ise durable reserve/consume ve replay
+reddinin tek sorumlusudur.
 
 ### 16.4 Minimum host sertleştirme
 
@@ -1000,7 +1079,7 @@ Capability alanları:
 
 ```text
 account_group_id
-operation          (inject | evict)
+operation          (inject)
 expiry
 monotonic_sequence
 nonce
@@ -1008,7 +1087,7 @@ nonce
 
 Bu modelde Hello doğrudan DEK çözmez; jest **kısa ömürlü bir yetkilendirme** üretir, DEK unwrap
 işlemini ayrı bir TPM-backed CNG anahtarı yapar. Capability'nin yukarıdaki alanlara bağlanması
-zorunludur; aksi halde jest cache'i açıkken malware herhangi bir operasyonu tetikleyebilir.
+zorunludur; aksi halde jest cache'i açıkken malware farklı bir inject geçişini tetikleyebilir.
 
 **Ölçülmüş sonuç (2026-08-03):** `hello-challenge` ve ayrı process'teki
 `hello-open-challenge` başarılıdır; credential cross-process açılabilmiş, challenge imzası public
@@ -1325,9 +1404,12 @@ işaretlenir.
 | **Q13** | ✅ Kapandı — Windows Hello kayıtlıdır; Yol A bu mekanizmayı kullanmıyor ve parola tabanlı CNG strong-key protection diyaloğu gösteriyor. Yol C prompt türü yalnızca PIN kayıtlı test ortamında PIN olarak ölçüldü; biyometrik cihaz test edilmedi. | Policy | Deney 1 ikinci tur + Yol C |
 | **Q14** | ✅ Kapandı — Platform Crypto Provider hardware-only ve TPM sürümü `2.0` bildirdi. `Get-Tpm` yönetici istediği için doğrulama doğrudan CNG provider özellikleriyle yapıldı. | Deney 1'in ön koşulu | Deney 1 `status` ölçümü |
 | **Q15** | **Kalıcı bir Windows user agent eklenecek mi?** Standart NMH host'u kalıcı değildir (§9.2.1); Chrome kapalıyken lease expiry takibi, lock tahliyesi ve reconciliation tetikleme yapılamaz. Kalıcı agent bunu çözer ancak yeni saldırı yüzeyi, autostart ve güncelleme yükü getirir. | **Mimari — lease zorlama modeli** | [ADR-013](#adr-013--kalıcı-windows-user-agent-açık-karar); Deney 4 duty cycle sonuçları karar girdisi olacak |
-| **Q16** | Wrapped DEK grup dosyasında mı (Aday A) manifest'te mi (Aday B) saklanacak? | Vault formatının dondurulması | Deney 1 — KEK tipi ve wrap çıktısı boyutu belirlendiğinde ([§12.0](#120-tek-doğruluk-kaynağı-ilkesi-bağlayıcı)) |
+| **Q16** | ✅ Kapandı — **Aday A:** wrapped DEK yalnız `<group_id>.fcpv` authenticated başlığında saklanır; manifest'te bulunmaz. FCPV v1 RSA-2048-OAEP-SHA256 için 256-byte wrapped DEK ile donduruldu. | Vault formatı donduruldu | Deney 1 + Faz 5 vault v1 implementasyonu ([§12.0](#120-tek-doğruluk-kaynağı-ilkesi-bağlayıcı)) |
 | **Q17** | Extension kaldırıldığında veya devre dışı bırakıldığında kullanıcı `degraded` durumdan nasıl haberdar edilecek? Host kalıcı değil ve UI'ı yok; extension da yoksa bildirim kanalı kalmıyor. | Kullanıcının yanlış güven hissine kapılmaması | Q15 kararına bağlı; kalıcı agent varsa çözülür |
 | **Q18** | CHIPS/partitioned cookie'ler yalnızca gerçek üçüncü-taraf bağlamında mı yazılabiliyor; extension bağlamından `chrome.cookies.set` ile doğrudan `partitionKey` verildiğinde neden cookie dönmüyor? Chrome 150 `localhost` ölçümünde yazım sessizce başarısız oldu. | Partitioned cookie restore uyumluluğu | Kontrollü top-level site + üçüncü-taraf iframe deneyi; extension ve sayfa bağlamlarını karşılaştır |
+| **Q19** | Ürün idle eşiği §14 policy seviyelerine nasıl bağlanacak? Faz 5'teki `30 s` yalnız manuel test değeridir; üretim aralığı policy'ye göre `1–15 dk` olmalıdır. | Erken tahliye ile gereksiz maruziyet arasındaki UX/güvenlik dengesi | Faz 6 policy implementasyonunda ölçümlü varsayılanlar ve kullanıcıya açıklanan seviye eşlemesi belirle |
+| **Q20** | Sistem idle sinyali, medya oynatma veya görünür sayfadaki pasif ama gerçek kullanımı nasıl ayırt edecek? YouTube/video gibi senaryolarda klavye-fare olmaması yanlış erken tahliye üretebilir. | Aktif pasif kullanımda oturumun gereksiz kilitlenmesi | Faz 6'da tab visibility, audible/media state ve site aktivitesini güvenlik sınırını gevşetmeden değerlendiren policy tasarla |
+| **Q21** | Başarılı inject ve health check sonrasında açık site sekmesinin görünür auth durumunu güvenli biçimde nasıl yenileyeceğiz? Deney 5'te restore başarılı olduğu halde Wikipedia sayfası F5 gerektirdi. | Restore UX'i; yanlış/tekrarlı reload döngüsü riski | Faz 5.1 küçük UX işinde yalnız başarılı inject sonrasında tek kontrollü reload ve logout/no-session durumunda sıfır reload ile doğrula |
 
 ---
 
@@ -1339,8 +1421,8 @@ işaretlenir.
 | **Faz 1** | Deney 1 — TPM/Hello probe (Rust) | `poc/tpm-probe/`, `docs/experiments/exp-01-*.md` | ✅ Tamamlandı — §22.1 kriter A karşılandı |
 | **Faz 2** | Deney 2 — Cookie attribute probe (extension) + Q5, Q8, Q9 | `poc/cookie-probe/`, exp-02 raporu | ✅ Tamamlandı — 40/43 PASS; Q9 kapandı, Q8 kısmi, Q5 ve yeni Q18 açık |
 | **Faz 3** | Deney 3 — Disposable profile uçtan uca | `poc/session-probe/`, exp-03 raporu | ✅ Tamamlandı — 136/136 PASS, 10/10 restore; §22.3 karşılandı |
-| **Faz 4** | Deney 4 — Duty cycle ölçümü | exp-04 raporu | §22.4 kriteri |
-| **Faz 5** | Tek grup, uçtan uca MVP (vault + host + extension) | Çalışan dikey dilim | Manuel kabul |
+| **Faz 4** | Deney 4 — Duty cycle ölçümü | exp-04 raporu | ✅ Tamamlandı — §22.4 karşılandı; unnecessary exposure %0,012 |
+| **Faz 5** | Tek grup, uçtan uca MVP (vault + host + extension) | Çalışan dikey dilim | ✅ **TAMAMLANDI** — kontrollü uygulama `0.1.9`, düşük-riskli gerçek site `tr.wikipedia.org` `0.1.11`; TPM/Hello + vault + host + extension ve çoklu-cookie group zinciri doğrulandı |
 | **Faz 6** | Çoklu grup, policy seviyeleri, reconciliation sertleştirme | v0.1 | — |
 | **Faz 7** | Watcher / monitoring katmanı | v0.2 | — |
 | **Faz 8** | Edge / Brave desteği | v0.3 | — |
@@ -1422,6 +1504,9 @@ notes, caches, metadata, and temporary working files.
 
 - Gerçek ana hesaplar ilk testlerde kullanılmaz.
 - Sıra: **kontrollü test uygulaması → düşük riskli test hesabı → gerçek hedefler**.
+- **İlerleme (2026-08-04):** kontrollü uygulama kapısı Faz 5 `0.1.9` ile, düşük-riskli test hesabı
+  kapısı Deney 5 `0.1.11` ile `tr.wikipedia.org` üzerinde tamamlandı. Daha yüksek riskli/gerçek hedefler
+  henüz test edilmedi ve her biri açık kullanıcı onayı gerektirir.
 - Google, Steam, banka ve ana e-posta hesapları erken testlerde kullanılmaz.
 - Anti-abuse tetikleyecek yoğun login/logout döngülerinden kaçınılır.
 - Testler **aynı session üzerinde evict/restore** şeklinde yapılır.
@@ -1455,12 +1540,13 @@ notes, caches, metadata, and temporary working files.
 
 ## 30. Son Durum
 
-**Tarih:** 2026-08-03
+**Tarih:** 2026-08-04
 
-**Kilometre taşı:** Faz 1–4 kapsamındaki dört deney de tamamlandı ve **GO** sonucu verdi. TPM/Hello
-temeli, cookie attribute round-trip, gerçek session evict/restore ve duty-cycle tahliye davranışı
-kontrollü ortamlarda doğrulandı. Proje deneysel doğrulama aşamasından Faz 5 tek grup uçtan uca MVP
-uygulamasına geçmeye hazırdır.
+**Kilometre taşı:** Faz 1–4 kapsamındaki dört deney **GO** sonucu verdi ve Faz 5 tek grup uçtan uca
+MVP hem kontrollü uygulamada (`0.1.9`) hem düşük-riskli gerçek site `tr.wikipedia.org` üzerinde
+(`0.1.11`) manuel kabul testini **tam geçti**. TPM/Hello, şifreli vault, Native Messaging host, MV3
+extension, gerçek server-side session ve yerel + CentralAuth çoklu-cookie account group zinciri birlikte
+doğrulandı. §29.1 test sırasının ilk iki kapısı tamamlandı; yüksek riskli gerçek hedefler test edilmedi.
 
 ### Tamamlananlar
 
@@ -1562,6 +1648,221 @@ uygulamasına geçmeye hazırdır.
   başarılı oldu. `failed_eviction_count=0`, `site_cookie_recreated_count=0` ölçüldü; kullanıcı
   çökme, profil bozulması veya beklenmedik davranış gözlemlemedi. Deney 4 **TAMAMLANDI** ve §22.4
   kriteri karşılandı.
+- Faz 5 kullanıcı onayıyla resmi olarak başladı. Ürün kodu POC'lardan ayrılarak kökte
+  `native-host/` ve ortak `protocol/v1/` çalışma alanlarında başlatıldı.
+- Q16 **Aday A** ile kapatıldı. FCPV v1; AES-256-GCM, RSA-2048-OAEP-SHA256, 256-byte wrapped DEK,
+  318-byte authenticated header ve grup dosyası içindeki tek wrapped-DEK doğruluk kaynağıyla
+  donduruldu.
+- Native host ilk diliminde AES-GCM seal/open, strict vault encode/decode, atomik write-through
+  replace + geri-okuma/AEAD doğrulaması, TPM Platform KEK primitive'i ve Windows Hello capability
+  signer/verifier modülleri oluşturuldu.
+- İlk capability sözleşmesi; group ID, inject/evict operasyonu, expiry, monoton sequence ve 32-byte
+  nonce'a canonical binary challenge ile bağlandı. Bu ilk kapsam daha sonra ADR-018 ile yalnız
+  inject yönüne daraltıldı. Durable replay ledger tüketimi inject TPM unwrap'tan önce zorunludur;
+  değiştirilen alan, expired payload ve ikinci kullanım reddedilir.
+- Native Messaging v1 envelope/framing ve Faz 5 minimum mesaj DTO/JSON şemaları oluşturuldu.
+  `cargo check` ve ilk dilim `cargo test` doğrulaması geçti.
+- Capability ledger'ın durable `verify_and_consume` çıktısı doğrusal bir authorization token'ına
+  dönüştürüldü. Yalnız bu token'ı tüketen inject vault-read transaction'ı cookie plaintext'ini
+  açabilir; enrollment/eviction/reconciliation ise capability olmadan sessiz TPM transaction'ı
+  kullanır. DEK `ZeroizeOnDrop` ile tek transaction sonunda temizlenir.
+- `%LOCALAPPDATA%\FursoyCookieProtector` altında atomik lease/capability state, grup vault'u ve
+  değer-redakte audit JSONL yerleşimi; startup reconciliation ve fail-closed lease dispatcher'ı
+  tamamlandı.
+- `fcp-host` stdin/stdout Native Messaging döngüsü 4-byte little-endian uzunluk çerçevesi, 1 MiB
+  sınırı, ilk-mesaj handshake zorunluluğu, connection nonce ve iki yönlü monoton sequence kontrolüyle
+  tamamlandı. Per-user Chrome native-host kayıt betiği eklendi.
+- Kök `extension/`, yalnız `tsc` kullanan MV3 ürün bileşeni olarak oluşturuldu. Tek kontrollü grup
+  için enrollment snapshot, host-backed inject, health check, son sekme/idle/lock eviction, startup
+  reconciliation ve sealed halde cookie yeniden oluşumu tahliyesi bağlandı. Cookie plaintext'i
+  extension storage veya log'a yazılmaz; `host_permissions` bağlayıcı olarak portsuzdur.
+- `tests/controlled-session-app/` altında dummy credential, bellekte server-side session store,
+  HttpOnly cookie, protected endpoint ve gerçek server-side logout invalidation içeren uygulama
+  oluşturuldu. Faz 5 dikey dilimi manuel TPM/Hello kabul testine hazırlandı.
+- Otomatik doğrulama: native host **16/16 Rust testi**, extension `npm run check` ve `npm run build`,
+  kontrollü uygulama `node --check` geçmiştir. Etkileşimli TPM/Hello akışı otomatik testlerde
+  çalıştırılmamış, manuel kabul adımına bırakılmıştır.
+- İlk Faz 5 manuel kabul girişimi login/enrollment adımında durduruldu: tek login sonucunda art arda
+  Hello istemleri görüldü. Windows Application Error kayıtları her istem sonrasında `fcp-host.exe`
+  için aynı `0xc0000005` APPCRASH'i; redakte audit 22 ayrı handshake'i; capability ledger ise 15
+  tüketilmiş sequence ve lease'in hâlâ `uninitialized` olduğunu doğruladı. `HelloAuthorizer` içindeki
+  WinRT apartment guard'ı, COM-backed `KeyCredential` alanından önce drop edildiği için host başarılı
+  capability tüketiminden hemen sonra çöküyor, extension reconnect edip yeniden enrollment istiyordu.
+- Alan sırası credential önce, apartment guard son düşecek biçimde düzeltildi. Başlangıçta kalmış
+  tüketilmemiş reservation, sequence geri kullanılmadan iptal edilen crash recovery eklendi. Extension
+  `storage.session` state'ine enrollment/inject ve eviction single-flight kilitleri yazıyor; kesin yanıt
+  gelmeden veya worker/host reconnect olsa bile ikinci istek gönderilmiyor. İlk kabul girişimi başarısız
+  koşu olarak korunur; düzeltilmiş binary ile manuel test yeniden başlatılacaktır.
+- Düzeltilmiş ikinci kabul girişiminde enrollment → seal ve `logged_out` kontrolü geçti. Aynı sekmedeki
+  F5 sırasında startup reconciliation henüz sürerken `tabs.onUpdated` inject'i erteledi; reconciliation
+  tamamlandığında ikinci navigation olayı gelmediği için inject edge'i kayboldu. Handshake anında açık
+  ilgili sekme için `injectAfterReconciliation` niyeti latch edilip reconciliation başarılı biter bitmez,
+  aynı sıralı native portta `evict.result` sonrasına `lease.request(inject)` yazılacak şekilde düzeltildi.
+  İlk enrollment sonundaki zorunlu `logged_out` kontrolü bu latch'i kurmadığından korunur.
+- Sonraki kabul adımında inject capability authorize edildiği halde host `leased` durumda kaldı ve
+  `inject.result` almadı; sunucu diagnostics'inde extension health isteği yoktu. Extension reload'u,
+  önceden açık test sekmesine yeni content script'i kendiliğinden enjekte etmediğinden
+  `tabs.sendMessage` alıcısız hata veriyor ve inject handler exception ile yarıda kalıyordu. Health
+  check port-suz izinli sekmenin first-party bağlamında `chrome.scripting.executeScript` ile çalışacak
+  hale getirildi. Cookie set sonrası Cookies API geri-okuması eklendi; set/health'in herhangi bir
+  exception'ında cookie fail-closed kaldırılır ve host'a başarısız `inject.result` mutlaka gönderilir.
+- Bir sonraki ölçüm `inject.result=failed` ve server diagnostics'te tüm protected istekleri için
+  `cookie_header_present=false` gösterdi; set sonrası Cookies API geri-okuması geçtiği halde varsayılan
+  `executeScript` ISOLATED world fetch'i site cookie'sini taşımadı. Health fetch açıkça `world: MAIN`
+  kullanarak gerçek first-party sayfa bağlamına alındı. Ayrıca manifest content script'inin klasik
+  script olarak yüklenmesine rağmen derlenmiş dosyadaki `export {}` token'ı syntax hatası üretiyordu;
+  gereksiz TypeScript modül işareti kaldırıldı ve klasik `dist/content.js` çıktısı doğrulandı.
+- Chrome yalnız Reload sonrasında eski `content.js` kopyasını çalıştırmayı sürdürdü: hata satırı 15'te
+  `export {}` bildirirken canonical disk artifact'inin aynı satırı `}` ve SHA-256 değeri
+  `C40448CEFD4237CCF25735491938D4D3C16DEC7CC9D465879CACBCDF0941E565` idi. Bu koşu kod
+  regresyonu değil stale unpacked yükleme/cache bulgusudur. Extension sürümü `0.1.1` yapıldı; sonraki
+  kabul koşusu Remove → kök `extension/` klasöründen Load unpacked ile temiz kurulacaktır.
+- Temiz `0.1.1` koşusunda enrollment/seal ve F5 startup reconciliation başarıyla audit edildi, fakat
+  inject authorization hiç başlamadı. Handshake'in `relevantTabIds()` sorgusu portlu
+  `http://localhost:43119/*` URL match pattern'ı kullandığı için açık sekmeyi bulamıyor ve
+  `injectAfterReconciliation=false` kalıyordu. Chrome tab URL sorgusu bağlayıcı portsuz
+  `http://localhost/*` ile yapılacak, dönen adaylar kod içinde exact origin
+  (`http://localhost:43119`) karşılaştırmasıyla daraltılacaktır. Düzeltilmiş extension sürümü
+  temiz artifact ayrımı için `0.1.2` olarak işaretlendi.
+- `0.1.2` kabulünde tek Hello'nun inject olduğu doğrulandı: audit `inject authorized` kaydından yalnız
+  25 ms sonra `inject failed`, lease ise `degraded` oldu. Tek seferlik anlık health 401'i cookie'yi
+  hemen fail-closed siliyordu; Deney 3'teki yaklaşım taşınarak 0/100/200/400/800 ms sınırlı backoff ve
+  her adımda cookie API presence kontrolü eklendi. Native audit başarısızlığın bounded/redakte health
+  nedenini artık ayrı detail code ile kaydeder.
+- Site-data temizliği extension `storage.session` state'ini etkilemediği için host/extension degraded
+  kaldı; yeni login cookie'si mevcut listener tarafından yok sayılıp korunmasız kaldı. Degraded halde
+  yeni cookie artık Hello-authorized snapshot/eviction recovery başlatır. Degraded halde F5 ve cookie
+  yoksa extension tek-uçuş korumalı native reconnect ile startup reconciliation ister. Bu recovery
+  değişikliklerini taşıyan extension sürümü `0.1.3` olarak işaretlendi.
+- §13.2 incelemesi, ilk MVP enrollment implementasyonunun plana aykırı olduğunu ortaya çıkardı:
+  enrollment snapshot'ı yanlışlıkla gerçek eviction ile aynı `remove` yoluna sokuluyor, aktif sekmedeki
+  yeni login cookie'si hemen siliniyor ve F5 yapay unlock tetikleyicisine dönüşüyordu. Bu bilinçli test
+  kısayolu değildir; implementasyon eksiğidir. Protokol `evict.confirmed.cookie_disposition` alanıyla
+  ayrıştırıldı: enrollment `retain_leased` döndürür, cookie sayısı korunarak host `LEASED` finalize eder;
+  yalnız gerçek eviction/reconciliation `remove` döndürüp sıfır cookie ile `SEALED` finalize eder.
+- F5 yalnız sealed grubun yeniden kullanımı veya startup reconciliation sırasında unlock niyeti olabilir;
+  leased aktif oturumda tahliye/inject nedeni değildir. Reconciliation sürerken somut `tabs.onUpdated`
+  olayı artık `injectAfterReconciliation` latch'ini doğrudan kurar; handshake-time tab sorgusu yarışına
+  bağımlı kalmaz. Lease grant expiry'si `chrome.alarms` ile zorlanır; last-tab, idle, lock ve host-disconnect
+  tetikleyicileri korunur. Düzeltilmiş extension sürümü `0.1.4` olarak işaretlendi.
+- `0.1.4` manuel turunda enrollment/F5 doğru çalıştı; son sekme kapanışında Hello çıkmadı ve yeniden
+  açılıştaki inject `inject_execution_failed` ile fail-closed sonuçlandı. Audit gerçek `eviction`
+  yerine handshake'in önceden başlattığı sessiz `reconciliation`ı, ardından inject authorization/failure'ı
+  doğruladı. Sunucu diagnostics'i session map'te bir aktif oturum kaldığını, inject anında hiçbir
+  `/api/protected` health isteği ulaşmadığını ve yalnız sonraki manuel kontrolün cookiesiz 401 aldığını
+  gösterdi; hata server session invalidation değil, health script çalıştırılmadan önceki extension
+  execution yolundaydı. Kök neden iki yarıştı: cold-worker handshake browser olayından önce host state'ini
+  `EVICTING` yaparak `last_tab_closed` isteğini gölgeliyor; inject health ise storage'daki kapanmış ilk
+  `relevantTabs` kimliğinde `executeScript` deneyebiliyordu. `0.1.5` ile handshake salt durable-state
+  bildirimi oldu; güncel tab/cookie gözleminden sonra last-tab veya reconciliation seçiliyor, eski
+  connection single-flight bayrakları temizleniyor ve inject health canlı tab sorgusunu işlem anında
+  yeniliyor. Güvenli audit kodları set/round-trip/tab-query/health-execution aşamalarını ayrı raporlar.
+- `0.1.5` manuel turunda F5 geçti, fakat ikinci hassas operasyon olan last-tab eviction Hello sırasında
+  native host sonlandı. Windows Application Error/WER kayıtları 22:13:37 için `APPCRASH`, exception
+  `0xc0000005`, faulting module `fcp-host.exe`, offset `0x5a26c` gösterdi; aynı binary 21:58:07'de de
+  aynı offsette çökmüştü. Audit enrollment success'ten sonra hiçbir `eviction authorized` kaydı
+  oluşmadığını doğruladı. Önceki field drop-order düzeltmesi credential'ı apartment'tan önce düşürse
+  de `VaultTransactions::authorize` her capability'de yeni `HelloAuthorizer` kurup WinRT apartment'ı
+  tekrar tekrar initialize/uninitialize ediyordu; deterministik çöküş ikinci teardown'da oluştu.
+  `0.1.6` ile authorizer lazy oluşturulup native bağlantı ömrü boyunca `VaultTransactions` içinde
+  tutulur; bütün enrollment/inject/evict capability'leri aynı yaşayan apartment/credential'ı kullanır,
+  teardown yalnız bağlantı/process sonunda doğru field sırasıyla yapılır.
+- `0.1.6` yeniden açılış inject'inde Hello tamamlandı, ancak `chrome.cookies.set` callback'i başarısız
+  olup genel `cookie_set_failed` kodu nedeniyle gerçek neden güvenli biçimde ayrılamadı. Ham Chrome
+  hata metni URL/cookie metadata sızdırabileceğinden loglanmaz. `0.1.7` callback içinde metni hemen
+  sabit redakte sözlüğe çevirir: `permission`, `domain`, `samesite`, `secure`, `path`, `partition_key`,
+  `store`, `url`, `invalid_cookie`, `unknown`; `lastError` olmadan boş sonuç ayrıca `no_result` olur.
+  Yalnız `inject:cookie_set_<kategori>` extension state/console ve native audit'e taşınır; ham mesaj
+  callback dışına çıkmaz. Kök attribute manual tekrar ölçümündeki bu kategoriyle belirlenecektir.
+- `0.1.7` temiz yüklemesinde kullanıcı yeni bir jest vermeden `cookie_set_failed` görüldü. Audit bunun
+  eski kuyruk mesajı olmadığını doğruladı: yeni `inject authorized` kaydı ve yeni tüketilmiş capability
+  sequence vardı. `0.1.6` crash düzeltmesi apartment ile birlikte `KeyCredential` handle'ını da bağlantı
+  boyunca tuttuğundan, Deney 1'de ölçülmüş same-handle jest cache sonraki capability'leri sessiz
+  yetkilendirmişti. Ayrıca genel `cookie_set_failed` callback'ten önceydi: Rust `Option` alanı vault'tan
+  JSON'a `partition_key:null` olarak çıkıyor, TypeScript'in yalnız `!== undefined` kontrolü null nesnenin
+  `top_level_site` alanına erişerek senkron TypeError üretiyordu. `0.1.8` apartment'ı bağlantı boyunca
+  tutar fakat her capability için fresh `KeyCredential` handle açar; böylece her inject/evict tekrar
+  Hello jesti ister. Cookie wire tipi açıkça null kabul eder, yalnız string `top_level_site` varsa
+  `partitionKey` SetDetails'e eklenir ve senkron Chrome API schema exception'ları da aynı redakte
+  kategorizer'a alınır. Null partition/expiration ve geçerli partition fixture regresyonu 3/3 geçmiştir.
+- §7, §8.3 ve §13 tasarım denetimi, Hello gereksiniminin risk artıran inject yönünden güvenliği artıran
+  eviction yönüne yanlışlıkla genellendiğini ortaya çıkardı. Bu kasıtlı bir MVP kısayolu veya ürün
+  kararı değildir: özellikle idle/lock tetikleyicisinde kullanıcı yokken prompt beklemek tahliyeyi
+  fail-open yapıyordu. `0.1.9` ile capability `Evict` varyantı kaldırıldı; yalnız inject tek kullanımlık
+  sequence/nonce tüketip fresh Hello jesti ister. Enrollment, eviction ve reconciliation ledger
+  capability'si üretmeden, transaction-sınırlı TPM unwrap ile sessiz çalışır; non-interactive enrollment
+  `lease.grant.capability_sequence=null` taşır ve audit'te `started` olarak ayrıştırılır.
+
+### Faz 5 nihai manuel kabul sonucu (`0.1.9`)
+
+- **PASS — enrollment:** login sonrası sessiz enrollment tamamlandı; Hello çıkmadı, cookie aktif
+  sekmede kaldı ve protected endpoint `authenticated` döndürdü.
+- **PASS — aktif lease/F5:** sayfa yenilemesi tahliye veya yeni Hello üretmedi; oturum
+  `authenticated` kaldı.
+- **PASS — last-tab eviction:** son ilgili sekme kapanınca Hello göstermeden doğrulanmış vault yazımı
+  ve fiziksel cookie tahliyesi tamamlandı.
+- **PASS — reopen/inject:** site yeniden açılınca tam bir adet inject Hello gösterildi; onay sonrası
+  cookie restore ve protected health check `authenticated` oldu.
+- **PASS — idle:** `30 s` test eşiğinde Hello göstermeyen idle eviction tamamlandı; sonraki reopen
+  yalnız bir inject Hello istedi. `30 s` üretim policy'si değildir; Q19 ile açıktır.
+- **PASS — gereksiz unlock yok:** server-side logout sonrası F5, geçersiz oturumu açmaya çalışmadı ve
+  gereksiz Hello üretmedi.
+- **PASS — ret/iptal:** inject Hello reddi veya iptali cookie vermeden `logged_out` ile fail-closed
+  sonuçlandı.
+
+### Faz 5 sırasında bulunan sorunlar — tamamı çözüldü
+
+1. **Çözüldü — `NativeClient` TDZ:** service worker, sınıf initialize edilmeden `connect()` çağırdığı
+   için başlangıçta çöküyordu; tanım/başlatma sırası düzeltildi.
+2. **Çözüldü — WinRT/COM çökmesi I:** `KeyCredential`, apartment guard'dan sonra drop edildiği için
+   `0xc0000005` oluşuyordu; field/drop sırası güvenli hale getirildi.
+3. **Çözüldü — F5/reconciliation yarışı:** navigation edge'i reconciliation sırasında kayboluyordu;
+   `injectAfterReconciliation` niyeti latch edilip sıralı portta reconciliation sonrasına taşındı.
+4. **Çözüldü — klasik content script syntax'ı:** `dist/content.js` içindeki `export {}` klasik script
+   bağlamında syntax hatası veriyordu; modül işareti kaldırıldı ve temiz yükleme/artifact kontrolü eklendi.
+5. **Çözüldü — health check JS world:** ISOLATED world fetch'i first-party cookie'yi taşımıyordu;
+   protected health kontrolü açıkça `MAIN` world'de çalıştırıldı.
+6. **Çözüldü — `tabs.query` port kalıbı:** portlu URL match açık test sekmesini bulamıyordu; portsuz
+   Chrome match pattern + kod içinde exact origin kontrolüne geçildi.
+7. **Çözüldü — enrollment sonrası hemen tahliye:** enrollment yanlışlıkla gerçek eviction remove
+   yolunu kullanıyordu; `retain_leased` ve `remove` disposition'ları ayrıldı.
+8. **Çözüldü — cold-worker/relevant-tab yarışı:** handshake reconciliation'ı gerçek last-tab olayını
+   gölgeliyor ve stale tab ID inject health'i bozuyordu; handshake salt state bildirimi oldu, canlı tab
+   sorgusu işlem anına taşındı.
+9. **Çözüldü — WinRT/COM çökmesi II:** her capability'de apartment initialize/uninitialize edilmesi
+   ikinci teardown'da `0xc0000005` üretiyordu; apartment native bağlantı ömrüne alındı.
+10. **Çözüldü — `cookie_set_failed` teşhis eksikliği:** hassas ham Chrome mesajını yazmadan permission,
+    domain, SameSite, secure, path, partition, store, URL ve diğer nedenleri ayıran redakte kodlar eklendi.
+11. **Çözüldü — `partitionKey: null` senkron hatası:** nullable wire alanı nesne sanılıp
+    `top_level_site` erişiminde TypeError üretiyordu; yalnız geçerli string metadata SetDetails'e ekleniyor.
+12. **Çözüldü — aynı Hello handle'ında jestin atlanması:** Deney 1'de ölçülen handle-scope cache nedeniyle
+    sonraki unlock sessiz yetkileniyordu; apartment korunurken her inject için fresh `KeyCredential`
+    handle açılıyor.
+13. **Çözüldü — eviction'ın Hello istemesi:** idle/lock anında kullanıcı yokken prompt beklemek
+    fail-open tasarım hatasıydı; ADR-018 ile capability yalnız inject'e daraltıldı, enrollment/eviction/
+    reconciliation sessiz TPM transaction'ı oldu.
+14. **Çözüldü — external logout sonrası stale vault:** Wikipedia'nın kendi logout işlemi auth
+    cookie'lerini extension'ın remove akışı dışında sildiğinde `removed` olayları yok sayılıyor, encrypted
+    vault'taki geçersiz session yeniden inject edilip Hello/restore döngüsüne giriyordu. `0.1.11` ile dış
+    silme, extension'ın suppression kayıtlarından ayrıldı; zorunlu selector kaybı `session.invalidate`
+    mesajını üretir, host vault'u silip lease'i durable `UNINITIALIZED` yapar ve `session.invalidated` ile
+    doğrular. Restore health sonucu `logged_out`/`invalid_session` olduğunda da aynı tek-seferlik fail-closed
+    invalidation çalışır. Nihai Wikipedia logout + F5 + reopen kontrolü gereksiz Hello ve stale restore
+    oluşmadığını doğruladı.
+
+### Deney 5 gerçek-site manuel kabul sonucu (`0.1.11`)
+
+- **PASS — selector kümesi:** `local_session`, `local_user_id`, `local_user_name`, `central_session` ve
+  `central_user` zorunlu selector'ları tek login ile, cookie değerleri loglanmadan yakalandı.
+- **PASS — enrollment/F5:** enrollment sessiz tamamlandı; F5 Hello üretmedi ve oturum açık kaldı.
+- **PASS — last-tab/idle:** son ilgili sekme ve `30 s` test idle eşiği sessiz eviction üretti.
+- **PASS — inject:** her yeniden açılış/dönüş yalnız bir inject Hello istedi; onay sonrası çoklu-cookie
+  oturumu geri yüklendi.
+- **PASS — external logout:** Wikipedia'nın gerçek “Çıkış yap” işlemi Hello göstermeden vault'u sildi,
+  lease'i `UNINITIALIZED` yaptı; sonraki F5 ve reopen logged-out kaldı ve tekrar döngüsü üretmedi.
+- **Açık UX borcu:** inject ve native health başarılı olsa da mevcut Wikipedia sayfası görünür auth
+  durumunu kendiliğinden yenilemedi; bir F5 gerekti. Q21 kapsamında, başarılı inject sonrası tek kontrollü
+  reload ve reload-loop koruması ayrı küçük iş olarak ele alınacaktır.
 
 ### Değişen varsayımlar (revizyon 2 — 2026-08-03)
 
@@ -1634,28 +1935,39 @@ Go/No-Go kriteri A karşılandı. Deney 2 gerçek hesap veya gerçek oturum cook
 probe cleanup kontrolleri geçti. Deney 3 kontrollü session restore'unu, Deney 4 ise kullanılmayan
 cookie'nin `%0,012` browser-open oranına indirildiğini doğruladı. Buna rağmen CHIPS restore
 uyumluluğu kanıtlanmış kabul edilmez ve Q18 kapanmadan partitioned cookie desteği varmış gibi
-gösterilmez.
+gösterilmez. Deney 5, aynı zinciri düşük-riskli gerçek Wikipedia hesabında yerel + CentralAuth
+çoklu-cookie grubuyla doğruladı; external logout artık stale vault'u sessizce geçersiz kılar. Bu sonuç
+daha yüksek riskli sitelere veya farklı auth/storage modellerine kendiliğinden genellenmez.
 
 ---
 
 ## 31. Sonraki Kesin Adım
 
-**Faz 5 — tek grup uçtan uca MVP: vault + native host + browser extension.**
+**Önce Faz 5.1 küçük UX işi — başarılı inject sonrası tek kontrollü sayfa yenileme; ardından Faz 6.**
 
-Deney 1–4 tamamlandı ve ilgili bütün devam kapıları GO verdi. Sıradaki kesin adım, doğrulanan
-parçaları tek bir sınırlı MVP akışında birleştirmektir:
+Faz 5 tek-grup dikey dilimi kontrollü uygulamada `0.1.9`, düşük-riskli gerçek Wikipedia hesabında
+`0.1.11` manuel kabul testlerini tam geçti ve tamamlandı. Yol haritasındaki sonraki ana faz; çoklu account
+group isolation/rotasyonu, §14 policy seviyeleri ve crash/reconciliation sertleştirmesini içeren Faz 6'dır.
 
-- Bir kontrollü hesap grubu için provisional vault formatını somutlaştırmak
-- Yol C Windows Hello kullanıcı varlığı ile TPM-backed anahtar/DEK akışını native host'ta bağlamak
-- Native Messaging protokolünü extension ile uygulamak
-- Extension tarafında portsuz host permissions, snapshot/inject/evict ve reconciliation kurallarını
-  kullanmak
-- Deney 3'teki stale-session kontrolünü ve Deney 4'teki last-tab/idle tahliye davranışını MVP
-  kabul testlerine taşımak
-- Q18 partitioned cookie, Q8 çoklu profil/incognito ve Q15 kalıcı Windows agent konularını mevcut
-  açık kararlar olarak korumak; destek doğrulanmadan özellik iddiasında bulunmamak
+Ancak Deney 5, inject ve health check başarılı olsa bile açık Wikipedia sayfasının görünür oturum
+durumunu kendiliğinden yenilemediğini ve bir F5 gerektiğini gösterdi. Bu sınır dar, ölçülebilir ve Faz 5'in
+tek-grup restore UX'ine aittir; kapsamı Faz 6'nın çoklu-grup değişiklikleriyle karıştırmadan önce ayrı
+**Faz 5.1** işi olarak kapatılacaktır. Kabul koşulu: yalnız başarılı inject + authenticated health
+sonrasında ilgili sekmede en fazla bir kontrollü reload; Hello reddi, invalid session, external logout ve
+already-uninitialized durumlarında sıfır reload; navigation/reconciliation döngüsü yok. **Kullanıcının açık
+onayı olmadan ne Faz 5.1 ne de Faz 6 implementasyonuna başlanacaktır.**
 
-**Kullanıcının açık onayı olmadan Faz 5 implementasyonuna başlanmayacaktır.**
+Faz 6 girişinde iki idle-policy sorusu zorunlu olarak ele alınacaktır:
+
+1. Mevcut `30 s` yalnız manuel test eşiğidir. Üretim eşikleri §14'teki policy seviyelerine göre
+   `1–15 dk` aralığında belirlenmeli, ölçülmeli ve kullanıcıya anlaşılır biçimde sunulmalıdır (Q19).
+2. `chrome.idle` tek başına medya oynatma veya görünür sekmedeki pasif gerçek kullanımı ayırt etmez.
+   YouTube/video gibi senaryolarda erken tahliyeyi önlemek için tab visibility ve audible/media state
+   sinyallerinin güvenliği zayıflatmadan nasıl policy'ye katılacağı kararlaştırılmalıdır (Q20).
+
+Q18 partitioned cookie, Q8 çoklu profil/incognito, Q15 kalıcı Windows agent ve Q21 inject-sonrası yenileme
+da açık kalır; destek veya UX davranışı doğrulanmadan özellik iddiasında bulunulmaz. Faz 5.1 kabulünden
+sonra sıradaki kesin yol haritası adımı Faz 6'dır.
 
 ---
 
@@ -2002,5 +2314,83 @@ reddedildi.
 
 **Sonuç:** Deney 3 tamamlandı ve §22.3 kriterleri karşılandı. Bu kural ürün manifesti için
 bağlayıcıdır; ihlali cookie'lerin sessizce snapshot dışında kalmasına yol açabilir.
+
+---
+
+### ADR-016 — Wrapped DEK grup dosyasında saklanacaktır
+
+**Durum:** Kabul edildi — Q16 kapandı
+
+**Bağlam:** Deney 1, üretim KEK yolunu TPM-backed/non-exportable RSA-2048 ve
+RSA-OAEP-SHA256 olarak doğruladı. 32-byte DEK'in wrapped çıktısı 256 byte'tır. Wrapped DEK'in
+manifest'te tutulması, encrypted grup dosyasıyla iki dosyalı transaction ve çapraz tutarlılık
+gerektirir.
+
+**Karar:** Aday A seçildi. Wrapped DEK yalnız `<group_id>.fcpv` authenticated başlığında tutulur;
+manifest'te ikinci kopyası bulunmaz. FCPV v1 offset/algoritma/uzunlukları §12.1'deki biçimde
+dondurulmuştur. KEK rotasyonu grup dosyalarını tek tek atomik olarak yeniden yazar.
+
+**Gerekçe:** Grup dosyasının kendi kendine yeterli olması ve tek dosyalı atomik write/verify/replace
+zinciri, manifest merkezli toplu rotasyon kolaylığından daha önemlidir. Faz 5 tek grupla başlar;
+çoklu grupta bozulma ve rotasyon etki alanı yine grup başına sınırlı kalır.
+
+**Alternatif:** Aday B — wrapped DEK manifest'te. İki dosyalı crash tutarlılığı ve hangi kopyanın
+yetkili olduğu riskini getirdiği için reddedildi.
+
+---
+
+### ADR-017 — Inject Hello capability beş alana bağlı ve tek kullanımlık olacaktır
+
+**Durum:** Kabul edildi — kapsam ADR-018 ile inject-only olarak daraltıldı
+
+**Bağlam:** Deney 1 Yol C, KeyCredentialManager challenge imzasının mümkün olduğunu doğruladı;
+fakat alan binding ve replay kontrolü deney kapsamı dışındaydı. Jest cache'i varken bağlamsız veya
+yeniden kullanılabilir bir imza farklı grup/operasyon için kötüye kullanılabilir.
+
+**Karar:** Windows Hello'nun imzaladığı canonical challenge; `account_group_id`, `operation`
+(`inject`), `expiry`, `monotonic_sequence` ve 32-byte `nonce` alanlarının tamamını içerir.
+Sequence/nonce host tarafından ayrılır ve kalıcı ledger'a yazılır. İmza ile bekleyen state-machine
+geçişi tam eşleştirilir; capability TPM unwrap'tan önce durable olarak tüketilir. Expired,
+alanı değiştirilmiş, yanlış operasyona/gruba ait veya daha önce kullanılmış capability reddedilir.
+
+**Gerekçe:** Hello yalnız kullanıcı varlığını kanıtlar; yetkinin hangi hassas transaction'a ait
+olduğunu ve tek kullanımlılığını uygulama katmanı sağlamalıdır. Canonical binary encoding JSON
+normalizasyon belirsizliğini kaldırır; durable consume-before-unwrap sırası crash/replay penceresini
+kapatır.
+
+**Sonuç:** `protocol/messages.rs` alan/canonical sözleşmesini, `crypto/hello.rs` Hello
+sign/verify işlemini ve `lease/state_machine.rs` reserve/consume/replay reddini uygular. Capability
+ledger persistence başarısız olursa TPM unwrap yapılmaz.
+
+---
+
+### ADR-018 — Hello yalnız inject/unlock yönünde zorunludur
+
+**Durum:** Kabul edildi
+
+**Bağlam:** İlk Faz 5 implementasyonu capability `operation` alanını `inject|evict` olarak modelledi
+ve enrollment, last-tab, idle, lock, expiry ile reconciliation vault yazımlarının tümünü Hello'ya
+bağladı. Bu, §7 fail-to-logout ilkesiyle çelişir. Özellikle idle/lock kullanıcı yokken tetiklendiği
+için prompt onayı beklemek tahliyeyi pratikte tamamlanamaz ve fail-open hale getirir.
+
+**Karar:** Windows Hello capability yalnız cookie plaintext'ini `SEALED` durumdan browser store'a
+çıkaran inject/unlock transaction'ını yetkilendirir. Capability `operation` alanı explicit binding
+olarak kalır fakat yalnız `inject` değerini kabul eder; `evict` varyantı protokol ve Rust enumundan
+kaldırılır. Enrollment, eviction ve reconciliation capability üretmez veya ledger sequence tüketmez.
+Gerekli TPM-backed DEK unwrap sessiz CNG yoluyla, tek transaction kapsamında yürütülür.
+
+**Gerekçe:** Inject gizlilik açısından risk artıran yöndür ve kullanıcı varlığı gerektirir. Eviction
+maruziyeti azaltır; ek insan onayı güvenlik sağlamaz, yalnız last-tab/idle/lock/expiry güvenilirliğini
+düşürür. Aynı kullanıcıdaki saldırgan vault'u zaten silebildiğinden evict capability kullanılabilirlik
+DoS'una anlamlı yeni bir sınır eklemiyordu. Atomik write/read-back doğrulaması ve cookie'nin yalnız
+`evict.confirmed` sonrasında silinmesi veri kaybı koruması olarak kalır.
+
+**Alternatif:** `operation=evict` için otomatik/sessiz capability üretmek. İnsan jesti taşımayan bir
+capability gerçek bir yetkilendirme sınırı olmadığı halde öyle görünür ve ledger/protokolü gereksiz
+karmaşıklaştırır; reddedildi.
+
+**Sonuç:** Enrollment ve eviction audit outcome'u `started` olur; `authorized` yalnız inject için
+kullanılır. Idle/lock tahliyesi kullanıcı yokken tamamlanabilir. Capability replay/nonce/sequence
+koruması yalnız inject unwrap öncesinde bağlayıcıdır.
 
 ---

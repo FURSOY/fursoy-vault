@@ -1,0 +1,38 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://fursoy.local/protocol/v1/envelope.schema.json",
+  "title": "FURSOY Native Messaging Envelope v1",
+  "type": "object",
+  "required": ["v", "conn_nonce", "seq", "id", "type", "payload"],
+  "properties": {
+    "v": { "const": 1 },
+    "conn_nonce": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "seq": { "type": "integer", "minimum": 1 },
+    "id": {
+      "type": "string",
+      "format": "uuid",
+      "not": { "const": "00000000-0000-0000-0000-000000000000" }
+    },
+    "type": {
+      "enum": [
+        "handshake",
+        "handshake.ack",
+        "lease.request",
+        "lease.grant",
+        "lease.deny",
+        "cookies.inject",
+        "inject.result",
+        "evict.request",
+        "cookies.snapshot",
+        "evict.confirmed",
+        "evict.result"
+      ]
+    },
+    "payload": { "type": "object" }
+  },
+  "additionalProperties": false
+}
+

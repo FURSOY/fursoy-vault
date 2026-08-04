@@ -1,0 +1,199 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://fursoy.local/protocol/v1/messages.schema.json",
+  "title": "FURSOY Phase 5 message payloads",
+  "oneOf": [
+    { "properties": { "type": { "const": "handshake" }, "payload": { "$ref": "#/$defs/handshake" } }, "required": ["type", "payload"] },
+    { "properties": { "type": { "const": "handshake.ack" }, "payload": { "$ref": "#/$defs/handshake_ack" } }, "required": ["type", "payload"] },
+    { "properties": { "type": { "const": "lease.request" }, "payload": { "$ref": "#/$defs/lease_request" } }, "required": ["type", "payload"] },
+    { "properties": { "type": { "const": "lease.grant" }, "payload": { "$ref": "#/$defs/lease_grant" } }, "required": ["type", "payload"] },
+    { "properties": { "type": { "const": "lease.deny" }, "payload": { "$ref": "#/$defs/lease_deny" } }, "required": ["type", "payload"] },
+    { "properties": { "type": { "const": "cookies.inject" }, "payload": { "$ref": "#/$defs/cookies_inject" } }, "required": ["type", "payload"] },
+    { "properties": { "type": { "const": "inject.result" }, "payload": { "$ref": "#/$defs/inject_result" } }, "required": ["type", "payload"] },
+    { "properties": { "type": { "const": "evict.request" }, "payload": { "$ref": "#/$defs/evict_request" } }, "required": ["type", "payload"] },
+    { "properties": { "type": { "const": "cookies.snapshot" }, "payload": { "$ref": "#/$defs/cookies_snapshot" } }, "required": ["type", "payload"] },
+    { "properties": { "type": { "const": "evict.confirmed" }, "payload": { "$ref": "#/$defs/evict_confirmed" } }, "required": ["type", "payload"] },
+    { "properties": { "type": { "const": "evict.result" }, "payload": { "$ref": "#/$defs/evict_result" } }, "required": ["type", "payload"] },
+    { "properties": { "type": { "const": "session.invalidate" }, "payload": { "$ref": "#/$defs/session_invalidate" } }, "required": ["type", "payload"] },
+    { "properties": { "type": { "const": "session.invalidated" }, "payload": { "$ref": "#/$defs/session_invalidated" } }, "required": ["type", "payload"] }
+  ],
+  "$defs": {
+    "uuid": {
+      "type": "string",
+      "format": "uuid",
+      "not": { "const": "00000000-0000-0000-0000-000000000000" }
+    },
+    "group_id": { "$ref": "#/$defs/uuid" },
+    "cookie": {
+      "type": "object",
+      "required": [
+        "domain", "host_only", "http_only", "name", "path", "same_site", "secure",
+        "session", "store_id", "value"
+      ],
+      "properties": {
+        "domain": { "type": "string", "minLength": 1 },
+        "expiration_date": { "type": ["number", "null"] },
+        "host_only": { "type": "boolean" },
+        "http_only": { "type": "boolean" },
+        "name": { "type": "string", "minLength": 1 },
+        "partition_key": {
+          "type": ["object", "null"],
+          "properties": {
+            "top_level_site": { "type": ["string", "null"] },
+            "has_cross_site_ancestor": { "type": ["boolean", "null"] }
+          },
+          "additionalProperties": false
+        },
+        "path": { "type": "string", "minLength": 1 },
+        "same_site": { "enum": ["no_restriction", "lax", "strict", "unspecified"] },
+        "secure": { "type": "boolean" },
+        "session": { "type": "boolean" },
+        "store_id": { "type": "string", "minLength": 1 },
+        "value": { "type": "string" }
+      },
+      "additionalProperties": false
+    },
+    "handshake": {
+      "type": "object",
+      "required": ["protocol_version", "extension_id"],
+      "properties": {
+        "protocol_version": { "const": 1 },
+        "extension_id": { "type": "string", "minLength": 32, "maxLength": 32 }
+      },
+      "additionalProperties": false
+    },
+    "handshake_ack": {
+      "type": "object",
+      "required": ["protocol_version", "account_group_id", "group_state", "reconciliation_required", "lease_id", "lease_expiry_unix_ms"],
+      "properties": {
+        "protocol_version": { "const": 1 },
+        "account_group_id": { "$ref": "#/$defs/group_id" },
+        "group_state": { "enum": ["uninitialized", "sealed", "unlocking", "leased", "evicting", "degraded"] },
+        "reconciliation_required": { "type": "boolean" },
+        "lease_id": { "oneOf": [{ "$ref": "#/$defs/uuid" }, { "type": "null" }] },
+        "lease_expiry_unix_ms": { "type": ["integer", "null"], "minimum": 0 }
+      },
+      "additionalProperties": false
+    },
+    "lease_request": {
+      "type": "object",
+      "required": ["account_group_id", "purpose", "requested_duration_ms"],
+      "properties": {
+        "account_group_id": { "$ref": "#/$defs/group_id" },
+        "purpose": { "enum": ["inject", "enroll"] },
+        "requested_duration_ms": { "type": "integer", "minimum": 1 }
+      },
+      "additionalProperties": false
+    },
+    "lease_grant": {
+      "type": "object",
+      "required": ["account_group_id", "lease_id", "expiry_unix_ms", "capability_sequence"],
+      "properties": {
+        "account_group_id": { "$ref": "#/$defs/group_id" },
+        "lease_id": { "$ref": "#/$defs/uuid" },
+        "expiry_unix_ms": { "type": "integer", "minimum": 1 },
+        "capability_sequence": { "type": ["integer", "null"], "minimum": 1 }
+      },
+      "additionalProperties": false
+    },
+    "lease_deny": {
+      "type": "object",
+      "required": ["account_group_id", "reason"],
+      "properties": {
+        "account_group_id": { "$ref": "#/$defs/group_id" },
+        "reason": { "type": "string", "minLength": 1 }
+      },
+      "additionalProperties": false
+    },
+    "cookies_inject": {
+      "type": "object",
+      "required": ["account_group_id", "lease_id", "cookies"],
+      "properties": {
+        "account_group_id": { "$ref": "#/$defs/group_id" },
+        "lease_id": { "$ref": "#/$defs/uuid" },
+        "cookies": { "type": "array", "items": { "$ref": "#/$defs/cookie" } }
+      },
+      "additionalProperties": false
+    },
+    "inject_result": {
+      "type": "object",
+      "required": ["account_group_id", "lease_id", "success", "health_check"],
+      "properties": {
+        "account_group_id": { "$ref": "#/$defs/group_id" },
+        "lease_id": { "$ref": "#/$defs/uuid" },
+        "success": { "type": "boolean" },
+        "health_check": { "type": "string" }
+      },
+      "additionalProperties": false
+    },
+    "evict_request": {
+      "type": "object",
+      "required": ["account_group_id", "lease_id", "operation_id", "phase", "reason"],
+      "properties": {
+        "account_group_id": { "$ref": "#/$defs/group_id" },
+        "lease_id": { "oneOf": [{ "$ref": "#/$defs/uuid" }, { "type": "null" }] },
+        "operation_id": { "$ref": "#/$defs/uuid" },
+        "phase": { "enum": ["begin", "snapshot_required"] },
+        "reason": { "type": "string", "minLength": 1 }
+      },
+      "additionalProperties": false
+    },
+    "cookies_snapshot": {
+      "type": "object",
+      "required": ["account_group_id", "lease_id", "operation_id", "cookies"],
+      "properties": {
+        "account_group_id": { "$ref": "#/$defs/group_id" },
+        "lease_id": { "oneOf": [{ "$ref": "#/$defs/uuid" }, { "type": "null" }] },
+        "operation_id": { "$ref": "#/$defs/uuid" },
+        "cookies": { "type": "array", "items": { "$ref": "#/$defs/cookie" } }
+      },
+      "additionalProperties": false
+    },
+    "evict_confirmed": {
+      "type": "object",
+      "required": ["account_group_id", "lease_id", "operation_id", "vault_sequence", "cookie_disposition"],
+      "properties": {
+        "account_group_id": { "$ref": "#/$defs/group_id" },
+        "lease_id": { "oneOf": [{ "$ref": "#/$defs/uuid" }, { "type": "null" }] },
+        "operation_id": { "$ref": "#/$defs/uuid" },
+        "vault_sequence": { "type": "integer", "minimum": 0 },
+        "cookie_disposition": { "enum": ["remove", "retain_leased"] }
+      },
+      "additionalProperties": false
+    },
+    "evict_result": {
+      "type": "object",
+      "required": ["account_group_id", "lease_id", "operation_id", "success", "remaining_cookie_count"],
+      "properties": {
+        "account_group_id": { "$ref": "#/$defs/group_id" },
+        "lease_id": { "oneOf": [{ "$ref": "#/$defs/uuid" }, { "type": "null" }] },
+        "operation_id": { "$ref": "#/$defs/uuid" },
+        "success": { "type": "boolean" },
+        "remaining_cookie_count": { "type": "integer", "minimum": 0 }
+      },
+      "additionalProperties": false
+    },
+    "session_invalidation_reason": {
+      "enum": ["external_logout", "restore_rejected"]
+    },
+    "session_invalidate": {
+      "type": "object",
+      "required": ["account_group_id", "lease_id", "reason"],
+      "properties": {
+        "account_group_id": { "$ref": "#/$defs/group_id" },
+        "lease_id": { "oneOf": [{ "$ref": "#/$defs/uuid" }, { "type": "null" }] },
+        "reason": { "$ref": "#/$defs/session_invalidation_reason" }
+      },
+      "additionalProperties": false
+    },
+    "session_invalidated": {
+      "type": "object",
+      "required": ["account_group_id", "reason"],
+      "properties": {
+        "account_group_id": { "$ref": "#/$defs/group_id" },
+        "reason": { "$ref": "#/$defs/session_invalidation_reason" }
+      },
+      "additionalProperties": false
+    }
+  }
+}

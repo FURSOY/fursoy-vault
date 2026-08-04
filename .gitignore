@@ -1,2 +1,4 @@
 /poc/tpm-probe/target/
-
+/native-host/target/
+/extension/node_modules/
+/extension/dist/
