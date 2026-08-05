@@ -7,6 +7,7 @@ use crate::config::{LoadedConfig, PolicyLevel};
 use crate::crypto::hello::HelloAuthorizer;
 use crate::lease::metadata::{LeaseMetadata, LeaseMetadataStore};
 use crate::lease::store::FileCapabilityLedgerStore;
+use crate::monitor::MonitorEngine;
 use crate::paths::DataPaths;
 use crate::protocol::envelope::PROTOCOL_VERSION;
 use crate::protocol::messages::{
@@ -15,6 +16,8 @@ use crate::protocol::messages::{
     InjectResult, LeaseDeny, LeaseGrant, LeasePurpose, LeaseRequest, Message, SessionInvalidate,
     SessionInvalidated, SessionInvalidationReason,
 };
+#[cfg(debug_assertions)]
+use crate::protocol::messages::{MonitorEvent, MonitorSeverity, MonitorSignal, MonitorSource};
 use crate::transaction::VaultTransactions;
 use crate::vault::store::VaultStore;
 use crate::{FcpError, FcpResult, WIKIPEDIA_ACCOUNT_GROUP_ID};
@@ -54,6 +57,7 @@ pub struct NativeHostApp {
     handshake_complete: bool,
     last_message_group: Option<Uuid>,
     hello_authorizer: Option<HelloAuthorizer>,
+    monitor: MonitorEngine,
 }
 
 impl NativeHostApp {
@@ -83,13 +87,29 @@ impl NativeHostApp {
                 },
             );
         }
+        let monitor = MonitorEngine::start();
+        #[cfg(debug_assertions)]
+        if std::env::var_os("FCP_MONITOR_RECONCILIATION_FIXTURE").as_deref()
+            == Some(std::ffi::OsStr::new("1"))
+        {
+            monitor.enqueue_host_event(MonitorEvent {
+                event_id: Uuid::new_v4(),
+                observed_at_unix_ms: unix_ms()?,
+                source: MonitorSource::NativeHost,
+                signal: MonitorSignal::ReconciliationFailed,
+                severity: MonitorSeverity::High,
+                account_group_id: groups.keys().next().copied(),
+                occurrence_count: 1,
+            })?;
+        }
         Ok(Self {
             groups,
-            audit: AuditLogger::new(&paths.audit_directory),
+            audit: AuditLogger::open(&paths.audit_directory)?,
             config_digest: loaded.digest,
             handshake_complete: false,
             last_message_group: None,
             hello_authorizer: None,
+            monitor,
         })
     }
 
@@ -106,6 +126,24 @@ impl NativeHostApp {
             return Err(FcpError::Protocol(
                 "handshake cannot be repeated on one connection".into(),
             ));
+        }
+        match message {
+            Message::MonitorEvent(event) => {
+                if event
+                    .account_group_id
+                    .is_some_and(|id| !self.groups.contains_key(&id))
+                {
+                    return Err(FcpError::Protocol("unknown monitor account group".into()));
+                }
+                return self.monitor.accept_extension_event(event, &self.audit);
+            }
+            Message::MonitorPoll(request) => return self.monitor.poll(request, &self.audit),
+            Message::MonitorAlert(_) => {
+                return Err(FcpError::Protocol(
+                    "monitor.alert direction is host-to-extension only".into(),
+                ));
+            }
+            _ => {}
         }
         let group_id = message_group_id(&message).ok_or_else(|| {
             FcpError::Protocol("message direction is host-to-extension only".into())
@@ -663,6 +701,7 @@ fn message_group_id(message: &Message) -> Option<Uuid> {
         Message::EvictResult(value) => Some(value.account_group_id),
         Message::SessionInvalidate(value) => Some(value.account_group_id),
         Message::AuthCacheClear(value) => Some(value.account_group_id),
+        Message::MonitorEvent(value) => value.account_group_id,
         _ => None,
     }
 }
@@ -701,7 +740,10 @@ mod tests {
     use std::fs;
 
     use super::*;
-    use crate::protocol::messages::Handshake;
+    use crate::audit::unix_ms;
+    use crate::protocol::messages::{
+        Handshake, MonitorEvent, MonitorSeverity, MonitorSignal, MonitorSource,
+    };
 
     fn test_paths(root: &std::path::Path) -> DataPaths {
         DataPaths {
@@ -763,6 +805,56 @@ mod tests {
         assert!(app.groups.values().all(|group| group.pending.is_none()));
         let ids: Vec<_> = app.groups.keys().copied().collect();
         assert_ne!(ids[0], ids[1]);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn monitoring_event_for_one_group_does_not_mutate_any_group_runtime() {
+        let root = std::env::temp_dir().join(format!("fcp-monitor-isolation-{}", Uuid::new_v4()));
+        let paths = test_paths(&root);
+        let mut app = NativeHostApp::open(&paths).unwrap();
+        app.handle(Message::Handshake(Handshake {
+            protocol_version: PROTOCOL_VERSION,
+            extension_id: PRODUCT_EXTENSION_ID.into(),
+            config_digest: app.config_digest.clone(),
+        }))
+        .unwrap();
+        let target = *app.groups.keys().next().unwrap();
+        let before: Vec<_> = app
+            .groups
+            .iter()
+            .map(|(id, group)| {
+                (
+                    *id,
+                    group.lease.state.clone(),
+                    group.lease.transition_sequence,
+                )
+            })
+            .collect();
+        let output = app
+            .handle(Message::MonitorEvent(MonitorEvent {
+                event_id: Uuid::new_v4(),
+                observed_at_unix_ms: unix_ms().unwrap(),
+                source: MonitorSource::Extension,
+                signal: MonitorSignal::SelectorChanged,
+                severity: MonitorSeverity::Info,
+                account_group_id: Some(target),
+                occurrence_count: 1,
+            }))
+            .unwrap();
+        assert!(matches!(output.as_slice(), [Message::MonitorAlert(_)]));
+        let after: Vec<_> = app
+            .groups
+            .iter()
+            .map(|(id, group)| {
+                (
+                    *id,
+                    group.lease.state.clone(),
+                    group.lease.transition_sequence,
+                )
+            })
+            .collect();
+        assert_eq!(before, after);
         fs::remove_dir_all(root).unwrap();
     }
 

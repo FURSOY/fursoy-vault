@@ -5,6 +5,10 @@ import {
   type AccountGroup, type AccountGroupsConfig, type CookieRecord, type CookieSetFailureCategory,
   type Envelope, type LoadedConfig, type WireMessage,
 } from "./protocol.js";
+import {
+  addToBoundedOutbox, makeMonitorEvent, notificationDecision, notificationText,
+  validateMonitorEvent, type MonitorEvent, type MonitorSignal, type NotificationDecisionState,
+} from "./monitor.js";
 
 type GroupState = "uninitialized" | "sealed" | "unlocking" | "leased" | "evicting" | "degraded";
 type LeasePurpose = "inject" | "enroll";
@@ -48,6 +52,10 @@ const ENROLLMENT_STABLE_MS = 3_000;
 const ENROLLMENT_TIMEOUT_MS = 20_000;
 const NAVIGATION_LOAD_TIMEOUT_MS = 20_000;
 const UNLOCK_PAGE_URL = chrome.runtime.getURL("unlock.html");
+const MONITOR_ICON_URL = chrome.runtime.getURL("monitor-icon.svg");
+const MONITOR_OUTBOX_KEY = "fcp-monitor-outbox-v1";
+const MONITOR_RATE_KEY = "fcp-monitor-rate-v1";
+const MONITOR_POLL_ALARM = "fcp-monitor-poll";
 const configPromise = loadAccountGroupsConfig();
 
 let queue: Promise<void> = Promise.resolve();
@@ -63,6 +71,8 @@ class RedactedCookieSetFailure extends Error {
 }
 
 chrome.idle.setDetectionInterval(IDLE_BASE_SECONDS);
+chrome.alarms.create(MONITOR_POLL_ALARM, { periodInMinutes: 0.5 });
+setInterval(() => enqueue(pollNativeMonitor), 15_000);
 
 chrome.webNavigation.onBeforeNavigate.addListener((details) => enqueue(async () => {
   if (details.frameId !== 0) return;
@@ -150,6 +160,10 @@ chrome.idle.onStateChanged.addListener((idleState) => enqueue(async () => {
 }));
 
 chrome.alarms.onAlarm.addListener((alarm) => enqueue(async () => {
+  if (alarm.name === MONITOR_POLL_ALARM) {
+    await pollNativeMonitor();
+    return;
+  }
   const parsed = parseAlarmName(alarm.name);
   if (parsed === undefined) return;
   const loaded = await configPromise;
@@ -172,6 +186,7 @@ chrome.cookies.onChanged.addListener((info) => enqueue(async () => {
   if (group === undefined) return;
   if (info.removed) {
     if (consumeExpectedRemoval(group.id, info.cookie)) return;
+    await queueMonitorEvent("selector_changed", group.id);
     await delay(750);
     const root = await loadState(loaded);
     const state = root.groups[group.id];
@@ -188,7 +203,10 @@ chrome.cookies.onChanged.addListener((info) => enqueue(async () => {
     const stable = await waitForStableEnrollmentCookies(group);
     if (stable.length > 0) await requestLease(loaded, group, "enroll");
   } else if (state?.groupState === "sealed") {
+    await queueMonitorEvent("lease_outside_cookie_created", group.id);
     await requestEviction(loaded, group, "site_cookie_recreated", undefined);
+  } else if (state?.groupState === "leased") {
+    await queueMonitorEvent("selector_changed", group.id);
   } else if (state?.groupState === "degraded") {
     await requestEviction(loaded, group, "degraded_cookie_detected", state.leaseId);
   }
@@ -199,14 +217,18 @@ async function connect(): Promise<void> {
   const loaded = await configPromise;
   client = new NativeClient(loaded.digest, handleHostMessage, async () => {
     const root = await loadState(loaded);
+    const activeGroups: string[] = [];
     for (const group of loaded.config.groups) {
       const state = root.groups[group.id];
       if (state === undefined || (state.groupState !== "leased" && state.groupState !== "evicting")) continue;
+      activeGroups.push(group.id);
       try { await removeAllCookies(group); } catch { /* continue fail-closed cleanup for other groups */ }
       state.groupState = "degraded";
       state.lastEvent = "native_disconnect_fail_closed";
     }
     await saveState(root);
+    if (activeGroups.length === 0) await queueMonitorEvent("host_disconnect", undefined, false);
+    else for (const groupId of activeGroups) await queueMonitorEvent("host_disconnect_active_lease", groupId, false);
     setTimeout(() => { void connect(); }, 1_000);
   });
   client.start();
@@ -216,6 +238,10 @@ async function handleHostMessage(message: WireMessage): Promise<void> {
   const loaded = await configPromise;
   if (message.type === "handshake.ack") {
     await handleHandshakeAck(loaded, message.payload);
+    return;
+  }
+  if (message.type === "monitor.alert") {
+    await handleMonitorAlert(message.payload.event);
     return;
   }
   const groupId = requiredString(message.payload, "account_group_id");
@@ -247,6 +273,7 @@ async function handleHostMessage(message: WireMessage): Promise<void> {
       }
       state.lastEvent = `lease_deny:${requiredString(message.payload, "reason")}`;
       await saveState(root);
+      if (deniedEviction) await queueMonitorEvent("reconciliation_failed", group.id);
       break;
     }
     case "cookies.inject": await injectCookies(loaded, group, message.payload, root, state); break;
@@ -317,6 +344,12 @@ async function handleHandshakeAck(loaded: LoadedConfig, payload: Record<string, 
   }
   await saveState(root);
   for (const action of actions) await action();
+  const pending = await monitorOutbox();
+  if (pending.some((event) => event.signal === "host_disconnect" || event.signal === "host_disconnect_active_lease")) {
+    await queueMonitorEvent("reconnect_success", undefined, false);
+  }
+  await flushMonitorOutbox();
+  await pollNativeMonitor();
 }
 
 async function injectCookies(loaded: LoadedConfig, group: AccountGroup, payload: Record<string, unknown>, root: RuntimeState, state: GroupRuntimeState): Promise<void> {
@@ -402,6 +435,7 @@ async function finishEviction(loaded: LoadedConfig, group: AccountGroup, payload
     state.injectAfterReconciliation = false;
     state.lastEvent = count > 0 ? "enrollment_retained_leased" : "enrollment_cookie_missing";
     await saveState(root);
+    if (count === 0) await queueMonitorEvent("reconciliation_failed", group.id);
     return;
   }
   if (disposition !== "remove") throw new Error("unsupported cookie disposition");
@@ -416,6 +450,7 @@ async function finishEviction(loaded: LoadedConfig, group: AccountGroup, payload
   state.injectAfterReconciliation = false;
   state.lastEvent = remaining === 0 ? "eviction_complete" : "eviction_failed";
   await saveState(root);
+  if (remaining !== 0) await queueMonitorEvent("reconciliation_failed", group.id);
   if (state.invalidationPending === true && state.invalidationReason !== undefined) {
     send("session.invalidate", { account_group_id: group.id, lease_id: state.leaseId, reason: state.invalidationReason });
   } else if (remaining === 0 && shouldInject) {
@@ -538,6 +573,59 @@ function send(type: string, payload: Record<string, unknown>): void {
   client.send(type, payload);
 }
 
+async function queueMonitorEvent(signal: MonitorSignal, groupId?: string, flush = true): Promise<void> {
+  const previous = await monitorOutbox();
+  const next = addToBoundedOutbox(previous, makeMonitorEvent(signal, groupId));
+  const overflowed = previous.length === 128 && next.length === 128 &&
+    !previous.some((event) => event.signal === signal && (event.account_group_id ?? undefined) === groupId);
+  const finalOutbox = overflowed
+    ? addToBoundedOutbox(next, makeMonitorEvent("monitor_queue_overflow"))
+    : next;
+  await setLocal(MONITOR_OUTBOX_KEY, finalOutbox);
+  if (flush) await flushMonitorOutbox();
+}
+
+async function monitorOutbox(): Promise<MonitorEvent[]> {
+  const value = await getLocal(MONITOR_OUTBOX_KEY);
+  if (!Array.isArray(value)) return [];
+  return value.filter(validateMonitorEvent);
+}
+
+async function flushMonitorOutbox(): Promise<void> {
+  if (!client?.connected) return;
+  for (const event of await monitorOutbox()) send("monitor.event", { ...event });
+}
+
+async function pollNativeMonitor(): Promise<void> {
+  if (!client?.connected) return;
+  await flushMonitorOutbox();
+  send("monitor.poll", { max_events: 32 });
+}
+
+async function handleMonitorAlert(value: unknown): Promise<void> {
+  if (!validateMonitorEvent(value)) throw new Error("invalid monitor alert");
+  const event = value;
+  if (event.source === "extension") {
+    const pending = await monitorOutbox();
+    await setLocal(MONITOR_OUTBOX_KEY, pending.filter((item) => item.event_id !== event.event_id));
+  }
+  const previousValue = await getLocal(MONITOR_RATE_KEY);
+  const previous = isNotificationDecisionState(previousValue) ? previousValue : {};
+  const decision = notificationDecision(event, previous, Date.now());
+  if (!decision.show) return;
+  await setLocal(MONITOR_RATE_KEY, decision.next);
+  const content = notificationText(event);
+  await createNotification(`fcp-monitor-${event.event_id}`, {
+    type: "basic", iconUrl: MONITOR_ICON_URL, title: content.title, message: content.message,
+    priority: event.severity === "high" ? 2 : 1,
+  });
+  await setBadge(event.severity === "high" ? "!" : "•", event.severity === "high" ? "#b3261e" : "#b06000");
+}
+
+function isNotificationDecisionState(value: unknown): value is NotificationDecisionState {
+  return typeof value === "object" && value !== null && Object.values(value).every((item) => typeof item === "number" && Number.isFinite(item));
+}
+
 async function setCookie(group: AccountGroup, cookie: CookieRecord): Promise<void> {
   const details = cookieSetDetails(group, cookie);
   await new Promise<void>((resolve, reject) => {
@@ -656,6 +744,13 @@ async function loadState(loaded: LoadedConfig): Promise<RuntimeState> {
 
 function saveState(state: RuntimeState): Promise<void> { return callbackPromise<void>((done) => chrome.storage.session.set({ [STATE_KEY]: state }, () => done())); }
 function storageGet(key: string): Promise<Record<string, unknown>> { return callbackPromise((done) => chrome.storage.session.get(key, done)); }
+async function getLocal(key: string): Promise<unknown> { return (await callbackPromise<Record<string, unknown>>((done) => chrome.storage.local.get(key, done)))[key]; }
+function setLocal(key: string, value: unknown): Promise<void> { return callbackPromise<void>((done) => chrome.storage.local.set({ [key]: value }, () => done())); }
+function createNotification(id: string, options: chrome.notifications.NotificationOptions): Promise<string> { return callbackPromise((done) => chrome.notifications.create(id, options, done)); }
+async function setBadge(text: string, color: string): Promise<void> {
+  await callbackPromise<void>((done) => chrome.action.setBadgeBackgroundColor({ color }, done));
+  await callbackPromise<void>((done) => chrome.action.setBadgeText({ text }, done));
+}
 function initialGroupState(): GroupRuntimeState { return { groupState: "uninitialized", reconciliation: false, relevantTabs: [], lastEvent: "startup", pendingNavigationUnlocks: {} }; }
 function requiredGroupState(root: RuntimeState, groupId: string): GroupRuntimeState { const state = root.groups[groupId]; if (state === undefined) throw new Error("runtime group missing"); return state; }
 function resetGroupState(state: GroupRuntimeState, event: string): void { Object.assign(state, initialGroupState(), { lastEvent: event }); }

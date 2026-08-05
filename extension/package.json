@@ -1,10 +1,12 @@
 {
   "name": "fursoy-cookie-protector-extension",
-  "version": "0.2.0",
+  "version": "0.3.1",
+  "type": "module",
   "private": true,
   "scripts": {
     "check": "tsc -p tsconfig.json --noEmit",
-    "build": "tsc -p tsconfig.json"
+    "build": "tsc -p tsconfig.json",
+    "test": "npm run build && node tests/monitor.test.mjs"
   },
   "devDependencies": { "typescript": "5.9.2" }
 }

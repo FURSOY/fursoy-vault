@@ -34,10 +34,11 @@ declare namespace chrome {
   namespace storage {
     interface Area { get(key: string, callback: (items: Record<string, unknown>) => void): void; set(items: Record<string, unknown>, callback?: () => void): void }
     const session: Area;
+    const local: Area;
   }
   namespace alarms {
     interface Alarm { name: string; scheduledTime: number }
-    function create(name: string, info: { when: number }): void;
+    function create(name: string, info: { when?: number; periodInMinutes?: number }): void;
     function clear(name: string, callback?: (cleared: boolean) => void): void;
     const onAlarm: { addListener(callback: (alarm: Alarm) => void): void };
   }
@@ -57,5 +58,13 @@ declare namespace chrome {
       injection: { target: { tabId: number }; world?: "ISOLATED" | "MAIN"; func: () => T | Promise<T> },
       callback: (results: InjectionResult<T>[]) => void,
     ): void;
+  }
+  namespace notifications {
+    interface NotificationOptions { type: "basic"; iconUrl: string; title: string; message: string; priority?: number }
+    function create(id: string, options: NotificationOptions, callback: (notificationId: string) => void): void;
+  }
+  namespace action {
+    function setBadgeText(details: { text: string }, callback?: () => void): void;
+    function setBadgeBackgroundColor(details: { color: string }, callback?: () => void): void;
   }
 }

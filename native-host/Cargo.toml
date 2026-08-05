@@ -1,6 +1,6 @@
 [package]
 name = "fursoy-native-host"
-version = "0.1.0"
+version = "0.3.1"
 edition = "2024"
 publish = false
 
@@ -26,6 +26,12 @@ windows = { version = "0.62.2", features = [
     "Win32_Foundation",
     "Win32_Security_Cryptography",
     "Win32_Storage_FileSystem",
+    "Win32_System_Com",
+    "Win32_System_Com_StructuredStorage",
+    "Win32_System_Ole",
+    "Win32_System_Rpc",
+    "Win32_System_Variant",
+    "Win32_System_Wmi",
     "Win32_System_WinRT",
 ] }
 zeroize = { version = "1.9.0", features = ["derive"] }

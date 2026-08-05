@@ -287,6 +287,135 @@ pub struct AuthCacheClear {
     pub reason: String,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MonitorSeverity {
+    Info,
+    Medium,
+    High,
+}
+
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MonitorSignal {
+    RemoteDebuggingPort,
+    RemoteDebuggingPipe,
+    ProcessInspectionWmiConnectAccessDenied,
+    ProcessInspectionWmiConnectFailed,
+    ProcessInspectionWmiPollAccessDenied,
+    ProcessInspectionWmiPollFailed,
+    ProcessInspectionCommandLineAccessDenied,
+    ProcessInspectionCommandLineUnavailable,
+    HostDisconnect,
+    HostDisconnectActiveLease,
+    ReconnectSuccess,
+    ReconciliationFailed,
+    LeaseOutsideCookieCreated,
+    SelectorChanged,
+    MonitorQueueOverflow,
+}
+
+impl MonitorSignal {
+    pub fn severity(self) -> MonitorSeverity {
+        match self {
+            Self::RemoteDebuggingPort
+            | Self::RemoteDebuggingPipe
+            | Self::HostDisconnectActiveLease
+            | Self::ReconciliationFailed => MonitorSeverity::High,
+            Self::LeaseOutsideCookieCreated | Self::MonitorQueueOverflow => MonitorSeverity::Medium,
+            Self::HostDisconnect
+            | Self::ReconnectSuccess
+            | Self::SelectorChanged
+            | Self::ProcessInspectionWmiConnectAccessDenied
+            | Self::ProcessInspectionWmiConnectFailed
+            | Self::ProcessInspectionWmiPollAccessDenied
+            | Self::ProcessInspectionWmiPollFailed
+            | Self::ProcessInspectionCommandLineAccessDenied
+            | Self::ProcessInspectionCommandLineUnavailable => MonitorSeverity::Info,
+        }
+    }
+
+    pub fn audit_code(self) -> &'static str {
+        match self {
+            Self::RemoteDebuggingPort => "remote_debugging_port",
+            Self::RemoteDebuggingPipe => "remote_debugging_pipe",
+            Self::ProcessInspectionWmiConnectAccessDenied => {
+                "process_inspection_wmi_connect_wbem_access_denied_0x80041003"
+            }
+            Self::ProcessInspectionWmiConnectFailed => "process_inspection_wmi_connect_failed",
+            Self::ProcessInspectionWmiPollAccessDenied => {
+                "process_inspection_wmi_poll_wbem_access_denied_0x80041003"
+            }
+            Self::ProcessInspectionWmiPollFailed => "process_inspection_wmi_poll_failed",
+            Self::ProcessInspectionCommandLineAccessDenied => {
+                "process_inspection_command_line_wbem_access_denied_0x80041003"
+            }
+            Self::ProcessInspectionCommandLineUnavailable => {
+                "process_inspection_command_line_unavailable"
+            }
+            Self::HostDisconnect => "host_disconnect",
+            Self::HostDisconnectActiveLease => "host_disconnect_active_lease",
+            Self::ReconnectSuccess => "reconnect_success",
+            Self::ReconciliationFailed => "reconciliation_failed",
+            Self::LeaseOutsideCookieCreated => "lease_outside_cookie_created",
+            Self::SelectorChanged => "selector_changed",
+            Self::MonitorQueueOverflow => "monitor_queue_overflow",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MonitorSource {
+    Extension,
+    NativeHost,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MonitorEvent {
+    pub event_id: Uuid,
+    pub observed_at_unix_ms: u64,
+    pub source: MonitorSource,
+    pub signal: MonitorSignal,
+    pub severity: MonitorSeverity,
+    pub account_group_id: Option<Uuid>,
+    pub occurrence_count: u32,
+}
+
+impl MonitorEvent {
+    pub fn validate(&self) -> FcpResult<()> {
+        if self.event_id.is_nil() {
+            return Err(FcpError::Protocol(
+                "monitor event id must not be nil".into(),
+            ));
+        }
+        if self.severity != self.signal.severity() {
+            return Err(FcpError::Protocol(
+                "monitor severity does not match signal".into(),
+            ));
+        }
+        if self.occurrence_count == 0 || self.occurrence_count > 1_000 {
+            return Err(FcpError::Protocol(
+                "monitor occurrence count is out of range".into(),
+            ));
+        }
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MonitorPoll {
+    pub max_events: u16,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MonitorAlert {
+    pub event: MonitorEvent,
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", content = "payload")]
 pub enum Message {
@@ -318,6 +447,12 @@ pub enum Message {
     SessionInvalidated(SessionInvalidated),
     #[serde(rename = "auth.cache.clear")]
     AuthCacheClear(AuthCacheClear),
+    #[serde(rename = "monitor.event")]
+    MonitorEvent(MonitorEvent),
+    #[serde(rename = "monitor.poll")]
+    MonitorPoll(MonitorPoll),
+    #[serde(rename = "monitor.alert")]
+    MonitorAlert(MonitorAlert),
 }
 
 fn encode_hex(bytes: &[u8]) -> String {
@@ -442,5 +577,25 @@ mod tests {
             "\"external_logout\""
         );
         assert!(serde_json::from_str::<SessionInvalidationReason>("\"unknown\"").is_err());
+    }
+
+    #[test]
+    fn monitor_severity_is_derived_from_a_closed_signal_vocabulary() {
+        assert_eq!(
+            MonitorSignal::RemoteDebuggingPort.severity(),
+            MonitorSeverity::High
+        );
+        let mut event = MonitorEvent {
+            event_id: Uuid::new_v4(),
+            observed_at_unix_ms: 1,
+            source: MonitorSource::Extension,
+            signal: MonitorSignal::SelectorChanged,
+            severity: MonitorSeverity::Info,
+            account_group_id: None,
+            occurrence_count: 1,
+        };
+        assert!(event.validate().is_ok());
+        event.severity = MonitorSeverity::High;
+        assert!(event.validate().is_err());
     }
 }

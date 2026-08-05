@@ -1,5 +1,5 @@
 export const HOST_NAME = "com.fursoy.cookie_protector";
-export const PROTOCOL_VERSION = 2;
+export const PROTOCOL_VERSION = 3;
 
 export type PolicyLevel = "critical" | "balanced" | "convenient" | "monitor";
 export type HealthCheckKind = "wikipedia_userinfo" | "json_session_state";

@@ -4,7 +4,7 @@ use uuid::Uuid;
 use crate::protocol::messages::{Message, Nonce32};
 use crate::{FcpError, FcpResult};
 
-pub const PROTOCOL_VERSION: u16 = 2;
+pub const PROTOCOL_VERSION: u16 = 3;
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -70,7 +70,7 @@ mod tests {
     #[test]
     fn strict_deserialization_rejects_unknown_payload_fields() {
         let json = r#"{
-            "v":2,
+            "v":3,
             "conn_nonce":"0101010101010101010101010101010101010101010101010101010101010101",
             "seq":1,
             "id":"74b0c995-85c6-4db2-9ff4-c148068461a3",
