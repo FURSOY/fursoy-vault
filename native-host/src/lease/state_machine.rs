@@ -197,6 +197,7 @@ mod tests {
     fn signed(payload: CapabilityPayload) -> SignedCapability {
         SignedCapability {
             signature: payload.canonical_bytes(),
+            authenticator_data: Vec::new(),
             payload,
         }
     }

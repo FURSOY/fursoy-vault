@@ -85,8 +85,13 @@ impl CapabilityPayload {
 #[serde(deny_unknown_fields)]
 pub struct SignedCapability {
     pub payload: CapabilityPayload,
-    /// RSA PKCS#1 SHA-256 signature produced by KeyCredential.RequestSignAsync.
+    /// Raw (r||s) ECDSA P-256 signature produced by WebAuthNAuthenticatorGetAssertion.
     pub signature: Vec<u8>,
+    /// The authenticatorData bytes returned alongside `signature`. Verification needs these
+    /// because the WebAuthn assertion signs `authenticatorData || SHA-256(clientDataJSON)`, not
+    /// the payload bytes directly, and `authenticatorData` carries a signCount that cannot be
+    /// recomputed from the payload alone.
+    pub authenticator_data: Vec<u8>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]

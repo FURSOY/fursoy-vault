@@ -86,6 +86,7 @@ mod tests {
             .unwrap();
         let signed = SignedCapability {
             signature: reserved.canonical_bytes(),
+            authenticator_data: Vec::new(),
             payload: reserved,
         };
         ledger

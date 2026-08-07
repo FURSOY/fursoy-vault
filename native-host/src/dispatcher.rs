@@ -940,6 +940,7 @@ mod tests {
             legacy_capability_ledger: root.join("leases/capability-ledger.json"),
             account_groups_config: root.join("config/account-groups.json"),
             audit_directory: root.join("audit"),
+            hello_credential: root.join("hello-credential.json"),
         }
     }
 

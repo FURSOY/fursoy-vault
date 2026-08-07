@@ -15,6 +15,7 @@ pub struct DataPaths {
     pub legacy_capability_ledger: PathBuf,
     pub account_groups_config: PathBuf,
     pub audit_directory: PathBuf,
+    pub hello_credential: PathBuf,
 }
 
 impl DataPaths {
@@ -39,6 +40,7 @@ impl DataPaths {
             legacy_capability_ledger: root.join("leases").join("capability-ledger.json"),
             account_groups_config: root.join("config").join("account-groups.json"),
             audit_directory: root.join("audit"),
+            hello_credential: root.join("hello-credential.json"),
             root,
         })
     }

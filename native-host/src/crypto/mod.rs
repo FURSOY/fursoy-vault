@@ -2,6 +2,7 @@ pub mod aead;
 pub mod capability;
 pub mod hello;
 pub mod platform_kek;
+pub mod webauthn_codec;
 
 use windows::Win32::Security::Cryptography::{BCRYPT_USE_SYSTEM_PREFERRED_RNG, BCryptGenRandom};
 
