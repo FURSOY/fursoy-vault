@@ -7,7 +7,7 @@
 > [Sonraki Kesin Adım](#31-sonraki-kesin-adım) ve [Karar Günlüğü](#32-karar-günlüğü)
 > bölümleri gözden geçirilir. Günlük tarzı uzun kayıt tutulmaz; belge güncel ve okunabilir kalır.
 
-**Son güncelleme:** 2026-08-04
+**Son güncelleme:** 2026-08-08
 **Durum:** Tasarım tamamlandı. **Faz 1–4 deneylerinin tamamı GO; Faz 5 tek grup uçtan uca MVP
 kontrollü uygulama ve düşük-riskli gerçek site manuel kabul testlerini tam geçti.** Q16 Aday A ile kapatıldı; vault v1, crypto temeli, Native Messaging v1 sözleşmesi ve
 inject'e özel tek kullanımlık Hello capability/replay ledger'ı, gerçek vault transaction/lease dispatcher'ı,
@@ -16,6 +16,20 @@ kontrollü oturumda `0.1.9`, `tr.wikipedia.org` üzerinde çoklu-cookie oturumuy
 TPM/Hello ile uçtan uca doğrulandı. Faz 5.1 navigasyon-öncesi unlock gate prototipi `0.1.12` manuel
 testini tam geçti ve F5 gereksinimini kaldırarak Q21'i kapattı. **Faz 6 çoklu-grup/policy/reconciliation
 implementasyonu `0.2.0` manuel iki-grup kabulünü 12/12 PASS ile tamamladı; Q4, Q12 ve Q19 kapandı.**
+**Faz 7 `0.3.1` izleme katmanının çekirdek döngüsü 2026-08-06 manuel oturumunda doğrulandı; kabul
+matrisi hâlâ tamamlanmadı** (bkz. [§31](#31-sonraki-kesin-adım)). [ADR-020](#adr-020--korunan-site-kullanıcı-tarafından-eklenir-ve-tüm-çerezler-kasalanır)
+ile selector tabanlı profil/login-tespit modeli terk edilmiş, yerine **kullanıcının siteyi elle
+eklediği ve o sitenin tüm çerezlerinin kasalandığı** model kabul edilmiştir. **ADR-020'nin her iki
+dilimi de (tüm-çerez kasalama + kullanıcının kendi sitesini eklemesi, Q24) uygulanmış ve
+2026-08-06'da manuel doğrulanmıştır; Faz 8 bu haliyle tamamlanmış sayılır** — bu belgenin önceki
+sürümlerinde dilim 2'nin "açık" göründüğü yerler (özet, yol haritası, §31) çelişkiliydi ve bu
+güncellemeyle düzeltildi. **2026-08-07/08 oturumunda [ADR-021](#adr-021--windows-hello-imzalama-arka-ucu-webauthndlle-taşınmıştır)
+ile Windows Hello imzalama arka ucu `KeyCredentialManager`'dan `webauthn.dll` platform authenticator
+API'sine taşındı**: onay penceresinin tarayıcının arkasında açılması sorunu (harici pencere
+manipülasyonuyla düzeltilemeyen, dokümante edilmemiş bir Windows sınırlaması olduğu doğrulandı)
+kalıcı olarak çözüldü, karşılığında `hello_cache_ms`/tekrar-sormama rahatlığı kayboldu (bkz. ADR-021
+"Kabul edilen sınırlar"). Aynı oturumda `cookie_roundtrip_failed` sağlık kontrolündeki gerçek bir
+hata (sitenin kendi eklediği çerezleri hata sanması) da düzeltildi.
 
 ---
 
@@ -344,7 +358,8 @@ Extension: chrome.cookies.remove(...) → doğrula
 **Sorumluluklar**
 
 - Korunan hesap gruplarına ait sekmeleri izlemek
-- Login ve session durumu değişikliklerini gözlemlemek
+- Login ve session durumu değişikliklerini gözlemlemek — **ADR-020 ile kaldırılacaktır**;
+  yeni modelde enrollment kullanıcı jestiyle başlar, extension oturum semantiği yorumlamaz
 - `chrome.cookies` API üzerinden HttpOnly dahil cookie yönetmek
 - Inject ve eviction işlemlerini koordine etmek
 - İlgili hesap grubuna ait **son sekmenin** kapanmasını takip etmek
@@ -480,6 +495,13 @@ account_group
 beş zorunlu `cookie_selectors[]` kaydı aynı account group içinde enrollment, snapshot, eviction ve inject
 boyunca birlikte doğrulandı. Sonuç, çoklu-cookie grup modelini bu düşük-riskli site için doğrular; başka
 sitelerin selector kümelerine veya partitioned cookie desteğine kendiliğinden genellenmez.
+
+> **ADR-020 etkisi (2026-08-06):** Yukarıdaki şema **mevcut uygulamayı** tanımlar ve tarihsel kayıt
+> olarak korunur. ADR-020 kabul edildiğinden `cookie_selectors[]` ve `health_checks[]` alanları yeni
+> modelde kaldırılacak, yerlerine kullanıcının eklediği adresten türeyen tek bir **kapsam alanı**
+> (kayıtlı domain / eTLD+1) gelecektir. Kasalama birimi hâlâ account group'tur; değişen şey grubun
+> içeriğinin elle küratörlükle değil kullanıcı jestiyle belirlenmesidir. Yeni şema ADR-020 uygulanırken
+> yazılacaktır.
 
 ### 10.2 Lease kaydı (diskte, plaintext metadata)
 
@@ -685,6 +707,25 @@ olmadan extension'a cookie silme izni vermez.
 Bu tetikleyicilerin hiçbiri Hello onayı beklemez. Özellikle `idle` ve `lock`, kullanıcı tanım gereği
 etkileşimde değilken çalışır; prompt beklemek fail-open maruziyet üretir ve yasaktır.
 
+#### 13.2.2 `SEALED` durumunda ortaya çıkan cookie — ADR-020 ile değişecek kural
+
+Mevcut uygulama, grup `SEALED` iken o gruba ait bir cookie oluşursa bunu `lease_outside_cookie_created`
+Orta severity izleme olayı sayar, kullanıcıya bildirim gösterir ve yeniden tahliye tetikler. Tek bir
+oturum selector'ı için bu makuldü.
+
+ADR-020 tüm çerezleri kapsama aldığından bu kural **sürdürülemez**: analytics, prefetch, consent bandı
+ve arka plan istekleri kilitli site için sürekli cookie üretir; her biri bildirim ve tahliye döngüsü
+doğururdu. Yeni kural:
+
+- Gruba ait **açık ilgili sekme yoksa** → cookie arka plandan gelmiştir → **sessizce silinir**;
+  bildirim üretilmez, izleme olayı yükseltilmez.
+- Gruba ait **açık ilgili sekme varsa** → kullanıcı o sitede etkileşimdedir ve navigasyon gate'i
+  (§Faz 5.1, `webNavigation` blocking olmadığı için garanti değildir) kaçırmış olabilir → cookie
+  silinmez, normal unlock akışına girilir.
+
+Bu ayrım oturum semantiği yorumlamaz; yalnızca "kullanıcı orada mı" sorusunu sorar ve zaten tutulan
+ilgili-sekme listesini kullanır. Gerekçe ve alternatifler için [ADR-020](#adr-020--korunan-site-kullanıcı-tarafından-eklenir-ve-tüm-çerezler-kasalanır).
+
 #### 13.2.1 Windows lock: garanti değil, best-effort
 
 **Lock anında tahliye garantisi verilemez.** Cookie'yi store'dan yalnızca extension kaldırabilir
@@ -750,6 +791,13 @@ Takas **jest cache süresinde** yapılır; DEK cache'i hiçbir seviyede yoktur.
 > boyunca kesinlikle gösterilmeyeceği anlamına gelmez. `0.2.0` kabulünde Dengeli grup 10 dakikalık
 > pencere içinde host audit'inde `hello_cached` yolunu kullandığı halde Windows yeniden prompt
 > gösterdi. Last-tab eviction cache'i temizlememiştir; OS credential/UI cache ömrü ayrıca ölçülecektir.
+
+> **ADR-021 notu (2026-08-08):** Yukarıdaki tablo, artık kullanılmayan `KeyCredentialManager`
+> arka ucunun davranışını tarihsel olarak yansıtır. Yeni `webauthn.dll` arka ucu durum tutmuyor
+> (stateless); jest cache süresi **fiilen etkisiz**, tüm seviyeler her yeniden girişte Hello
+> istiyor (ölçüldü: art arda çağrılarda gözlenebilir bir hızlanma yok). `hello_cache_ms` alanı
+> koddan kaldırılmadı — olası bir uygulama-seviyesi önbellekleme katmanı için saklı tutuluyor —
+> ama şu an hiçbir davranışı etkilemiyor. Bkz. [ADR-021](#adr-021--windows-hello-imzalama-arka-ucu-webauthndlle-taşınmıştır).
 
 ---
 
@@ -946,7 +994,12 @@ Bunlar **protokol hijyenidir**, güvenlik sınırı değildir. Belgede ve kodda 
 
 ## 17. Site / Account-Group Profilleri
 
-### 17.1 Yaklaşım
+> **Bu bölümün tamamı ADR-020 ile terk edilmiştir (2026-08-06).** Aşağıdaki 17.1–17.3 mevcut
+> `0.3.1` uygulamasının davranışını tanımlar ve tarihsel kayıt olarak korunur (§26.1). Yeni model
+> için [§17.4](#174-adr-020-sonrası-model-kullanıcı-tanımlı-koruma) ve
+> [ADR-020](#adr-020--korunan-site-kullanıcı-tarafından-eklenir-ve-tüm-çerezler-kasalanır).
+
+### 17.1 Yaklaşım (terk edildi — mevcut uygulamanın davranışı)
 
 Grupları **yalnızca statik domain listesiyle** tanımlamak yetmez. Kimlik sağlayıcı
 yönlendirmeleri, iframe'ler ve partitioned cookie'ler top-level site bağlamına göre değişir.
@@ -957,17 +1010,46 @@ Bu nedenle profiller iki kaynaktan üretilir:
 2. **Ampirik türetme** — login/logout sırasında hangi cookie'lerin gerçekten değiştiğini
    gözlemleyip grubu buradan çıkarma
 
-### 17.2 Profil yaşam döngüsü
+**Neden terk edildi:** Her hedef site için selector araştırması gerektirir ve ölçeklenmez;
+kullanıcı kendi sitesini ekleyemez. Ayrıca 2026-08-06 manuel oturumunda ampirik/login-tespit
+tarafının pratikte kırılgan olduğu ölçüldü (bkz. §30 Faz 7 bulguları).
+
+### 17.2 Profil yaşam döngüsü (terk edildi)
 
 - Her profilin `compatibility_version` alanı vardır.
 - Profil doğrulanmadan **kritik** seviyeye alınamaz.
 - Doğrulanmamış profiller varsayılan olarak **izleme** seviyesindedir.
 - Health check başarısız olan profil otomatik olarak izleme seviyesine düşürülür.
 
-### 17.3 Öncelikli hedef listesi (doğrulanmayı bekliyor)
+### 17.3 Öncelikli hedef listesi (terk edildi)
 
 Kendi kontrolümüzdeki test uygulaması → düşük riskli test hesabı → sonra gerçek hedefler.
 Google, Steam, banka ve ana e-posta **erken testlerde kullanılmaz**.
+
+> Test sırası kuralı **geçerliliğini korur** (§29.1); terk edilen şey küratörlü profil listesi
+> fikridir, test disiplini değil.
+
+### 17.4 ADR-020 sonrası model — kullanıcı tanımlı koruma
+
+**Durum:** Karar verildi, **uygulanmadı**.
+
+- Korunacak site **kullanıcı tarafından eklenir** (ayarlar ekranı veya sayfa üzerinden
+  "bu siteyi korumaya al" eylemi). Ekleme anı serbesttir: kullanıcı sitenin içinde de olabilir,
+  dışında da.
+- Ekleme anında oturum durumu **sorgulanmaz**. "Giriş yapılmış mı", "bu bir login mi" gibi bir
+  değerlendirme yapılmaz.
+- Kapsam, eklenen adresin **kayıtlı domaini (eTLD+1)** olarak türetilir. `tr.wikipedia.org`
+  eklendiğinde `wikipedia.org` ve alt domainleri kapsanır.
+- Tahliye anında o kapsamdaki **tüm çerezler** kasalanır; isim/selector filtresi yoktur.
+- Unlock anında aynı küme geri yazılır.
+- Selector listesi, `required_for_enrollment` işareti ve site-özel `health_check` tanımları
+  **kaldırılır**.
+
+**Kabul edilen sınır — farklı eTLD+1'deki SSO çerezleri.** `auth.wikimedia.org` örneğinde olduğu
+gibi, oturum farklı bir kayıtlı domaindeki çerezlere bağlı olabilir. Bunlar kapsam dışında kalır.
+Bu **işlevi bozmaz** (o çerezler tarayıcıda kalmaya devam eder), ancak **korumayı eksik bırakır**:
+kapsanmayan domaindeki çereze erişen bir saldırgan oturumu kısmen yeniden kurabilir. Kullanıcı
+isterse o domaini ayrıca ekleyebilir. Bu sınır ürün metninde gizlenmez.
 
 ---
 
@@ -1358,6 +1440,16 @@ gerçek site ve uzun günlük kullanım dağılımına kendiliğinden genellenme
 - Rotation, CSRF state, device binding veya başka storage bağımlılıkları olabilir
 - Cookie plaintext'i extension JS belleğinde kısa süreli bulunacaktır ve sıfırlanamaz
 - Native Messaging Host aynı kullanıcı tarafından doğrudan çalıştırılabilir
+- ✅ **Çözüldü (2026-08-07) — eşzamanlı iki host process'i audit zincirini bozuyordu.** Audit
+  yazıcısının tek-instance kilidi yoktu; iki host aynı HMAC zincirine yazdığında zincir
+  `audit sequence regression or gap detected` ile bozuluyor ve host **sonraki her açılışta
+  fail-closed çıkıyordu**. Bozulma tek yönlüydü ve elle müdahale (audit dizinini kenara alma)
+  gerektiriyordu; 2026-08-06'da iki kez gözlendi. Artık host, veri dizini üzerinde paylaşımsız bir
+  `host.lock` dosyasıyla **açılışta tek-instance kilidi** alır ve ikinci instance audit'e hiç
+  ulaşmadan temiz biçimde reddedilir. Böylece yıkıcı, elle kurtarma gerektiren hata, extension'ın
+  zaten yeniden denediği sıradan bir bağlantı hatasına dönüşür. Tetikleyici taraf da kapatıldı:
+  extension'ın `connect()` fonksiyonu `client` atanmadan önce `await` yaptığı için iki eşzamanlı
+  çağrı iki port (ve iki host) açabiliyordu; artık tek seferlik giriş koruması vardır.
 - **Standart NMH host'u kalıcı değildir**: `connectNative` portu kapanınca host yaşam döngüsü
   sona erebilir; host extension'dan bağımsız bir lease enforcer olarak tasarlanamaz (§9.2.1)
 - **Host browser cookie store'unu okuyamaz ve cookie silemez**; snapshot ve kaldırma işlemleri
@@ -1399,7 +1491,7 @@ işaretlenir.
 | **Q1** | Chrome native messaging'in host→extension mesaj boyutu limiti nedir ve büyük hesap grupları için chunking gerekli mi? | Protokol tasarımı | Deney 1'e ek küçük ölçüm |
 | **Q2** | KEK için RSA-OAEP mi ECC+ECDH mi? Platform Crypto Provider hangisinde per-use jest veriyor? | Anahtar hiyerarşisi | Deney 1 |
 | **Q3** | ✅ Tam kapandı — Per-use kullanıcı jesti mümkün: Yol A'da her yeni handle, Yol C'de Hello capability işlemi ile doğrulandı; süre, process ve kilit durumu belirleyici değil. | Ürün iddiası | Deney 1 handle-cycle + lock-handle-probe + Hello challenge |
-| **Q4** | ✅ Kapandı — Faz 6'da domain, navigation pattern ve exact cookie selector kümeleri sürümlü `account-groups.json` içinde açıkça tanımlanır; ampirik genişletme yapılmaz. Çakışan sahiplik config yüklenirken reddedilir. | Profil modeli | Faz 6 config validator + config-digest handshake |
+| **Q4** | ♻️ Kapandı, sonra **ADR-020 ile yürürlükten kaldırıldı** — Faz 6 cevabı (domain/navigation/selector kümeleri sürümlü `account-groups.json` içinde elle tanımlanır) `0.3.1`'de çalışır durumdadır fakat ölçeklenmediği için terk edildi. Yeni cevap: kapsam kullanıcı jestiyle eklenir ve eklenen adresin eTLD+1'i olarak türetilir; selector listesi yoktur (§17.4). | Profil modeli | Faz 6 config validator + config-digest handshake; ADR-020 ile revize |
 | **Q5** | MV3 service worker'ı boşta sonlandırılıyor. Lease zamanlayıcısını ne zorlayacak? `chrome.alarms` granülaritesi yeterli mi? Açık native messaging port'u SW ömrünü ne kadar uzatıyor? | **Tahliye hassasiyeti — kritik** | Küçük extension deneyi (Deney 2'ye eklenebilir) |
 | **Q6** | Host, Chrome tarafından başlatılan bir process olarak Windows lock bildirimini nasıl alacak? (`WTSRegisterSessionNotification` pencere handle'ı ister; gizli mesaj penceresi mi kurulacak?) Host kalıcı olmadığı için bu bildirim yalnızca port açıkken anlamlıdır (§9.2.1). | Lock tahliyesinin best-effort yolu | Deney 1'e ek |
 | **Q7** | Cookie tahliye edildikten sonra hâlâ çalışan bir service worker veya background fetch cookie'yi yeniden oluşturuyor mu? | Duty cycle doğruluğu | Deney 3/4 metriği |
@@ -1416,8 +1508,11 @@ işaretlenir.
 | **Q18** | CHIPS/partitioned cookie'ler yalnızca gerçek üçüncü-taraf bağlamında mı yazılabiliyor; extension bağlamından `chrome.cookies.set` ile doğrudan `partitionKey` verildiğinde neden cookie dönmüyor? Chrome 150 `localhost` ölçümünde yazım sessizce başarısız oldu. | Partitioned cookie restore uyumluluğu | Kontrollü top-level site + üçüncü-taraf iframe deneyi; extension ve sayfa bağlamlarını karşılaştır |
 | **Q19** | ✅ Kapandı — Kritik/Dengeli/Kullanışlı idle eşikleri sırasıyla `1/5/15 dk`; Chrome'un global 1 dk sinyali sonrası grup-bazlı alarm ve tahliye anında `idle.queryState` doğrulaması kullanılır. Manuel ölçümde Kritik ~70 sn'de tahliye olurken Dengeli leased kaldı; 5+ dk'da Dengeli de sessiz tahliye oldu. Faz 5'teki `30 s` test değeri kaldırıldı. | Policy bazlı idle ayrımı gerçek iki-grup akışında doğrulandı | Faz 6 `0.2.0`, exp-06 Faz E |
 | **Q20** | Sistem idle sinyali, medya oynatma veya görünür sayfadaki pasif ama gerçek kullanımı nasıl ayırt edecek? YouTube/video gibi senaryolarda klavye-fare olmaması yanlış erken tahliye üretebilir. | Aktif pasif kullanımda oturumun gereksiz kilitlenmesi | Faz 6'da tab visibility, audible/media state ve site aktivitesini güvenlik sınırını gevşetmeden değerlendiren policy tasarla |
-| **Q21** | ✅ Kapandı — `webNavigation.onBeforeNavigate`, yalnız `sealed + yeni ana-frame navigasyonu` durumunda tam hedef URL'yi saklayıp sekmeyi tek düğmeli `unlock.html` ara sayfasına yönlendirir. Inject yalnız “Cookie ile giriş yap” kullanıcı jestiyle başlar; Hello ve cookie round-trip başarısından sonra sekme path/query korunarak hedefe döner. `leased` navigasyonlara dokunulmaz; ret ara sayfada tekrar denenebilir. | Restore UX'i; F5 gereksinimi kaldırıldı | Faz 5.1 `0.1.12` Wikipedia manuel testi: ana akış, leased, Hello reddi/tekrar ve idle senaryoları PASS |
+| **Q21** | ✅ Kapandı, **2026-08-07'de revize edildi** — `webNavigation.onBeforeNavigate`, `sealed + yeni ana-frame navigasyonu` durumunda tam hedef URL'yi saklayıp sekmeyi `unlock.html` ara sayfasına yönlendirir; Hello ve cookie round-trip başarısından sonra sekme path/query korunarak hedefe döner. `leased` navigasyonlara dokunulmaz. **Revizyon:** inject artık ayrı bir düğme jesti beklemez, ara sayfa açılır açılmaz başlar (bkz. aşağıdaki not). İptal/hata durumunda ara sayfada kalınır ve düğmeyle tekrar denenir. | Restore UX'i; F5 gereksinimi kaldırıldı | Faz 5.1 `0.1.12` Wikipedia manuel testi: ana akış, leased, Hello reddi/tekrar ve idle senaryoları PASS |
 | **Q22** | 🟡 Blocker değil — Uygulama `hello_cached`/aynı `KeyCredential` handle yolunu 10 dakikalık Dengeli pencere içinde doğru seçtiği halde Windows Hello UI yeniden gösterildi. Last-tab eviction cache'i temizlemiyor; uygulama penceresi OS'nin promptsuz credential cache süresini garanti etmiyor. Gerçek OS prompt-cache süresi nedir? | Beklenenden fazla prompt; güvenlik fail-safe kalır | Ayrı süre ölçümü: aynı process/handle ile artan aralıklarda prompt gözlemi |
+| **Q23** | **Başarısız restore sonrası grup yeniden enroll olmuyor.** `0.3.1`'de kontrollü uygulama grubu `restore_rejected` ile invalidate olduktan sonra, kullanıcı siteye taze login yapıp 10+ dakika beklediği halde audit'e hiç `enrollment` kaydı düşmedi; grup kalıcı olarak `uninitialized` kaldı. Extension'ın reload edilmesi durumu düzeltir. `waitForStableEnrollmentCookies` mi boş dönüyor, yoksa state makinesi mi takılı kalıyor? | **Koruma sessizce durur** — kullanıcı korunduğunu sanır, hiçbir uyarı çıkmaz | ADR-020 login-tespit yolunu kaldırdığı için bu kod yolu yeniden yazılacaktır; yine de kök neden yazılı olarak doğrulanmalı ki yeni modelde tekrarlanmasın. Repro: §30 Faz 7 bulguları |
+| **Q24** | ✅ Kapandı — Host config'in tek sahibidir ve config'i handshake'te extension'a gönderir; extension kendi kopyasını taşımaz, aldığını doğrular ve yalnız offline fail-closed tahliye için cache'ler. Ekleme/silme `group.add`/`group.remove` ile hosta gider, host UUID atar ve açılıştaki validator'dan geçirip atomik yazar. | Grup ekleme akışı; config-digest fail-closed sözleşmesi korundu | ADR-020 dilim 2 uygulaması |
+| **Q25** | Kullanıcı-eklenen bir sitenin koruması, extension yeniden kurulduğunda **sessizce** durur: optional host izinleri kurulumla gider, host'taki site listesi kalır. Şu an bu durum tespit edilip kullanıcıya gösteriliyor ve tek düğmeyle onarılıyor. Daha iyi bir yol var mı — ör. izin kaybını extension başlangıcında proaktif bildirim olarak yükseltmek? | Kullanıcı korunduğunu sanırken korunmuyor olabilir | Faz 8 kabul testinde izin-kaybı senaryosunun ayrı bir madde olarak koşulması |
 
 ---
 
@@ -1433,8 +1528,9 @@ işaretlenir.
 | **Faz 5** | Tek grup, uçtan uca MVP (vault + host + extension) | Çalışan dikey dilim | ✅ **TAMAMLANDI** — kontrollü uygulama `0.1.9`, düşük-riskli gerçek site `tr.wikipedia.org` `0.1.11`; TPM/Hello + vault + host + extension ve çoklu-cookie group zinciri doğrulandı |
 | **Faz 5.1** | Navigasyon-öncesi kullanıcı kontrollü unlock gate | `webNavigation` yakalama + `unlock.html` + tam URL'ye dönüş | ✅ **TAMAMLANDI** — `0.1.12` manuel test tam geçti; ilk görünür yükleme authenticated, F5 gereksinimi yok |
 | **Faz 6** | Çoklu grup, policy seviyeleri, reconciliation sertleştirme | `0.2.0`, exp-06 kabul raporu | ✅ **TAMAMLANDI** — otomatik kontroller ve iki-grup manuel kabul matrisi 12/12 PASS; Q4/Q12/Q19 kapandı |
-| **Faz 7** | Watcher / monitoring katmanı | v0.2 | — |
-| **Faz 8** | Edge / Brave desteği | v0.3 | — |
+| **Faz 7** | Watcher / monitoring katmanı | `0.3.1`, exp-07 kabul raporu | 🟡 **KISMİ** — çekirdek izleme döngüsü (remote-debugging tespiti, rate-limit, aktif lease sırasında host disconnect) 2026-08-06'da manuel doğrulandı; 9 maddelik kabul matrisinin 5–9 arası maddeleri koşulmadı. Q23 açık |
+| **Faz 8** | **Kullanıcı tanımlı koruma (ADR-020)** — tüm-çerez kasalama, selector/login-tespit yollarının kaldırılması, site ekleme UI'ı | Config şeması v2 + yeni protokol sözleşmesi + kabul raporu | ✅ **Dilim 1 ve dilim 2 uygulandı ve doğrulandı** (2026-08-06); Q24 kapandı. Tam kabul matrisi koşulmadı |
+| **Faz 9** | Edge / Brave desteği | v0.4 | — |
 
 Kernel minifilter ve Firefox desteği yol haritasında **yoktur**; ileride ayrı değerlendirilir.
 
@@ -1521,6 +1617,11 @@ notes, caches, metadata, and temporary working files.
 - Testler **aynı session üzerinde evict/restore** şeklinde yapılır.
 - Gerçek cookie değerleri test raporlarına yazılmaz.
 - Test sonuçları tekrarlanabilir olmalıdır (ortam bilgisi raporda).
+- **`fcp-host.exe` elle çalıştırılmaz.** Host'u Chrome başlatır ve sahibi Chrome'dur
+  (`connectNative`). Chrome veya extension bağlıyken ikinci bir host process'i elle başlatmak audit
+  HMAC zincirini bozar ve sistemi fail-closed kilitler (§23.1). Zorunlu bir tanı gerekiyorsa önce
+  **tüm** Chrome ve host process'leri kapatılır, tanı ayrı `FCP_DATA_DIR` altında yapılır.
+  Bu kural 2026-08-06'da iki kez ihlal edildiği ve her ikisinde de zincir bozulduğu için yazılmıştır.
 
 ### 29.2 Güvenlik kuralları
 
@@ -1550,7 +1651,7 @@ notes, caches, metadata, and temporary working files.
 
 ## 30. Son Durum
 
-**Tarih:** 2026-08-04
+**Tarih:** 2026-08-06
 
 **Kilometre taşı:** Faz 1–4 kapsamındaki dört deney **GO** sonucu verdi ve Faz 5 tek grup uçtan uca
 MVP hem kontrollü uygulamada (`0.1.9`) hem düşük-riskli gerçek site `tr.wikipedia.org` üzerinde
@@ -1880,6 +1981,80 @@ test edilmedi.
 - **Çözüldü — Deney 5 UX borcu:** inject ve native health başarılı olsa da mevcut Wikipedia sayfası görünür auth
   durumunu kendiliğinden yenilemedi; bir F5 gerekti. Bu borç Faz 5.1 `0.1.12` ile kapatıldı.
 
+### Windows Hello isteminin tarayıcının arkasında açılması (2026-08-07)
+
+**Ölçülen davranış:** Hello istemi ekranda normal boyutta açılıyor fakat Chrome penceresinin
+**arkasında** kalıyor; kullanıcı görev çubuğundan öne getirmek zorunda. Chrome kapalıyken veya
+küçültülmüşken istem doğru şekilde önde açılıyor, yani sorun z-sırası/ön plan hakkıdır.
+
+**Kök neden — mimari, hata değil.** Microsoft'un desktop uygulamalar için önerdiği çözüm, WinRT
+nesnesine sahip pencere tanıtıcısı (HWND) vermektir; bu yalnızca `UserConsentVerifier` için
+mevcuttur (`IUserConsentVerifierInterop::RequestVerificationForWindowAsync`). ADR-014 gereği
+kullandığımız **`KeyCredentialManager` için böyle bir interop arayüzü yoktur.** Sahip penceresi
+verilemediği için istem sahipsiz bir üst-seviye pencere olur ve tarayıcının altında kalır.
+Chrome'un kendi şifre yöneticisi öne gelebiliyor çünkü HWND'sini veriyor. `UserConsentVerifier`'a
+geçmek çözüm değildir: yalnız kullanıcı varlığını doğrular, capability için gereken **imzayı
+üretmez**; ikisini birlikte kullanmak arka arkaya iki istem demek olurdu.
+
+**İstem penceresinin ölçülen kimliği (2026-08-07, Windows 11):** sınıf
+`Windows.UI.Core.CoreWindow`, başlık "Windows Giriş Deneyimi", barındıran process `TextInputHost`.
+İlk denemede sınıf adının `credential` içerdiği varsayılmıştı; **ölçüm bunu yanlışladı** ve azaltım
+hiçbir şey bulamadı. Başlık yerelleştirilmiş olduğu için eşleşme ölçütü olamaz; sınıf ise dokunmatik
+klavye, emoji paneli ve IME aday penceresiyle ortaktır, tek başına eşleşmek yanlış pencereyi
+yakalayabilir.
+
+**Uygulanan azaltım (`crypto/prompt_raiser.rs`) — tavsiye niteliğinde, bağlayıcı değil.** İmzalama
+çağrısı sürerken ayrı bir thread çalışır. Başlangıçta aday pencerelerin bir taban listesi alınır ve
+yalnızca **sonradan beliren** bir aday istem kabul edilir; böylece ekranda zaten duran aynı sınıftan
+pencereler elenir. Bulunan pencere `SetWindowPos(HWND_TOPMOST)` + `BringWindowToTop` ile üste
+alınır — bu iki çağrı **ön plan hakkı gerektirmez**, bu yüzden tarayıcının başlattığı bir
+process'ten çalışır. Ardından `SetForegroundWindow` da denenir; reddedilirse sorun değildir.
+
+**Bilinçli olarak reddedilen alternatifler:**
+
+- **`AttachThreadInput`** ile tarayıcının UI thread'ine bağlanıp ön plan hakkı kazanmak: iki
+  process'in girdi kuyruğu birbirine bağlanır ve biri bloke olursa diğeri kilitlenebilir. Bir
+  güvenlik ürününde tarayıcıyı kilitleme riski kabul edilemez.
+- **Sentetik `ALT` tuşu enjeksiyonu** (PowerToys'un kullandığı yöntem): asılma riski yoktur fakat
+  sisteme sahte girdi göndermek, kullanıcı yazarken yan etki üretebilir. Aşama 1 yetersiz kalırsa
+  yeniden değerlendirilecektir.
+- **`chrome.debugger`/CDP ile sayfayı dondurmak** (ilgili bir kullanıcı fikri): reddedildi. CDP,
+  §2.1'de infostealer'ların App-Bound Encryption'ı aştığı yöntem olarak tanımlanır ve Faz 7 izleme
+  katmanı bunu **Yüksek severity** alarm sayar; kendi ürünümüzün sayfalara debugger bağlaması bu
+  duruşla çelişir. Ayrıca güvenliğe katkısı yoktur, yalnız sayfa durumunu korurdu.
+
+**Bozulma davranışı — bağlayıcı gereksinim.** Azaltımın tamamı isteğe bağlıdır: imzalama yolunu
+bloke etmez, hata döndürmez ve tek bir sabit pencere sınıfına bağlı değildir. İleride bir Windows
+güncellemesi pencereyi değiştirirse eşleşme olmaz ve istem bugünkü gibi arkada açılır — **hata
+üretmez, kimlik doğrulama ve koruma çalışmaya devam eder.** `FCP_DISABLE_PROMPT_RAISE=1` ortam
+değişkeni ile yeniden derlemeye gerek kalmadan tamamen kapatılabilir.
+
+**Doğrulanmadı:** Üste alma işleminin klavye odağını da getirip getirmediği (PIN girişi için önemli)
+manuel olarak ölçülmemiştir. Getirmiyorsa kullanıcı bir kez tıklamak zorunda kalır; bu, aşama 2
+kararının girdisidir.
+
+### Q21 revizyonu — inject artık navigasyonla başlar (2026-08-07)
+
+**Karar:** Korunan ve `sealed` bir siteye gidildiğinde ara sayfa açılır ve **Windows Hello
+kendiliğinden başlar**; kullanıcının ayrıca "Cookie ile giriş yap" düğmesine basması gerekmez.
+Aynı davranış, host yeniden bağlandıktan sonraki uzlaştırma restore'u için de geçerlidir. Ara
+sayfa kaldırılmamıştır: hedef adresi taşır, iptal/hata durumunda dönülecek yeri sağlar ve tekrar
+deneme düğmesini barındırır.
+
+**Gerekçe:** Kullanıcının korunan siteye gitmesi zaten "bu oturumu aç" talebidir; araya ikinci bir
+tıklama koymak koruma sağlamayan bir sürtünmeydi. Manuel kullanımda rahatsız edici bulundu.
+
+**Güvenlik etkisi — yoktur.** Hello onayı hâlâ zorunludur ve her inject için tazedir; capability
+grup kimliği, operasyon, expiry, monoton sequence ve nonce'a bağlı tek kullanımlıktır
+([ADR-017](#adr-017--inject-hello-capability-beş-alana-bağlı-ve-tek-kullanımlık-olacaktır),
+[ADR-018](#adr-018--hello-yalnız-injectunlock-yönünde-zorunludur)). Değişen tek şey **isteği kimin
+başlattığıdır**, onayın kendisi değil.
+
+**Kaybedilen özellik, açıkça kaydedilir:** Faz 5.1'in "Hello beklenmedik anda çıkmasın" UX ilkesi
+artık geçerli değildir. Kullanıcı korunan bir siteye gittiğinde prompt kendiliğinden gelir.
+İzlenmesi gereken risk: aynı anda birden çok korunan sekme açılırsa (ör. tarayıcı açılışında oturum
+geri yüklenirken) arka arkaya birden çok prompt oluşabilir. Bu ölçülmemiştir.
+
 ### Faz 5.1 navigasyon-öncesi unlock gate sonucu (`0.1.12`)
 
 - **PASS — sealed + yeni navigasyon:** `webNavigation.onBeforeNavigate` gerçek sayfa yerine tek
@@ -1929,6 +2104,137 @@ test edilmedi.
   buna rağmen yeniden Hello UI gösterdi. Uygulamadaki 10 dk değer OS'nin promptsuz kalma garantisi değil,
   handle yeniden kullanım üst sınırıdır. Güvenlik açısından fail-safe, UX açısından Q22 ile izlenecek bir
   açık ölçümdür; Faz 6'yı bloklamaz.
+
+### Faz 7 manuel test oturumu (`0.3.1` — 2026-08-06)
+
+**Sonuç: kısmi. Çekirdek döngü doğrulandı, kabul matrisi tamamlanmadı, bir açık bug kaldı (Q23).**
+
+Ortam: Windows 11 Pro `10.0.26200`, Chrome, host ve extension `0.3.1`, gruplar Wikipedia (Dengeli)
+ve kontrollü uygulama (Kritik).
+
+**Kök neden — oturumun ilk yarısını tüketen sorun.** Oturum boyunca gözlenen "Hello hiç çıkmıyor",
+"grup `sealed`'a düşmüyor", "kendiliğinden `external_logout` oluyor" belirtilerinin tamamı tek bir
+operasyonel hatadan kaynaklandı: tanı amacıyla `fcp-host.exe` elle çalıştırılırken Chrome'un kendi
+host process'i de bağlıydı. İki process aynı audit HMAC zincirine yazınca zincir bozuldu
+(`vault format error: audit sequence regression or gap detected`) ve host **her açılışta fail-closed
+çıktı**. Extension'ın 1 sn'lik reconnect döngüsü bunu `Unchecked runtime.lastError: Error when
+communicating with the native messaging host` seli olarak gösterdi. Bozuk audit dizini kenara alınıp
+(`audit.corrupted-<zaman damgası>`; silinmedi) host temiz zincirle başlatıldıktan sonra sistem
+düzgün çalıştı. Bu kalıcı bir kod düzeltmesi **değildir**; sertleştirme önerisi §23.1'de,
+test kuralı §29.1'de yazılıdır. Kaynak kodda hiçbir değişiklik yapılmadı.
+
+**Doğrulanan davranışlar (tekrarlı, temiz zincirle):**
+
+- **Çekirdek döngü uçtan uca PASS.** Wikipedia'da gerçek oturum → sessiz enrollment (Hello yok) →
+  sekme kapanışı → `last_tab` alarmı Dengeli policy'nin 120 sn grace'i ile kuruldu → alarm ateşlendi →
+  gerçek tahliye (audit `eviction success`, 6 cookie fiilen silindi) → `sealed` → yeni navigasyon →
+  `unlock.html` ara sayfası açıldı → Hello → inject → sayfa authenticated yüklendi. Döngü art arda
+  birkaç kez tekrarlandı.
+- **Hello cache yolu** aynı oturumda hem `hello_fresh` hem `hello_cached` olarak gözlendi; ikisi de
+  çalıştı (Q22 davranışıyla tutarlı).
+- **Matris #1 (baseline) PASS** — boşta hiçbir uyarı/bildirim üretilmedi, yalnız 30 sn'lik
+  `fcp-monitor-poll` alarmları.
+- **Matris #2 (remote-debugging tespiti) PASS** — `%TEMP%` altında ayrı profil ve
+  `--remote-debugging-port=0` ile açılan ikinci Chrome, audit'e `monitor/high/remote_debugging_port`
+  olarak düştü ve **görünür Windows bildirimi oluştu**. Bildirim, SVG→PNG ikon düzeltmesinden sonra
+  çalışmaktadır (aşağıya bkz.).
+- **Matris #4 (aktif lease sırasında host sonlandırma) PASS** — `Stop-Process` sonrası audit'e
+  `monitor/high/host_disconnect_active_lease` düştü, host ~38 sn içinde kendiliğinden geri geldi ve
+  `reconciliation success` ile kapandı.
+- **İzleme katmanı cookie sistemini bozmuyor.** Remote-debugging testi aktif bir Wikipedia lease'i
+  varken tekrarlandı; ilgili grupta hiçbir `session_invalidation` üretilmedi.
+
+**Koşulmayan maddeler:** kabul matrisi #3 (rate-limit ikinci tur), #5 (sealed grupta dış cookie),
+#6 (selector değişimi), #7 (`FCP_MONITOR_RECONCILIATION_FIXTURE`), #8 (outbox/reconnect),
+#9 (audit yeniden açılış doğrulaması). Faz 7 bu nedenle **kabul edilmiş sayılmaz**.
+
+**Açık bug — Q23.** Kontrollü uygulama grubu bir kez `restore_rejected` ile invalidate olduktan
+sonra bir daha kendiliğinden enroll olmadı: kullanıcı siteye taze login yaptı, 10+ dakika beklendi,
+audit'e hiçbir `enrollment` kaydı düşmedi ve grup `uninitialized` kaldı. Extension reload edilince
+düzeliyor. Bu **sessiz bir koruma kaybıdır** — kullanıcıya hiçbir uyarı çıkmaz. ADR-020 bu kod
+yolunu zaten kaldıracak olsa da kök neden yazılı olarak doğrulanmalıdır.
+
+**Önceki oturumdan devralınan, bu oturumda doğrulanan düzeltme:** monitor bildirimi ikonu SVG idi;
+`chrome.notifications.create` `iconUrl` için SVG kabul etmediğinden bildirim sessizce hiç
+gösterilmiyordu. PNG ikona geçildi (`extension/monitor-icon.png`) ve bu oturumda gerçek bildirimin
+göründüğü doğrulandı.
+
+**Bilinen, düşük öncelikli:** WMI process gözlemcisinin dedup anahtarı `(process_id, signal)`
+olduğundan tek bir Chrome başlatması ~9 tekrarlı uyarı üretiyor (renderer/GPU/utility alt process'leri
+komut satırını taşıyor). Kullanıcı tarafından bilinçli olarak ertelendi.
+
+### ADR-020 dilim 1 uygulaması ve doğrulaması (2026-08-06)
+
+Aynı gün, ADR-020 kararının birinci dilimi kodlandı ve manuel doğrulandı. Kapsam: config şeması v2
+(`cookie_selectors[]`/`health_check`/`domains[]`/`navigation_patterns[]` yerine tek `scope` alanı),
+kapsam bazlı tüm-çerez okuma/yazma/silme, login-tespit yollarının silinmesi
+(`waitForStableEnrollmentCookies`, `hasRequiredEnrollmentCookies`, site-özel `healthCheck`), inject
+başarısının doğrulanmış round-trip'e indirgenmesi, §13.2.2 sealed kuralı, boş-kavanoz kuralı
+(`scope_empty` invalidation sebebi) ve uzantı ikonuyla jest tabanlı enrollment.
+
+Kullanılmayan `scripting` izni manifest'ten kaldırıldı; cookie host izinleri tüm-çerez modeli
+şemadan bağımsız çerez taşıdığı için `*://` kalıplarına genişletildi (ADR-015 portsuzluk kuralı
+korunarak).
+
+**Doğrulama:** kilitli grupta `chrome.cookies.getAll({domain:"wikipedia.org"})` **0**, unlock
+sonrası **14** çerez döndürdü (eski selector modeli 7 selector taşıyordu). Sealed → gate → Hello →
+inject → leased döngüsü yeni modelde çalıştı.
+
+**Doğrulanmayanlar:** `localhost`/kontrollü uygulama grubu bu modelde test edilmedi; idle, lock,
+expiry tetikleyicileri ve boş-kavanoz (`scope_empty`) yolu manuel olarak koşulmadı. Faz 7 kabul
+matrisinin kalan maddeleri de bu model üzerinde yeniden koşulmalıdır.
+
+### ADR-020 kabul matrisi — yeni model üzerinde koşum (2026-08-06/07)
+
+Model ve config sahipliği değiştiği için Faz 7 matrisi yeni kod üzerinde baştan koşuldu.
+
+**Geçenler:**
+
+- **Çekirdek döngü (A):** kontrollü uygulamada giriş → son sekme kapanışında sessiz yakalama →
+  `sealed` → ara sayfa → Hello → restore. Kilitli durumda kapsamda **0** çerez.
+- **Kullanıcı tanımlı koruma (B):** `x.com` popup'tan eklendi (Chrome izin diyaloğu), yakalandı,
+  gate + Hello ile geri yüklendi, popup'tan kaldırıldı. İzin kaybı senaryosu (uzantı silinip
+  yeniden kurulunca) tespit edilip popup'tan onarıldı.
+- **İzleme (C1, C3):** remote-debugging tespiti bildirim üretti; aktif lease sırasında host
+  sonlandırıldığında fail-closed temizlik, `host_disconnect_active_lease`, otomatik reconnect ve
+  `reconciliation success` zinciri audit'te doğrulandı, ardından inject başarıyla tamamlandı.
+
+**Bu koşumda bulunan ve düzeltilen iki sorun:**
+
+1. **Süresi dolmuş çerez bütün restore'u düşürüyordu** — bkz. ADR-020 kabul edilen sınırlar.
+2. **Uyarı rozeti hiç temizlenmiyordu.** Yüksek/orta severity bir olayda rozet kırmızıya dönüyor
+   fakat hiçbir yerde geri alınmıyordu; kullanıcı rozeti görüp popup'ı açtığında da **ne olduğunu
+   okuyamıyordu**. Kalıcı ve okunamayan bir uyarı, kullanıcıya uyarıyı yok saymayı öğretir. Son
+   olay artık popup'ta okunabilir metin olarak (sinyal + ilgili site + saat) gösteriliyor ve
+   popup'ın açılması onay sayılarak rozet temizleniyor.
+
+**Koşulmayanlar / ölçülenler:**
+
+- **C2 (rate-limit) bir tasarım eksiği ortaya çıkardı.** Ölçümde, ilk uyarı onaylandıktan
+  ~20 saniye sonra tetiklenen ikinci gerçek olay kullanıcıya **hiçbir iz bırakmadı**: rate-limit
+  yalnız bildirimi değil, rozeti ve kaydı da bastırıyordu. Rate-limit'in amacı bildirim spamını
+  önlemektir, olayı gizlemek değil. İki kanal ayrıldı: **bildirim (toast)** rahatsız edici kanal
+  olduğu için 10 dk sınırlı kalır; **rozet ve popup kaydı** her olayda güncellenir ve tekrar sayısı
+  gösterilir. Böylece onaylanmış bir uyarının hemen ardından gelen olay sessizce kaybolmaz.
+  Chrome bildiriminin bildirim merkezinde kalıcı olması ayrı bir OS davranışıdır; ölçümü buna göre
+  yorumlamak gerekir.
+- **C4 (outbox/reconnect) koşulamadı:** host öldürüldüğünde Chrome onu neredeyse anında yeniden
+  başlattığı için olayların biriktiği bir pencere yakalanamadı. Ayrı bir yöntem gerekiyor.
+- **Dedup hatası ölçüldü ve sürüyor:** tek bir Chrome açılışı için **200 ms içinde 9 adet**
+  `remote_debugging_port` kaydı düştü (audit `sequence 86–93`). Sebep, WMI process gözlemcisinin
+  dedup anahtarının `(process_id, signal)` olması ve bir Chrome başlatmasının komut satırını
+  taşıyan çok sayıda alt process doğurması. Kullanıcı tarafından bilinçli olarak ertelendi;
+  güvenlik etkisi yok, gürültü sorunudur.
+
+### Değişen varsayımlar (revizyon 3 — 2026-08-06)
+
+| Önceki varsayım | Ölçülmüş / güncel durum |
+|---|---|
+| Site profilleri elle küratörlük + ampirik türetme ile üretilir (§17.1) | Terk edildi. Ölçeklenmiyor ve kullanıcı kendi sitesini ekleyemiyor. ADR-020: kapsam kullanıcı jestiyle eklenir, tüm çerezler kasalanır. |
+| Enrollment'ı "login oldu mu" sezgisi tetikler | Terk edildi. 2026-08-06'da bu yolun kırılgan olduğu ölçüldü (Q23) ve CentralAuth cookie rotasyonunun gerçek logout'tan ayrılması güvenilir değil. Yeni modelde enrollment açık kullanıcı jestidir. |
+| Site-özel `health_check` restore doğrulamasının temelidir | Yeni modelde kaldırılıyor. Ölü oturum kendiliğinden düzelir: bayat çerezler geri konur, kullanıcı logged-out görür, tekrar giriş yapar, sonraki kapanışta yeni çerezler kasalanır. Bedel bir boşa Hello jestidir; güvenlik açığı değildir. |
+| `SEALED` durumunda oluşan cookie şüphelidir ve uyarı üretmelidir | Tüm-çerez modelinde sürdürülemez (analytics/prefetch sürekli tetikler). Yeni kural §13.2.2: ilgili sekme yoksa sessizce sil, varsa unlock akışına gir. |
+| Audit zinciri tek yazıcı varsayımıyla güvenlidir | Yanlış. İki eşzamanlı host process'i zinciri kalıcı olarak bozuyor ve sistemi elle müdahale gerektirecek şekilde kilitliyor (§23.1). |
 
 ### Değişen varsayımlar (revizyon 2 — 2026-08-03)
 
@@ -2005,24 +2311,85 @@ gösterilmez. Deney 5, aynı zinciri düşük-riskli gerçek Wikipedia hesabınd
 çoklu-cookie grubuyla doğruladı; external logout artık stale vault'u sessizce geçersiz kılar. Bu sonuç
 daha yüksek riskli sitelere veya farklı auth/storage modellerine kendiliğinden genellenmez.
 
+### 2026-08-07/08 oturumu — ADR-021 (Hello backend göçü) ve commit hijyeni
+
+**Bağlam:** Bu oturuma girerken ADR-020'nin her iki dilimi de (yukarıya bkz.) ve Faz 7 izleme
+katmanı **kodda tamamlanmış ama hiç commit edilmemiş** durumdaydı (son commit 2026-08-05,
+`1f39c9a`, "Faz 7 WIP ... known broken"). Bu, kendi başına bir bulgu: günler süren gerçek iş
+güvencesiz duruyordu.
+
+- Windows Hello onay penceresinin tarayıcının arkasında açılması sorunu araştırıldı. Doğrudan
+  pencere manipülasyonu (`SetWindowPos`/`BringWindowToTop`/`SetForegroundWindow`, hatta
+  `HWND_BOTTOM` ile z-sırasını değiştirme) `KeyCredentialManager`'ın onay penceresine karşı
+  `ERROR_ACCESS_DENIED` ile tutarlı biçimde reddedildi — hem doğrudan hedef olarak hem anchor
+  referansı olarak. Bitwarden'ın kendi mühendisliği (GitHub issue #5287) aynı platform
+  sınırlamasını bağımsız olarak doğruladı: "Windows' API currently lacks the ability to set a
+  parent window for these kinds of requests." Bu, kod hatası değil, dokümante edilmemiş bir
+  Windows platform boşluğu olarak kayda geçti.
+- `webauthn.dll` (`WebAuthNAuthenticatorMakeCredential`/`GetAssertion`) gerçek `hWnd` sahipliğini
+  destekleyen alternatif olarak spike'landı (`poc/webauthn-probe/`) ve sentetik RP id/origin ile
+  çalıştığı, pencere sahipliğinin gerçekten çalıştığı doğrulandı. Karşılığında ölçülen kayıp:
+  `WebAuthNAuthenticatorGetAssertion` durum tutmuyor (stateless); `KeyCredentialManager`'ın
+  handle-tabanlı sessiz tekrar-onay penceresi karşılığı yok, yani `hello_cache_ms` artık fiilen
+  etkisiz (bkz. [ADR-021](#adr-021--windows-hello-imzalama-arka-ucu-webauthndlle-taşınmıştır)).
+- Göç uygulandı: `native-host/src/crypto/hello.rs` `webauthn.dll` üzerinden imzalama/doğrulamaya
+  yeniden yazıldı, `prompt_raiser.rs` (harici pencere-yükseltme iş-arounduı) tamamen kaldırıldı.
+  Ölçülen ve düzeltilen iki gerçek hata: allow-list yanlış/eski struct alanına yazılıyordu
+  (`AllowCredentialCount: 0` — WebAuthN operational event log ile doğrulandı) ve `dwVersion`
+  eski sürümde bırakıldığı için yeni alanlar sessizce yok sayılıyordu.
+- "Kutu geç açılıyor" şikâyeti Windows'un kendi `Microsoft-Windows-WebAuthN/Operational` event
+  log'u (milisaniye hassasiyetinde) ile teşhis edildi: CTAP başlangıcı ile NGC/PIN kutusunun
+  başlaması arasında ~1 saniyelik açıklanamayan bir boşluk var, ama bu **Chrome'un kendi
+  webauthn.dll çağrısında da birebir aynı** (ölçülen: 1.066s bize karşı 1.064s Chrome'a) —
+  evrensel Windows maliyeti, koddan kaynaklanmıyor. Kod imzalama (self-signed sertifika ile
+  test edildi) bu boşluğu etkilemedi; teori çürütüldü ve temizlendi.
+- Ayrı, alakasız bir hata bulundu ve düzeltildi: `cookie_roundtrip_failed` sağlık kontrolü
+  youtube.com'da tekrarlanan bir başarısızlık üretiyordu. Kök neden: sitenin kendi sayfa script'i
+  restore penceresinde kendi çerezini (`GPS`) ekliyordu ve "tam eşitlik" kontrolü bunu hata
+  sanıyordu. Düzeltme: alt-küme kontrolüne (yalnızca kasalanan çerezlerin gerçekten geldiğini
+  doğrula) geçildi, artı geçici okuma gecikmesi için sınırlı retry eklendi.
+- **Commit hijyeni:** Faz 7 + ADR-020 birikimi ve ADR-021 göçü iki ayrı, kendi başına derlenen
+  commit'e bölündü (`c9116f7`, `92845bf`); `poc/webauthn-probe/target/` yanlışlıkla stage'e giren
+  derleme çıktısı ayıklanıp `.gitignore`'a eklendi.
+
 ---
 
 ## 31. Sonraki Kesin Adım
 
-**Faz 7 kapsam kararı — watcher / monitoring katmanı.**
+**Düzeltme (2026-08-08):** Bu bölüm önceki sürümde "Faz 8 tasarımı henüz yapılmadı" diyordu; bu
+yanlıştı — ADR-020'nin uygulama sözleşmesi zaten yazılmış, kodlanmış ve her iki dilimiyle
+(tüm-çerez kasalama + kullanıcının kendi sitesini eklemesi) 2026-08-06'da manuel doğrulanmıştı.
+Belgenin özet/yol haritası bölümleri bunu yansıtmıyordu; §30 ve ADR-020'nin kendisiyle
+tutarsızdı. Bu güncellemeyle düzeltildi (bkz. üstteki [Durum](#fursoy-cookie-protector--proje-planı-ve-teknik-karar-kaydı)
+özeti, [§25](#25-yol-haritası) Faz 8 satırı, ADR-020).
 
-Faz 6 `0.2.0` otomatik kontrolleri ve iki-grup manuel kabul matrisi 12/12 PASS ile tamamlandı. Sıradaki
-yol haritası adımı Faz 7'dir; ancak watcher'ın kalıcı Windows user agent olup olmayacağı Q15'i, extension
-yokken bildirim kanalı Q17'yi ve yeni saldırı yüzeyi/kurulum/güncelleme modelini etkiler. Bu nedenle önce
-dar bir Faz 7 tasarım ve implementasyon planı kullanıcıya sunulacaktır.
+**Gerçek durum:** Faz 8 (ADR-020) tasarım ve uygulama açısından tamamlanmıştır; kalan iş yalnızca
+**tam kabul matrisinin koşulmasıdır**, yeni bir tasarım kararı değil. Ayrıca 2026-08-07/08
+oturumunda ADR-021 ile Hello imzalama arka ucu değiştirildi (webauthn.dll) — bu da ayrı bir
+kabul/regresyon turu gerektirir.
 
-**Kullanıcının açık onayı olmadan Faz 7 kodu, gerçek hesap testi veya yüksek riskli site testi
-başlatılmayacaktır.**
+**Açık kalan, gerçekten "sıradaki iş" olan maddeler** (öncelik sırası kullanıcı tarafından
+belirlenecektir):
 
-Q20 medya/pasif görünür kullanım, Q18 partitioned cookie, Q8 çoklu profil/incognito ve Q15/Q17 kalıcı
-agent/bildirim açık kalır. Q22, Windows'un aynı-handle promptsuz cache süresini ayrıca ölçer ve Faz 7 için
-blocker değildir. Faz 5.1'in blocking olmayan `webNavigation` sınırı kabul edilmiştir; ağ seviyesinde kesin pre-request
-engelleme gerekli görülürse blocking/DNR tasarımı ayrı bir iş olacaktır.
+1. **Faz 7 izleme katmanının kabul matrisi** — çekirdek döngü `0.3.1`'de doğrulandı ama tam matris
+   koşulmadı; son commit mesajı "host crashes, known broken" notu taşıyordu. Bugünkü Hello
+   göçünün (ADR-021) bunu düzeltip düzeltmediği **doğrulanmadı** — ayrı bir kontrol gerekir.
+2. **ADR-020'nin tam kabul matrisi** — dilim 1+2 birlikte, birden fazla site ve policy seviyesinde
+   uçtan uca koşulmadı (yalnızca Wikipedia + x.com nokta testleri yapıldı).
+3. **ADR-021 kabulü** — webauthn.dll göçünün gerçek kullanımda (birden fazla site, birden fazla
+   gün) regresyon üretmediğinin doğrulanması; özellikle `hello_cache_ms`'in artık etkisiz olmasının
+   kabul edilebilir olup olmadığına dair kullanıcı geri bildirimi.
+4. **Q23** (başarısız restore sonrası re-enroll olmama) kök nedeni, ilgili eski kod yolu
+   kaldırılmış olsa bile yazılı olarak doğrulanmalı; aynı hata sınıfının yeni modelde
+   tekrarlanmadığı gösterilmelidir.
+
+**Kullanıcının açık onayı olmadan yüksek riskli site testi veya gerçek ana hesap testi
+başlatılmayacaktır.** §29.1 test sırası geçerliliğini korur.
+
+Q20 medya/pasif görünür kullanım, Q18 partitioned cookie, Q8 çoklu profil/incognito ve Q15/Q17
+kalıcı agent/bildirim açık kalır. Q22 blocker değildir. Faz 5.1'in blocking olmayan `webNavigation`
+sınırı kabul edilmiştir; ağ seviyesinde kesin pre-request engelleme gerekli görülürse blocking/DNR
+tasarımı ayrı bir iş olacaktır.
 
 ---
 
@@ -2473,4 +2840,222 @@ engeller.
 medya-aware idle sonraki kararlardır. Config/framing/nonce ihlali bağlantı-geneli fail-closed kalır; sıradan
 grup hatası yalnız ilgili grubu `degraded` yapar.
 
+> **ADR-020 notu:** Bu ADR'nin "dinamik kullanıcı grubu sonraki karardır" sınırı ADR-020 ile
+> karara bağlanmıştır. Config-authoritative ilkesi ve grup-izolasyonu geçerliliğini korur; değişen
+> şey config'in kaynağıdır (elle yazılan dosya → kullanıcı jestiyle büyüyen kayıt). Digest/fail-closed
+> sözleşmesinin çalışma zamanında nasıl korunacağı sorusu **Q24** idi; ADR-020'nin "host config'in
+> tek sahibidir" çözümüyle 2026-08-06'da kapandı (bkz. ADR-020 "Q24 çözümü").
+
 ---
+
+### ADR-020 — Korunan site kullanıcı tarafından eklenir ve tüm çerezler kasalanır
+
+**Durum:** Kabul edildi (2026-08-06). **Her iki dilim de uygulandı ve doğrulandı** (bkz. aşağıdaki
+tablo); tam kabul matrisi koşulmadı.
+
+**Uygulama durumu:**
+
+| Dilim | Kapsam | Durum |
+|---|---|---|
+| 1 | Config şeması v2 (`scope`), tüm-çerez kasalama, login tespitinin kaldırılması, sealed/boş-kavanoz kuralları, jest ile enrollment | ✅ Uygulandı, 2026-08-06 manuel doğrulandı |
+| 2 | Kullanıcının kendi sitesini eklemesi: çalışma zamanı config (Q24), `group.add`/`group.remove`, `optional_host_permissions`, popup UI | ✅ Uygulandı; `x.com` üzerinde ekleme → yakalama → gate → Hello → restore turu 2026-08-06'da çalıştı. Tam kabul matrisi koşulmadı |
+
+**Q24 çözümü — host config'in tek sahibidir.** Extension kendi config dosyasını taşımaz; config'i
+handshake'te host'tan alır, doğrular ve yalnız host erişilemezken fail-closed tahliye yapabilmek
+için `chrome.storage.local`'a cache'ler. Digest artık "iki taraf bağımsızca aynı dosyaya mı sahip"
+değil, "gönderilen config bozulmadan ulaştı mı" anlamındadır; geçersiz config extension'ı durdurur.
+Kullanıcı eklemeleri `group.add`/`group.remove` ile hosta gider, host UUID atar, **açılışta
+kullandığı aynı validator'dan geçirir** (böylece çalışma zamanında kendi reddedeceği bir config
+üretemez) ve vault ile aynı write/read-back/replace disipliniyle atomik yazar.
+
+**Ölçümle bulunan sınır — izin ile config ayrışabilir (2026-08-06).** Optional host izinleri
+extension **kurulumuna** bağlıdır; extension silinip yeniden yüklendiğinde kaybolurlar. Korunan
+site listesi ise artık host'ta kullanıcı verisi olarak kalıcıdır. Bu ikisi ayrışınca korunan bir
+site için `chrome.cookies.getAll` sıfır çerez döndürür ve her restore `cookie_set_permission` ile
+başarısız olup tekrar denenir. Manuel testte tam olarak bu gözlendi (`chrome.permissions.getAll`
+çıktısında eklenen sitenin origin'i yoktu). **Düzeltme:** lease, tahliye ve navigasyon-gate
+yollarının üçü de işleme başlamadan önce `chrome.permissions.contains` ile kapsam iznini denetler;
+izin yoksa hiçbir cookie çağrısı yapılmaz, grup popup'ta "izin yok — koruma çalışmıyor" olarak
+**görünür kılınır** ve tek düğmeyle izin yeniden verilebilir. Sessiz başarısızlık yerine görünür
+degraded durum, §29.2 ile uyumludur.
+
+**Dilim 1 ölçüm dayanağı (2026-08-06):** `tr.wikipedia.org` grubunda kilitli durumda
+`chrome.cookies.getAll({domain:"wikipedia.org"})` **0** çerez döndürdü; unlock sonrası aynı çağrı
+**14** çerez döndürdü. Eski selector modelinde grup 7 selector taşıyordu ve tahliye yalnız onları
+kaldırıyordu. Bu ölçüm, kapsamdaki bütün çerezlerin — analytics/tercih çerezleri dahil — gerçekten
+kasalandığını ve geri yüklendiğini doğrular. Otomatik kontroller: Rust 43/43, `clippy -D warnings`,
+`cargo fmt`, extension `tsc` ve monitor testleri PASS.
+
+**Bağlam:** Faz 5–7 boyunca korunan gruplar, elle araştırılmış cookie selector listeleriyle
+(`trwikiSession`, `centralauth_Session`, …) tanımlandı ve enrollment'ı "zorunlu selector'lar belirdi
+mi" sezgisi tetikledi. Bu modelin iki yapısal sorunu ölçüldü:
+
+1. **Ölçeklenmiyor.** Her yeni site için cookie isimlerinin elle araştırılması gerekir; kullanıcı
+   kendi sitesini ekleyemez. Ürünün gerçek kullanım senaryosu bunu gerektirir.
+2. **Login tespiti kırılgan.** 2026-08-06 manuel oturumunda CentralAuth'un arka planda yaptığı cookie
+   rotasyonu ile gerçek logout'un ayırt edilmesi güvenilir olmadı; ayrıca başarısız bir restore
+   sonrası grup bir daha hiç enroll olmadı (Q23) ve bu **sessiz** bir koruma kaybı üretti.
+   `waitForStableEnrollmentCookies` gibi zamanlama sezgileri (3 sn stabilite, 20 sn timeout) yarış
+   koşullarına açık.
+
+**Karar:**
+
+- Korunacak site **kullanıcı tarafından açık bir jestle eklenir** (ayarlar ekranı veya sayfa
+  üzerinden "bu siteyi korumaya al"). Ekleme anı serbesttir; kullanıcının sitenin içinde olması
+  gerekmez.
+- Ekleme anında **oturum durumu sorgulanmaz.** "Giriş yapılmış mı", "bu bir login mi", "bu logout
+  muydu" gibi hiçbir değerlendirme yapılmaz. Sistem çerezlerin anlamını yorumlamaz.
+- Grubun kapsamı, eklenen adresin **kayıtlı domaini (eTLD+1)** olarak türetilir.
+- Tahliye anında kapsamdaki **tüm çerezler** kasalanır; unlock anında aynı küme geri yazılır.
+  Kasa artık bir "oturum" değil, **çerez kavanozu**dur.
+- `cookie_selectors[]`, `required_for_enrollment` ve site-özel `health_check` tanımları kaldırılır.
+  `session.invalidate` / `restore_rejected` yolu da kaldırılır.
+- Tahliye anında kapsamda hiç çerez yoksa grup `SEALED`'a geçmez ve gate açılmaz; böylece kullanıcı
+  zaten çıkışlıyken gereksiz Hello istenmez.
+- `SEALED` durumunda ortaya çıkan çerez için §13.2.2 kuralı uygulanır: ilgili sekme yoksa sessizce
+  silinir, varsa unlock akışına girilir.
+
+**Gerekçe:**
+
+- Login tespitini kaldırmak, 2026-08-06 oturumunda gözlenen hata sınıfının tamamını ortadan
+  kaldırır: makine artık tahmin etmez, kullanıcı söyler.
+- **Ölü oturum kendiliğinden düzelir.** Kasada bayat çerezler varsa geri konur, kullanıcı
+  logged-out görür, tekrar giriş yapar, sonraki kapanışta yeni çerezler kasalanır ve eskisinin
+  üzerine yazılır. Bedeli boşa harcanmış bir Hello jestidir — güvenlik açığı değil, UX maliyeti.
+  Faz 5'te bu durumu tespit etmek için yazılan `session.invalidate` protokolü gereksizleşir.
+- Tehdit modeliyle **daha uyumlu**: infostealer profildeki tek bir session token'ını değil, bulduğu
+  her şeyi alır. Tüm çerezleri kasalamak T1–T5 için gerçek kapsamı genişletir.
+- Reklam/analitik çerezlerinin de kasalanması ek maliyet değildir; kasa şifrelidir ve boyut sınırı
+  FCPV v1'de 4 MiB'dır.
+
+**Alternatifler:**
+
+- **Selector modelini sürdürmek** — reddedildi: ölçeklenmiyor, kullanıcı sitesi ekleyemiyor.
+- **Otomatik "her yerdeki tüm çerezleri topla"** — reddedildi: hangi sitenin korunduğu kullanıcı
+  kararı olmaktan çıkar, kapsam kontrolsüz büyür.
+- **Genel bir restore doğrulama sezgisi** (restore sonrası site kendi çerezlerimizi `expired_overwrite`
+  ile silerse oturumu ölü say) — teknik olarak çalışabilir ve 2026-08-06 loglarında bu imza net
+  gözlendi; ancak kullanıcı bilinçli olarak sinyal tabanlı karmaşıklık istemedi ve kendiliğinden
+  düzelme davranışı bunu gereksiz kılıyor. Reddedildi, kayıt olarak burada tutulur.
+
+**Kabul edilen sınırlar:**
+
+- **Süresi dolmuş çerezler geri yüklenmez.** Tüm-çerez modelinde kapsama kısa ömürlü çerezler de
+  girer (bot-yönetimi çerezleri gibi, dakikalar mertebesinde). Kasalanma ile restore arasında
+  süresi geçen bir çerez için `chrome.cookies.set` çerezi kabul edip anında düşürür ve **hata
+  vermeden hiçbir şey döndürmez** (`cookie_set_no_result`); tek bir ölü çerez bütün restore'u
+  düşürüyordu. 2026-08-06 manuel testinde `x.com` üzerinde gözlendi. Restore artık süresi geçmiş
+  kayıtları atlar ve round-trip doğrulamasını kalan kümeye uygular. Veri kaybı değildir: tarayıcı
+  o çerezi zaten atmış olurdu ve site kendisi yeniden üretir.
+- **Farklı eTLD+1'deki SSO çerezleri kapsam dışıdır.** `auth.wikimedia.org` örneğinde olduğu gibi
+  oturum başka bir kayıtlı domaine bağlı olabilir. İşlev bozulmaz (o çerezler tarayıcıda kalır),
+  fakat koruma eksik kalır. Kullanıcı o domaini ayrıca ekleyebilir. Ürün metninde gizlenmez.
+- Tercih/consent/dil çerezleri de tahliye edilir. Unlock'ta geri geldikleri için kalıcı kayıp
+  yoktur; kilitliyken siteye girilirse bir kereye mahsus consent bandı görülebilir.
+
+**Sonuç:** §17.1–17.3 tarihsel kayıt olarak korunur, yeni model §17.4'tedir. Q4 yürürlükten
+kalkmıştır. Uygulama Faz 8'dir; Q24 (çalışma zamanı config digest) kapanmıştır ve her iki dilim de
+uygulanmıştır (bkz. yukarıdaki uygulama durumu tablosu).
+
+---
+
+### ADR-021 — Windows Hello imzalama arka ucu webauthn.dll'e taşınmıştır
+
+**Durum:** Kabul edildi ve uygulandı (2026-08-08).
+
+**Bağlam:** Faz 5'ten beri inject capability'sini imzalamak için WinRT `KeyCredentialManager`
+kullanılıyordu. Bu API'nin onay penceresi (`Credential Dialog Xaml Host`) hiçbir owner pencereyle
+ilişkilendirilmeden oluşturuluyor ve bu yüzden çoğunlukla tetikleyen Chrome penceresinin
+**arkasında** açılıyordu — kullanıcı PIN'i girmesi gereken pencereyi görmüyor, işlemin
+donduğunu düşünüyordu.
+
+**Araştırılan ve reddedilen düzeltmeler:**
+
+1. **Harici pencere manipülasyonu** (`SetWindowPos`/`BringWindowToTop`/`SetForegroundWindow`,
+   `HWND_TOPMOST`, `HWND_BOTTOM` ile tetikleyen pencereyi geriye itme). Ölçüldü: bu pencereye
+   yönelik her çağrı — doğrudan hedef olarak da, z-sırası anchor referansı olarak da —
+   `ERROR_ACCESS_DENIED` (`0x80070005`) ile tutarlı biçimde reddedildi. Bu, kimlik doğrulama
+   arayüzlerini dışarıdan manipülasyona (spoofing/overlay saldırılarına) karşı koruyan kasıtlı bir
+   Windows sertleştirmesi olarak değerlendirildi.
+2. **Bitwarden'ın bağımsız doğrulaması** (GitHub `bitwarden/clients` issue #5287): Bitwarden
+   mühendisliği aynı sorunu kendi masaüstü uygulamasında yaşadığını ve aynı duvara çarptığını
+   resmen doğruladı: *"Windows' API currently lacks the ability to set a parent window for these
+   kinds of requests."* Bitwarden da yalnızca "öne çekmeyi dene" tipi garantisiz bir mitigasyon
+   kullanıyor. Bu, sorunun bu projeye özgü bir kod hatası değil, dokümante edilmemiş, genel bir
+   Windows platform boşluğu olduğunu doğruladı.
+3. **`KeyCredentialManagerShowUIOperation`** (Win32, `keycredmgr.h`, gerçek `hWndOwner` alıyor) —
+   incelendi ve reddedildi: yalnızca `Provisioning`/`PinChange`/`PinReset` işlemlerini destekliyor,
+   imzalama (`RequestSignAsync`) kapsamı dışında.
+
+**Karar:** İmzalama arka ucu `windows::Win32::Networking::WindowsWebServices` (`webauthn.dll`,
+`WebAuthNAuthenticatorMakeCredential`/`GetAssertion`) API'sine taşındı. Bu API gerçek bir `hWnd`
+parametresi alıyor ve OS bunu onaylıyor — tarayıcıların WebAuthn/passkey akışlarında kullandığı
+aynı, düzgün pencere-sahipliği destekleyen yol. Spike ile doğrulandı (`poc/webauthn-probe/`):
+sentetik (gerçek olmayan) RP id/origin (`fursoy-cookie-protector.local`) sorunsuz kabul edildi ve
+pencere gerçekten sahipli/önde açıldı — hiçbir harici z-sırası hack'i gerekmedi.
+
+**Uygulama detayları:**
+
+- Tek, sabit bir platform authenticator credential'ı (`fursoy-cookie-protector.local` RP id'si
+  altında) oluşturulup credential ID + COSE EC2 (ES256/P-256) public key koordinatları
+  `%LOCALAPPDATA%\FursoyCookieProtector\hello-credential.json`'a (hex-encoded, secret değil)
+  kaydediliyor.
+- İmzalama `WebAuthNAuthenticatorGetAssertion` ile; imzalanan mesaj WebAuthn spesifikasyonunun
+  kendisi (`authenticatorData || SHA-256(clientDataJSON)`), tek başına `canonical_bytes()` değil.
+  Bu yüzden `SignedCapability` artık `authenticator_data` alanı da taşıyor (yalnızca bellekte,
+  capability ledger'a hiç yazılmıyor — bkz. [§13](#13-lease-modeli)/[§10.2](#102-lease-kaydı-diskte-plaintext-metadata)).
+  Doğrulama, DER-kodlu ECDSA imzasını ham (r‖s) forma çevirip Windows CNG/BCrypt
+  (`BCryptVerifySignature`, ECDSA P-256) ile kontrol ediyor.
+- `clientDataJSON`'daki `challenge` alanı, imzalanan `CapabilityPayload`'ın canonical byte'larının
+  hex'i; bu, `sign`/`verify_signature` arasında ek bir alan saklamadan deterministik olarak
+  yeniden üretilebiliyor.
+- COSE/`authenticatorData` ve DER-ECDSA-imza çözücüleri (`webauthn_codec.rs`) genel amaçlı değil;
+  yalnızca Windows'un bu credential için ürettiği sabit şekli kabul ediyor, başka her şeyi
+  reddediyor.
+- `prompt_raiser.rs` (harici pencere-yükseltme iş-around'u) tamamen kaldırıldı — artık gerekmiyor.
+
+**Ölçümle bulunan ve düzeltilen iki hata (göç sırasında):**
+
+- Allow-list `WEBAUTHN_AUTHENTICATOR_GET_ASSERTION_OPTIONS`'ın yanlış/eski alanına
+  (`pAllowCredentialList` yerine gömülü `CredentialList`) yazılıyordu; `Microsoft-Windows-WebAuthN/Operational`
+  event log'unda `AllowCredentialCount: 0` ile doğrulandı. Ayrıca `dwVersion` `VERSION_1`de
+  bırakıldığı için OS yeni alanları zaten görmüyordu. İkisi de düzeltildi, log artık
+  `AllowCredentialCount: 1` gösteriyor.
+- `cookie_roundtrip_failed` sağlık kontrolü (ADR-020'nin bir parçası, bu ADR'nin konusu değil ama
+  aynı oturumda bulundu): "tam eşitlik" kontrolü, sitenin restore penceresinde kendi eklediği
+  çerezleri (örn. youtube.com'un `GPS`'i) hata sanıyordu. Alt-küme kontrolüne çevrildi.
+
+**Kabul edilen sınırlar:**
+
+- **`hello_cache_ms` fiilen etkisiz.** Eski `KeyCredentialManager` handle'ı kısa süre içinde
+  tekrar kullanıldığında Windows'un sessizce tekrar sormaması — dokümante edilmemiş ama Deney 1'de
+  ölçülmüş bir davranıştı (bkz. [§30](#30-son-durum) Deney 1 `lock-probe` ölçümleri). `webauthn.dll`'in
+  `GetAssertion`'ı durum tutmuyor (stateless); art arda çağrılar arasında ölçülebilir bir fark
+  gözlenmedi (~3.1s → ~3.9s, aynı büyüklük mertebesinde). Bunun sonucu: Dengeli/Kullanışlı
+  politika seviyeleri artık **fiilen Kritik gibi davranıyor** — her yeniden girişte PIN isteniyor.
+  `hello_cache_ms` alanı [§14](#14-policy-seviyeleri)'te ve `config.rs`'te durmaktadır (gelecekte
+  uygulama-seviyesi bir önbellekleme katmanı düşünülürse); şu an hiçbir kod yolu bunu okuyup
+  davranışı değiştirmiyor. Kullanıcı bu ödünleşimi bilerek kabul etti (2026-08-08).
+- **~1 saniyelik NGC/PIN-kutusu açılış gecikmesi kalıcı ve düzeltilemez olarak kabul edildi.**
+  Windows' `Microsoft-Windows-WebAuthN/Operational` event log'unda milisaniye hassasiyetinde
+  ölçüldü ve Chrome'un GitHub/Google Şifreler üzerindeki **kendi** `webauthn.dll` çağrısıyla
+  birebir karşılaştırıldı: ikisi de ~1.06 saniye. Bu, çağıran uygulamadan bağımsız, evrensel bir
+  Windows NGC-etkinleştirme maliyetidir. Kod imzalama (self-signed sertifikayla test edildi) bu
+  gecikmeyi etkilemedi; teori kuruldu, test edildi, çürütüldü ve ilgili geçici tanı kodu/sertifika
+  temizlendi.
+- Tek, sabit RP id/user kullanılıyor (`fursoy-cookie-protector.local` / gerçek bir web origin'i
+  değil) — bu, bir tarayıcı/gerçek Relying Party ile hiçbir zaman etkileşmediği için zararsızdır;
+  yalnızca bu makinedeki tek yerel kullanıcıyı temsil eder.
+
+**Alternatifler:**
+
+- **Mevcut durumu korumak** (harici pencere-yükseltme iş-around'u ile devam) — reddedildi:
+  ölçülen yan etkisi var (`HWND_BOTTOM` tetikleyen pencereyi mutlak dibe atıyor, arkadaki alakasız
+  başka bir uygulama birkaç saniyeliğine öne çıkabiliyor) ve OS korumasının gelecekte
+  sıkılaştırılması riskine açık.
+- **Kod imzalama sertifikası satın almak** — spekülatif olarak denendi (self-signed, güven
+  deposuna eklenmeden), gecikmeyi etkilemediği ölçüldü, reddedildi.
+- **Uygulama-seviyesi Hello-sonucu önbellekleme** (imza her seferinde tazelense de, kullanıcıya
+  görünen jest sıklığını app tarafında sınırlamak) — bu ADR kapsamında **yapılmadı**; olası bir
+  gelecek işi olarak `hello_cache_ms` alanı bilerek dormant bırakıldı (bkz. yukarıdaki "Kabul
+  edilen sınırlar").
