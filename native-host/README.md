@@ -6,7 +6,8 @@ runtimes.
 
 Implemented:
 
-- validated, bounded account-group config and SHA-256 config digest;
+- ownership of the account-group config: validation, atomic persistence, runtime `group.add` /
+  `group.remove` and the SHA-256 digest published to the extension;
 - Native Messaging v3 handshake with the durable state of every configured group;
 - per-group vault, lease metadata, capability ledger, pending operation and reconciliation state;
 - automatic migration of the Phase 5 Wikipedia lease/capability files to UUID-based paths;
@@ -19,9 +20,10 @@ Implemented:
   switches without retaining the command line, port or profile path;
 - failure isolation: a group-level operation error does not mutate another group's runtime.
 
-The installer copies the exact account-group config to
-`%LOCALAPPDATA%\FursoyCookieProtector\config\account-groups.json`. The executable also contains the same
-config as a fail-closed fallback.
+The installer seeds `%LOCALAPPDATA%\FursoyCookieProtector\config\account-groups.json` only when it
+does not already exist; once sites can be added at runtime (ADR-020) that file is user data and a
+reinstall must not overwrite it. The executable still carries a bundled config as a first-run
+fallback.
 
 Still excluded: incognito/multi-profile support, persistent Windows agent, profile-directory access
 attribution, kernel drivers and management UI. Monitoring is best-effort detection, not blocking.

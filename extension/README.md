@@ -1,15 +1,19 @@
 # FURSOY Extension — Phase 7 monitoring slice
 
-MV3 extension built only with `tsc`. Account groups are loaded from `account-groups.json`; the same
-bytes are bundled by the native host and their SHA-256 digest is bound to the Native Messaging v3
-handshake. A mismatch fails closed before any lease is granted.
+MV3 extension built only with `tsc`. It ships **no account-group config of its own**: the native
+host owns the config and sends it in the Native Messaging v3 handshake (ADR-020). The extension
+validates whatever it receives and caches it in `chrome.storage.local` only so it can still evict
+fail-closed while the host is unreachable. An invalid config stops the extension.
 
-The initial Phase 6 configuration contains two isolated groups:
+A group is a registrable domain (`scope`). Every cookie under that domain and its subdomains is
+vaulted — there are no per-site cookie selectors, no `required_for_enrollment` markers and no
+site-specific health checks. Cookie removals are never interpreted, so nothing tries to tell a real
+logout from a session rotation; a stale vault self-heals at the next capture.
 
-- Wikipedia (`balanced`): exact `trwiki*` and `centralauth_*` authentication selectors.
-- Controlled Session App (`critical`): `FCP-mvp-session` on `http://localhost:43119`.
+The popup adds and removes protected sites. Adding one requests the matching host permission
+through Chrome's own prompt (`optional_host_permissions`); refusing it aborts the addition.
 
-Runtime state, alarms, navigation unlock contexts, enrollment, invalidation and reconciliation locks
+Runtime state, alarms, navigation unlock contexts, enrollment and reconciliation locks
 are keyed by account-group UUID. Chrome cookie mutations remain globally serialized so two groups
 cannot race the browser store. Cookie values are never written to extension storage or logs.
 

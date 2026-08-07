@@ -60,7 +60,7 @@ mod tests {
             message: Message::Handshake(Handshake {
                 protocol_version: PROTOCOL_VERSION,
                 extension_id: "fixed-extension-id".into(),
-                config_digest: "00".repeat(32),
+                cached_config_digest: None,
             }),
         };
         assert!(envelope.validate(&nonce, 6).is_ok());

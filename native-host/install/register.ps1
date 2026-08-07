@@ -11,7 +11,15 @@ $installedExe = Join-Path $installRoot "fcp-host.exe"
 Copy-Item -LiteralPath $sourceExe -Destination $installedExe -Force
 $configRoot = Join-Path $env:LOCALAPPDATA "FursoyCookieProtector\config"
 New-Item -ItemType Directory -Force -Path $configRoot | Out-Null
-Copy-Item -LiteralPath (Join-Path $repoRoot "config\account-groups.json") -Destination (Join-Path $configRoot "account-groups.json") -Force
+$installedConfig = Join-Path $configRoot "account-groups.json"
+# The installed config is user data once sites can be added at runtime (ADR-020 slice 2), so it
+# is only seeded on first install. Overwriting it here would silently drop protected sites.
+if (-not (Test-Path $installedConfig)) {
+  Copy-Item -LiteralPath (Join-Path $repoRoot "config\account-groups.json") -Destination $installedConfig
+  Write-Host "Seeded account-group config at $installedConfig"
+} else {
+  Write-Host "Kept existing account-group config at $installedConfig"
+}
 $manifestPath = Join-Path $installRoot "com.fursoy.cookie_protector.json"
 $manifest = [ordered]@{
   name = "com.fursoy.cookie_protector"

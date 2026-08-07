@@ -11,10 +11,11 @@ declare namespace chrome {
     interface MessageSender { tab?: tabs.Tab }
     const onMessage: { addListener(callback: (message: unknown, sender: MessageSender, respond: (value: unknown) => void) => boolean | void): void };
     const onStartup: { addListener(callback: () => void): void };
+    function openOptionsPage(callback?: () => void): void;
   }
   namespace tabs {
     interface Tab { id?: number; url?: string; status?: "loading" | "complete"; active?: boolean }
-    function query(query: { url?: string[] }, callback: (tabs: Tab[]) => void): void;
+    function query(query: { url?: string[]; active?: boolean; currentWindow?: boolean }, callback: (tabs: Tab[]) => void): void;
     function get(tabId: number, callback: (tab: Tab) => void): void;
     function update(tabId: number, properties: { url: string }, callback: (tab: Tab) => void): void;
     function sendMessage(tabId: number, message: unknown, callback: (response: unknown) => void): void;
@@ -47,7 +48,7 @@ declare namespace chrome {
     interface CookiePartitionKey { topLevelSite?: string; hasCrossSiteAncestor?: boolean }
     interface Cookie { domain: string; expirationDate?: number; hostOnly: boolean; httpOnly: boolean; name: string; partitionKey?: CookiePartitionKey; path: string; sameSite: SameSiteStatus; secure: boolean; session: boolean; storeId: string; value: string }
     interface SetDetails { url: string; name?: string; value?: string; domain?: string; path?: string; secure?: boolean; httpOnly?: boolean; sameSite?: SameSiteStatus; expirationDate?: number; storeId?: string; partitionKey?: CookiePartitionKey }
-    function getAll(details: { url?: string; name?: string }, callback: (cookies: Cookie[]) => void): void;
+    function getAll(details: { url?: string; name?: string; domain?: string }, callback: (cookies: Cookie[]) => void): void;
     function set(details: SetDetails, callback: (cookie?: Cookie) => void): void;
     function remove(details: { url: string; name: string; storeId?: string; partitionKey?: CookiePartitionKey }, callback: (result: unknown) => void): void;
     const onChanged: { addListener(callback: (info: { removed: boolean; cookie: Cookie; cause: string }) => void): void };
@@ -66,5 +67,10 @@ declare namespace chrome {
   namespace action {
     function setBadgeText(details: { text: string }, callback?: () => void): void;
     function setBadgeBackgroundColor(details: { color: string }, callback?: () => void): void;
+  }
+  namespace permissions {
+    function request(permissions: { origins?: string[] }, callback: (granted: boolean) => void): void;
+    function contains(permissions: { origins?: string[] }, callback: (result: boolean) => void): void;
+    const onAdded: { addListener(callback: (permissions: { origins?: string[] }) => void): void };
   }
 }

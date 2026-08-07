@@ -1,9 +1,9 @@
 import {
-  HOST_NAME, PROTOCOL_VERSION, categorizeCookieSetFailure, cookieIdentity, cookieRecord,
-  cookieSetDetails, groupForCookie, groupForUrl, hasRequiredEnrollmentCookies,
-  loadAccountGroupsConfig, policyParameters, selectorForCookie,
+  HOST_NAME, PROTOCOL_VERSION, categorizeCookieSetFailure, cookieBelongsToGroup,
+  cookieIdentity, cookieRecord, cookieSetDetails, cookieUrl, groupForCookie, groupForUrl,
+  guessScope, navigationPatterns, policyParameters, validateConfig,
   type AccountGroup, type AccountGroupsConfig, type CookieRecord, type CookieSetFailureCategory,
-  type Envelope, type LoadedConfig, type WireMessage,
+  type Envelope, type LoadedConfig, type PolicyLevel, type WireMessage,
 } from "./protocol.js";
 import {
   addToBoundedOutbox, makeMonitorEvent, notificationDecision, notificationText,
@@ -12,7 +12,18 @@ import {
 
 type GroupState = "uninitialized" | "sealed" | "unlocking" | "leased" | "evicting" | "degraded";
 type LeasePurpose = "inject" | "enroll";
-type SessionInvalidationReason = "external_logout" | "restore_rejected";
+type SessionInvalidationReason = "external_logout" | "restore_rejected" | "scope_empty";
+
+// ADR-020: eviction triggers that mean "the user stopped using this site". If the protected
+// scope holds no cookies at that moment there is nothing to vault, so the group is discarded
+// rather than sealed — see requestEviction.
+const USER_IDLE_TRIGGERS = new Set(["last_tab_closed", "idle", "locked", "expiry"]);
+
+// A protected group whose vault is empty still has to be captured the next time the user stops
+// using the site; that capture is what replaces the removed "did a login just happen" heuristic.
+function awaitsCapture(state: GroupRuntimeState | undefined): boolean {
+  return state?.groupState === "leased" || state?.groupState === "uninitialized";
+}
 
 interface GroupRuntimeState {
   groupState: GroupState;
@@ -25,6 +36,7 @@ interface GroupRuntimeState {
   injectAfterReconciliation?: boolean;
   invalidationPending?: boolean;
   invalidationReason?: SessionInvalidationReason;
+  evictAfterEnrollment?: string;
   pendingNavigationUnlocks?: Record<string, string>;
   navigationUnlockRequestTabId?: number;
   navigationUnlockError?: string;
@@ -48,15 +60,53 @@ const STATE_KEY = "fcp-runtime-v2";
 const LEGACY_STATE_KEY = "fcp-mvp-runtime-v1";
 const WIKIPEDIA_GROUP_ID = "7a144677-3f5c-4a86-a767-16fd3ca315b8";
 const IDLE_BASE_SECONDS = 60;
-const ENROLLMENT_STABLE_MS = 3_000;
-const ENROLLMENT_TIMEOUT_MS = 20_000;
 const NAVIGATION_LOAD_TIMEOUT_MS = 20_000;
 const UNLOCK_PAGE_URL = chrome.runtime.getURL("unlock.html");
-const MONITOR_ICON_URL = chrome.runtime.getURL("monitor-icon.svg");
+// chrome.notifications.create does not support SVG for iconUrl; it silently fails to show
+// a notification if given one. Use a PNG raster icon instead.
+const MONITOR_ICON_URL = chrome.runtime.getURL("monitor-icon.png");
 const MONITOR_OUTBOX_KEY = "fcp-monitor-outbox-v1";
 const MONITOR_RATE_KEY = "fcp-monitor-rate-v1";
 const MONITOR_POLL_ALARM = "fcp-monitor-poll";
-const configPromise = loadAccountGroupsConfig();
+const CONFIG_CACHE_KEY = "fcp-config-cache-v1";
+const LAST_ALERT_KEY = "fcp-last-alert-v1";
+const ALERT_LOG_KEY = "fcp-alert-log-v1";
+const ALERT_LOG_LIMIT = 100;
+const PENDING_ADD_KEY = "fcp-pending-add-v1";
+const PENDING_ADD_TTL_MS = 120_000;
+
+// Q24: the host is the config's single source of truth. The cache exists only so the extension
+// can still evict fail-closed while the host is unreachable; the handshake always overwrites it.
+let loadedConfig: LoadedConfig | undefined;
+let configWaiters: Array<(value: LoadedConfig) => void> = [];
+
+function awaitConfig(): Promise<LoadedConfig> {
+  if (loadedConfig !== undefined) return Promise.resolve(loadedConfig);
+  return new Promise((resolve) => { configWaiters.push(resolve); });
+}
+
+function publishConfig(next: LoadedConfig): void {
+  loadedConfig = next;
+  const waiters = configWaiters;
+  configWaiters = [];
+  for (const waiter of waiters) waiter(next);
+}
+
+async function adoptConfig(config: AccountGroupsConfig, digest: string): Promise<void> {
+  validateConfig(config);
+  publishConfig({ config, digest });
+  await setLocal(CONFIG_CACHE_KEY, { config, digest });
+}
+
+async function restoreCachedConfig(): Promise<void> {
+  if (loadedConfig !== undefined) return;
+  const cached = await getLocal(CONFIG_CACHE_KEY) as LoadedConfig | undefined;
+  if (cached === undefined || typeof cached.digest !== "string") return;
+  try {
+    validateConfig(cached.config);
+    publishConfig({ config: cached.config, digest: cached.digest });
+  } catch { await setLocal(CONFIG_CACHE_KEY, undefined); }
+}
 
 let queue: Promise<void> = Promise.resolve();
 let client: NativeClient | undefined;
@@ -74,25 +124,154 @@ chrome.idle.setDetectionInterval(IDLE_BASE_SECONDS);
 chrome.alarms.create(MONITOR_POLL_ALARM, { periodInMinutes: 0.5 });
 setInterval(() => enqueue(pollNativeMonitor), 15_000);
 
+chrome.permissions.onAdded.addListener(() => enqueue(flushPendingAdd));
+
 chrome.webNavigation.onBeforeNavigate.addListener((details) => enqueue(async () => {
   if (details.frameId !== 0) return;
-  const loaded = await configPromise;
+  const loaded = await awaitConfig();
   const group = groupForUrl(loaded.config, details.url);
   if (group !== undefined) await interceptSealedNavigation(loaded, group, details.tabId, details.url);
 }));
 
 chrome.runtime.onMessage.addListener((message, sender, respond) => {
-  if (!isUnlockPageMessage(message)) return;
-  enqueue(async () => {
-    try { respond(await handleUnlockPageMessage(await configPromise, message.type, sender.tab?.id)); }
-    catch { respond({ ok: false, status: "error", error: "unlock_controller_failed" }); }
-  });
-  return true;
+  if (isUnlockPageMessage(message)) {
+    enqueue(async () => {
+      try { respond(await handleUnlockPageMessage(await awaitConfig(), message.type, sender.tab?.id)); }
+      catch { respond({ ok: false, status: "error", error: "unlock_controller_failed" }); }
+    });
+    return true;
+  }
+  if (isPopupMessage(message)) {
+    enqueue(async () => {
+      try { respond(await handlePopupMessage(message)); }
+      catch (error: unknown) { respond({ ok: false, error: error instanceof Error ? error.message : "popup_controller_failed" }); }
+    });
+    return true;
+  }
+  return;
 });
+
+interface PendingAdd {
+  scope: string;
+  displayName: string;
+  policyLevel: PolicyLevel;
+  stagedAtUnixMs: number;
+}
+
+function isPendingAdd(value: unknown): value is PendingAdd {
+  const pending = value as Partial<PendingAdd> | undefined;
+  return typeof pending?.scope === "string" && typeof pending.displayName === "string" &&
+    typeof pending.policyLevel === "string" && typeof pending.stagedAtUnixMs === "number";
+}
+
+async function flushPendingAdd(): Promise<void> {
+  const stored = await getLocal(PENDING_ADD_KEY);
+  if (!isPendingAdd(stored)) return;
+  if (Date.now() - stored.stagedAtUnixMs > PENDING_ADD_TTL_MS) {
+    await setLocal(PENDING_ADD_KEY, undefined);
+    return;
+  }
+  // Keep the intent if the host is not up yet; the handshake retries this.
+  if (!client?.connected) { void connect(); return; }
+  const group = loadedConfig?.config.groups.find((item) => item.scope === stored.scope);
+  if (group !== undefined) { await setLocal(PENDING_ADD_KEY, undefined); return; }
+  send("group.add", { scope: stored.scope, display_name: stored.displayName, policy_level: stored.policyLevel });
+  await setLocal(PENDING_ADD_KEY, undefined);
+}
+
+type PopupMessage =
+  | { type: "popup.state"; url?: string }
+  | { type: "popup.stageProtect"; scope: string; displayName: string; policyLevel: PolicyLevel }
+  | { type: "popup.cancelProtect" }
+  | { type: "popup.log" }
+  | { type: "popup.clearLog" }
+  | { type: "popup.protect"; scope: string; displayName: string; policyLevel: PolicyLevel }
+  | { type: "popup.unprotect"; groupId: string }
+  | { type: "popup.setPolicy"; groupId: string; policyLevel: PolicyLevel };
+
+// ADR-020: protection starts and ends with an explicit user gesture in the popup. Nothing about
+// the page's session state is inspected — whatever cookies the scope holds are what gets vaulted.
+async function handlePopupMessage(message: PopupMessage): Promise<Record<string, unknown>> {
+  if (message.type === "popup.state") {
+    await restoreCachedConfig();
+    const groups = loadedConfig === undefined ? [] : await popupGroupSummaries(loadedConfig);
+    let host = "";
+    try {
+      const url = message.url === undefined ? undefined : new URL(message.url);
+      if (url?.protocol === "http:" || url?.protocol === "https:") host = url.hostname;
+    } catch { host = ""; }
+    const error = lastConfigError;
+    lastConfigError = undefined;
+    const storedAlert = await getLocal(LAST_ALERT_KEY);
+    const alert = isStoredAlert(storedAlert) ? storedAlert : undefined;
+    if (alert !== undefined) {
+      // Opening the popup is the acknowledgement: the alert is shown here, so the badge that
+      // pointed at it is cleared. Leaving it lit forever taught the user to ignore it.
+      await setLocal(LAST_ALERT_KEY, undefined);
+      await setBadge("", "#b3261e");
+    }
+    return {
+      ok: true, connected: client?.connected === true, host,
+      suggestedScope: guessScope(host), groups, error, alert,
+    };
+  }
+  if (message.type === "popup.log") {
+    const stored = await getLocal(ALERT_LOG_KEY);
+    const log = Array.isArray(stored) ? stored.filter(isStoredAlert) : [];
+    return { ok: true, log: [...log].reverse() };
+  }
+  if (message.type === "popup.clearLog") {
+    await setLocal(ALERT_LOG_KEY, []);
+    return { ok: true };
+  }
+  if (message.type === "popup.stageProtect") {
+    await setLocal(PENDING_ADD_KEY, {
+      scope: message.scope, displayName: message.displayName,
+      policyLevel: message.policyLevel, stagedAtUnixMs: Date.now(),
+    });
+    return { ok: true };
+  }
+  if (message.type === "popup.cancelProtect") {
+    await setLocal(PENDING_ADD_KEY, undefined);
+    return { ok: true };
+  }
+  if (!client?.connected) { void connect(); return { ok: false, error: "native_host_not_connected" }; }
+  if (message.type === "popup.protect") {
+    await flushPendingAdd();
+    return { ok: true };
+  }
+  if (message.type === "popup.setPolicy") {
+    send("group.set_policy", { account_group_id: message.groupId, policy_level: message.policyLevel });
+    return { ok: true };
+  }
+  send("group.remove", { account_group_id: message.groupId });
+  return { ok: true };
+}
+
+async function popupGroupSummaries(loaded: LoadedConfig): Promise<Array<Record<string, unknown>>> {
+  const root = await loadState(loaded);
+  const summaries: Array<Record<string, unknown>> = [];
+  for (const group of loaded.config.groups) {
+    summaries.push({
+      id: group.id, scope: group.scope, displayName: group.display_name,
+      policyLevel: group.policy_level, state: root.groups[group.id]?.groupState ?? "uninitialized",
+      hasPermission: await hasScopePermission(group),
+      cookieCount: (await getCookies(group)).length,
+    });
+  }
+  return summaries;
+}
+
+function isPopupMessage(value: unknown): value is PopupMessage {
+  const type = typeof value === "object" && value !== null ? (value as { type?: unknown }).type : undefined;
+  return type === "popup.state" || type === "popup.protect" || type === "popup.unprotect" ||
+    type === "popup.log" || type === "popup.clearLog" || type === "popup.stageProtect" ||
+    type === "popup.cancelProtect" || type === "popup.setPolicy";
+}
 
 chrome.tabs.onUpdated.addListener((tabId, change, tab) => enqueue(async () => {
   if (change.status !== "complete" && change.url === undefined) return;
-  const loaded = await configPromise;
+  const loaded = await awaitConfig();
   const activeGroup = groupForUrl(loaded.config, tab.url);
   const root = await loadState(loaded);
   for (const group of loaded.config.groups) {
@@ -118,7 +297,7 @@ chrome.tabs.onUpdated.addListener((tabId, change, tab) => enqueue(async () => {
 }));
 
 chrome.tabs.onRemoved.addListener((tabId) => enqueue(async () => {
-  const loaded = await configPromise;
+  const loaded = await awaitConfig();
   const root = await loadState(loaded);
   for (const group of loaded.config.groups) {
     const state = root.groups[group.id];
@@ -130,7 +309,7 @@ chrome.tabs.onRemoved.addListener((tabId) => enqueue(async () => {
   await saveState(root);
   for (const group of loaded.config.groups) {
     const state = root.groups[group.id];
-    if (state?.relevantTabs.length !== 0 || state.groupState !== "leased") continue;
+    if (state?.relevantTabs.length !== 0 || !awaitsCapture(state)) continue;
     const grace = policyParameters(group.policy_level).lastTabGraceMs;
     if (grace === 0) await requestEviction(loaded, group, "last_tab_closed", state.leaseId);
     else chrome.alarms.create(alarmName("last_tab", group.id), { when: Date.now() + grace });
@@ -138,7 +317,7 @@ chrome.tabs.onRemoved.addListener((tabId) => enqueue(async () => {
 }));
 
 chrome.idle.onStateChanged.addListener((idleState) => enqueue(async () => {
-  const loaded = await configPromise;
+  const loaded = await awaitConfig();
   const root = await loadState(loaded);
   if (idleState === "active") {
     for (const group of loaded.config.groups) chrome.alarms.clear(alarmName("idle", group.id));
@@ -148,13 +327,13 @@ chrome.idle.onStateChanged.addListener((idleState) => enqueue(async () => {
     const state = root.groups[group.id];
     if (idleState === "locked") {
       if (client?.connected) send("auth.cache.clear", { account_group_id: group.id, reason: "locked" });
-      if (state?.groupState === "leased") await requestEviction(loaded, group, "locked", state.leaseId);
+      if (awaitsCapture(state)) await requestEviction(loaded, group, "locked", state?.leaseId);
       continue;
     }
-    if (state?.groupState !== "leased") continue;
+    if (!awaitsCapture(state)) continue;
     const threshold = policyParameters(group.policy_level).idleThresholdSeconds;
     const remainingMs = Math.max(0, (threshold - IDLE_BASE_SECONDS) * 1_000);
-    if (remainingMs === 0) await requestEviction(loaded, group, "idle", state.leaseId);
+    if (remainingMs === 0) await requestEviction(loaded, group, "idle", state?.leaseId);
     else chrome.alarms.create(alarmName("idle", group.id), { when: Date.now() + remainingMs });
   }
 }));
@@ -166,56 +345,59 @@ chrome.alarms.onAlarm.addListener((alarm) => enqueue(async () => {
   }
   const parsed = parseAlarmName(alarm.name);
   if (parsed === undefined) return;
-  const loaded = await configPromise;
+  const loaded = await awaitConfig();
   const group = loaded.config.groups.find((item) => item.id === parsed.groupId);
   if (group === undefined) return;
   const root = await loadState(loaded);
   const state = root.groups[group.id];
-  if (state?.groupState !== "leased") return;
-  if (parsed.kind === "expiry") await requestEviction(loaded, group, "expiry", state.leaseId);
-  else if (parsed.kind === "last_tab" && (await relevantTabIds(group)).length === 0) await requestEviction(loaded, group, "last_tab_closed", state.leaseId);
+  if (parsed.kind === "expiry") {
+    if (state?.groupState === "leased") await requestEviction(loaded, group, "expiry", state.leaseId);
+    return;
+  }
+  if (!awaitsCapture(state)) return;
+  if (parsed.kind === "last_tab" && (await relevantTabIds(group)).length === 0) await requestEviction(loaded, group, "last_tab_closed", state?.leaseId);
   else if (parsed.kind === "idle") {
     const idleState = await queryIdleState(policyParameters(group.policy_level).idleThresholdSeconds);
-    if (idleState === "idle" || idleState === "locked") await requestEviction(loaded, group, idleState, state.leaseId);
+    if (idleState === "idle" || idleState === "locked") await requestEviction(loaded, group, idleState, state?.leaseId);
   }
 }));
 
 chrome.cookies.onChanged.addListener((info) => enqueue(async () => {
-  const loaded = await configPromise;
+  const loaded = await awaitConfig();
   const group = groupForCookie(loaded.config, info.cookie);
   if (group === undefined) return;
-  if (info.removed) {
-    if (consumeExpectedRemoval(group.id, info.cookie)) return;
-    await queueMonitorEvent("selector_changed", group.id);
-    await delay(750);
-    const root = await loadState(loaded);
-    const state = root.groups[group.id];
-    if (state !== undefined && ["leased", "evicting", "sealed", "degraded"].includes(state.groupState) &&
-        !hasRequiredEnrollmentCookies(group, await getCookies(group))) {
-      await requestSessionInvalidation(loaded, group, "external_logout");
-    }
-    return;
-  }
+  // ADR-020: cookie removals carry no meaning. The system does not try to tell a real logout
+  // from a session-cookie rotation; a stale vault self-heals on the next capture.
+  if (info.removed) return;
   if (mutatingGroups.has(group.id)) return;
   const root = await loadState(loaded);
   const state = root.groups[group.id];
-  if (state?.groupState === "uninitialized") {
-    const stable = await waitForStableEnrollmentCookies(group);
-    if (stable.length > 0) await requestLease(loaded, group, "enroll");
-  } else if (state?.groupState === "sealed") {
-    await queueMonitorEvent("lease_outside_cookie_created", group.id);
-    await requestEviction(loaded, group, "site_cookie_recreated", undefined);
-  } else if (state?.groupState === "leased") {
-    await queueMonitorEvent("selector_changed", group.id);
+  if (state?.groupState === "sealed") {
+    // PLAN §13.2.2. Sealed means the scope holds no cookies, so whatever appeared — prefetch,
+    // analytics, a third-party context — is removed silently. It is never treated as a reason to
+    // unlock: raising Hello without the user asking is exactly what Faz 5.1 set out to remove.
+    await removeCookie(group, info.cookie);
   } else if (state?.groupState === "degraded") {
     await requestEviction(loaded, group, "degraded_cookie_detected", state.leaseId);
   }
 }));
 
+// connect() awaits before it assigns `client`, so two callers could each open a port and Chrome
+// would spawn two hosts. Two hosts write the same audit chain and corrupt it, which then fails
+// every later start closed (PLAN §23.1), so the second caller is turned away here.
+let connecting = false;
+
 async function connect(): Promise<void> {
+  if (client?.connected || connecting) return;
+  connecting = true;
+  try { await openNativeConnection(); } finally { connecting = false; }
+}
+
+async function openNativeConnection(): Promise<void> {
+  await restoreCachedConfig();
   if (client?.connected) return;
-  const loaded = await configPromise;
-  client = new NativeClient(loaded.digest, handleHostMessage, async () => {
+  client = new NativeClient(loadedConfig?.digest, handleHostMessage, async () => {
+    const loaded = await awaitConfig();
     const root = await loadState(loaded);
     const activeGroups: string[] = [];
     for (const group of loaded.config.groups) {
@@ -234,16 +416,32 @@ async function connect(): Promise<void> {
   client.start();
 }
 
+let lastConfigError: string | undefined;
+
 async function handleHostMessage(message: WireMessage): Promise<void> {
-  const loaded = await configPromise;
   if (message.type === "handshake.ack") {
-    await handleHandshakeAck(loaded, message.payload);
+    await handleHandshakeAck(message.payload);
+    return;
+  }
+  if (message.type === "config.updated") {
+    await adoptConfig(message.payload.config as AccountGroupsConfig, requiredString(message.payload, "config_digest"));
+    // Runtime state is keyed by the config digest, so a config change resets it. The host sends
+    // the authoritative per-group state alongside the new config to restore it without a
+    // needless reconciliation round for groups that did not change.
+    if (!Array.isArray(message.payload.groups)) throw new Error("config.updated groups must be an array");
+    await applyHostGroupStates(await awaitConfig(), message.payload.groups as HandshakeGroupState[]);
+    lastConfigError = undefined;
+    return;
+  }
+  if (message.type === "config.rejected") {
+    lastConfigError = requiredString(message.payload, "reason");
     return;
   }
   if (message.type === "monitor.alert") {
     await handleMonitorAlert(message.payload.event);
     return;
   }
+  const loaded = await awaitConfig();
   const groupId = requiredString(message.payload, "account_group_id");
   const group = loaded.config.groups.find((item) => item.id === groupId);
   if (group === undefined) throw new Error("host referenced unknown account group");
@@ -301,8 +499,25 @@ async function handleHostMessage(message: WireMessage): Promise<void> {
   }
 }
 
-async function handleHandshakeAck(loaded: LoadedConfig, payload: Record<string, unknown>): Promise<void> {
-  if (requiredNumber(payload, "protocol_version") !== PROTOCOL_VERSION || requiredString(payload, "config_digest") !== loaded.digest) throw new Error("host config/protocol mismatch");
+async function applyHostGroupStates(loaded: LoadedConfig, summaries: HandshakeGroupState[]): Promise<void> {
+  const root = await loadState(loaded);
+  for (const group of loaded.config.groups) {
+    const summary = summaries.find((item) => item.account_group_id === group.id);
+    if (summary === undefined) continue;
+    const state = requiredGroupState(root, group.id);
+    state.groupState = summary.group_state;
+    state.leaseId = summary.lease_id ?? undefined;
+    state.reconciliation = summary.reconciliation_required;
+    state.relevantTabs = await relevantTabIds(group);
+    state.lastEvent = "config_updated";
+  }
+  await saveState(root);
+}
+
+async function handleHandshakeAck(payload: Record<string, unknown>): Promise<void> {
+  if (requiredNumber(payload, "protocol_version") !== PROTOCOL_VERSION) throw new Error("host protocol mismatch");
+  await adoptConfig(payload.config as AccountGroupsConfig, requiredString(payload, "config_digest"));
+  const loaded = await awaitConfig();
   if (!Array.isArray(payload.groups)) throw new Error("handshake groups must be an array");
   const summaries = payload.groups as HandshakeGroupState[];
   if (summaries.length !== loaded.config.groups.length) throw new Error("handshake group count mismatch");
@@ -328,16 +543,14 @@ async function handleHandshakeAck(loaded: LoadedConfig, payload: Record<string, 
     }
     if (pendingInvalidation !== undefined && state.groupState !== "uninitialized") {
       actions.push(() => requestSessionInvalidation(loaded, group, pendingInvalidation));
-    } else if (state.groupState === "uninitialized" && cookies.length > 0) {
-      actions.push(async () => { if ((await waitForStableEnrollmentCookies(group)).length > 0) await requestLease(loaded, group, "enroll"); });
     } else if (state.groupState === "leased" && (cookies.length === 0 || state.relevantTabs.length === 0)) {
       const reason = cookies.length === 0 ? "startup_reconciliation" : "last_tab_closed";
       actions.push(() => requestEviction(loaded, group, reason, state.leaseId));
     } else if (state.groupState === "leased" && typeof summary.lease_expiry_unix_ms === "number") {
       if (summary.lease_expiry_unix_ms <= Date.now()) actions.push(() => requestEviction(loaded, group, "expiry", state.leaseId));
       else chrome.alarms.create(alarmName("expiry", group.id), { when: summary.lease_expiry_unix_ms });
-    } else if (state.groupState === "sealed" && cookies.length > 0) {
-      actions.push(() => requestEviction(loaded, group, "site_cookie_recreated", undefined));
+    } else if (state.groupState === "sealed" && cookies.length > 0 && state.relevantTabs.length === 0) {
+      actions.push(() => removeAllCookies(group));
     } else if (summary.reconciliation_required) {
       actions.push(() => requestEviction(loaded, group, "startup_reconciliation", state.leaseId));
     }
@@ -350,6 +563,7 @@ async function handleHandshakeAck(loaded: LoadedConfig, payload: Record<string, 
   }
   await flushMonitorOutbox();
   await pollNativeMonitor();
+  await flushPendingAdd();
 }
 
 async function injectCookies(loaded: LoadedConfig, group: AccountGroup, payload: Record<string, unknown>, root: RuntimeState, state: GroupRuntimeState): Promise<void> {
@@ -360,39 +574,59 @@ async function injectCookies(loaded: LoadedConfig, group: AccountGroup, payload:
   let success = false;
   let stage = "cookie_set";
   try {
+    // A cookie whose expiry has passed since it was vaulted cannot be restored: chrome.cookies.set
+    // accepts it, drops it immediately and reports no cookie, which would fail the whole inject
+    // over an entry the browser would have discarded anyway. Short-lived cookies (bot-management
+    // and similar) hit this routinely once a scope's full cookie set is vaulted.
+    const restorable = records.filter((raw) => !isExpired(raw as CookieRecord));
     mutatingGroups.add(group.id);
     try {
-      for (const raw of records) {
+      for (const raw of restorable) {
         const cookie = raw as CookieRecord;
-        if (selectorForCookie(group, cookie) === undefined) throw new Error("vault cookie outside group");
+        if (!cookieBelongsToGroup(group, cookie)) throw new Error("vault cookie outside group scope");
         await setCookie(group, cookie);
       }
     } finally { mutatingGroups.delete(group.id); }
     stage = "cookie_roundtrip";
-    const installed = await getCookies(group);
-    const expected = records.map((raw) => cookieIdentity(raw as CookieRecord)).sort();
-    const actual = installed.map(cookieIdentity).sort();
-    if (expected.length !== actual.length || expected.some((identity, index) => identity !== actual[index])) {
+    const expectedRecords = restorable as CookieRecord[];
+    // Each chrome.cookies.set() callback above already confirmed its own write, but an
+    // immediate getAll() can still occasionally miss the last write or two — a brief,
+    // internal-to-Chrome read lag, not a real failure. A couple of short retries absorb that
+    // without masking a genuinely persistent mismatch, which still fails after all attempts.
+    //
+    // The check is a subset check (every vaulted cookie landed), not set equality: a site's own
+    // page script can set additional cookies (e.g. YouTube's `GPS`) in the same window we are
+    // restoring into, and that is not a restore failure — only a vaulted cookie failing to land
+    // is.
+    let roundtripMatched = false;
+    let missing: CookieRecord[] = [];
+    for (let attempt = 0; attempt < 3 && !roundtripMatched; attempt += 1) {
+      if (attempt > 0) await new Promise((resolve) => setTimeout(resolve, 100));
+      const actualIdentities = new Set((await getCookies(group)).map(cookieIdentity));
+      missing = expectedRecords.filter((record) => !actualIdentities.has(cookieIdentity(record)));
+      roundtripMatched = missing.length === 0;
+    }
+    if (!roundtripMatched) {
       health = "cookie_roundtrip_failed";
+      for (const record of missing) {
+        console.error(`FCP roundtrip missing cookie group=${group.scope} name=${record.name} domain=${record.domain} path=${record.path}`);
+      }
     } else {
+      // ADR-020: a verified round-trip is the whole success condition. No site-specific health
+      // check runs, so the extension never has to decide whether a restored session is "real".
       const navigationTabId = state.navigationUnlockRequestTabId;
       const navigationTarget = navigationTabId === undefined ? undefined : state.pendingNavigationUnlocks?.[String(navigationTabId)];
-      let tabId: number | undefined;
       if (navigationTabId !== undefined && navigationTarget !== undefined) {
         stage = "navigation_gate_redirect";
         await updateTab(navigationTabId, navigationTarget);
         await waitForRelevantTabComplete(loaded.config, group, navigationTabId);
-        tabId = navigationTabId;
       } else {
-        stage = "health_tab_query";
         state.relevantTabs = await relevantTabIds(group);
         await saveState(root);
-        tabId = state.relevantTabs[0];
       }
-      stage = "health_execution";
-      health = tabId === undefined ? "no_relevant_tab" : await healthCheckWithBackoff(group, tabId);
+      health = "restored";
     }
-    success = health === "authenticated";
+    success = health === "restored";
   } catch (error: unknown) {
     health = stage === "cookie_set" && error instanceof RedactedCookieSetFailure ? `cookie_set_${error.category}` : `${stage}_failed`;
     console.error(`FCP group ${group.id} inject failed: ${health}`);
@@ -403,8 +637,6 @@ async function injectCookies(loaded: LoadedConfig, group: AccountGroup, payload:
   }
   state.groupState = success ? "leased" : "degraded";
   state.leaseId = leaseId;
-  state.invalidationPending = health === "logged_out" || health === "invalid_session";
-  state.invalidationReason = state.invalidationPending ? "restore_rejected" : undefined;
   if (success && state.navigationUnlockRequestTabId !== undefined) {
     const completedTabId = state.navigationUnlockRequestTabId;
     const remaining = Object.entries(state.pendingNavigationUnlocks ?? {}).filter(([tabId]) => Number(tabId) !== completedTabId);
@@ -419,7 +651,7 @@ async function injectCookies(loaded: LoadedConfig, group: AccountGroup, payload:
   state.lastEvent = `inject:${health}`;
   await saveState(root);
   send("inject.result", { account_group_id: group.id, lease_id: leaseId, success, health_check: health });
-  if (!success && !state.invalidationPending) setTimeout(() => enqueue(() => requestEviction(loaded, group, "startup_reconciliation", leaseId)), 100);
+  if (!success) setTimeout(() => enqueue(() => requestEviction(loaded, group, "startup_reconciliation", leaseId)), 100);
 }
 
 async function finishEviction(loaded: LoadedConfig, group: AccountGroup, payload: Record<string, unknown>, root: RuntimeState, state: GroupRuntimeState): Promise<void> {
@@ -434,8 +666,13 @@ async function finishEviction(loaded: LoadedConfig, group: AccountGroup, payload
     state.evictionRequestPending = false;
     state.injectAfterReconciliation = false;
     state.lastEvent = count > 0 ? "enrollment_retained_leased" : "enrollment_cookie_missing";
+    // An enrollment started only to capture a scope the user has already stopped using
+    // (see requestEviction) hands straight over to the eviction it was standing in for.
+    const chained = state.evictAfterEnrollment;
+    state.evictAfterEnrollment = undefined;
     await saveState(root);
     if (count === 0) await queueMonitorEvent("reconciliation_failed", group.id);
+    else if (chained !== undefined) await requestEviction(loaded, group, chained, state.leaseId);
     return;
   }
   if (disposition !== "remove") throw new Error("unsupported cookie disposition");
@@ -454,12 +691,14 @@ async function finishEviction(loaded: LoadedConfig, group: AccountGroup, payload
   if (state.invalidationPending === true && state.invalidationReason !== undefined) {
     send("session.invalidate", { account_group_id: group.id, lease_id: state.leaseId, reason: state.invalidationReason });
   } else if (remaining === 0 && shouldInject) {
-    await requestLease(loaded, group, "inject");
+    const tabId = state.relevantTabs[0];
+    if (tabId !== undefined) await offerUnlockOnTab(loaded, group, tabId);
   }
 }
 
 async function requestLease(loaded: LoadedConfig, group: AccountGroup, purpose: LeasePurpose): Promise<void> {
   if (policyParameters(group.policy_level).monitoringOnly) return;
+  if (!await hasScopePermission(group)) return void markPermissionMissing(loaded, group);
   const root = await loadState(loaded);
   const state = requiredGroupState(root, group.id);
   if (state.invalidationPending || state.pendingLeaseRequest !== undefined || state.evictionRequestPending) return;
@@ -472,11 +711,28 @@ async function requestLease(loaded: LoadedConfig, group: AccountGroup, purpose: 
 }
 
 async function requestEviction(loaded: LoadedConfig, group: AccountGroup, reason: string, leaseId: string | undefined): Promise<void> {
+  if (!await hasScopePermission(group)) return void markPermissionMissing(loaded, group);
   const root = await loadState(loaded);
   const state = requiredGroupState(root, group.id);
   if (state.invalidationPending || state.pendingLeaseRequest !== undefined || state.evictionRequestPending) return;
+  if (USER_IDLE_TRIGGERS.has(reason)) {
+    const present = (await getCookies(group)).length;
+    // ADR-020: nothing in the scope means nothing to protect. Discard the vault rather than
+    // sealing an empty jar, which would cost a Hello gesture on the next visit for no session.
+    if (present === 0) {
+      if (state.groupState === "leased") await requestSessionInvalidation(loaded, group, "scope_empty");
+      return;
+    }
+    // The scope holds cookies but was never captured: enroll first, then evict what was
+    // captured. Replaces the old "did a login just happen" heuristic.
+    if (state.groupState === "uninitialized") {
+      state.evictAfterEnrollment = reason;
+      await saveState(root);
+      await requestLease(loaded, group, "enroll");
+      return;
+    }
+  }
   const valid = state.groupState === "leased" ||
-    (state.groupState === "sealed" && reason === "site_cookie_recreated") ||
     (state.groupState === "degraded" && reason === "degraded_cookie_detected") ||
     (reason === "startup_reconciliation" && state.groupState !== "uninitialized");
   if (!valid) return;
@@ -485,6 +741,15 @@ async function requestEviction(loaded: LoadedConfig, group: AccountGroup, reason
   state.lastEvent = `eviction_request_pending:${reason}`;
   await saveState(root);
   send("evict.request", { account_group_id: group.id, lease_id: leaseId, operation_id: crypto.randomUUID(), phase: "begin", reason });
+}
+
+async function markPermissionMissing(loaded: LoadedConfig, group: AccountGroup): Promise<void> {
+  const root = await loadState(loaded);
+  const state = requiredGroupState(root, group.id);
+  if (state.lastEvent === "permission_missing") return;
+  state.lastEvent = "permission_missing";
+  await saveState(root);
+  console.warn(`FCP group ${group.id} is configured but the extension lacks host permission for its scope`);
 }
 
 async function requestSessionInvalidation(loaded: LoadedConfig, group: AccountGroup, reason: SessionInvalidationReason): Promise<void> {
@@ -498,7 +763,35 @@ async function requestSessionInvalidation(loaded: LoadedConfig, group: AccountGr
   if (!state.evictionRequestPending) send("session.invalidate", { account_group_id: group.id, lease_id: state.leaseId, reason });
 }
 
+// Reconciliation can leave a sealed group with the site still open; the tab is put through the
+// same gate as an ordinary navigation.
+async function offerUnlockOnTab(loaded: LoadedConfig, group: AccountGroup, tabId: number): Promise<void> {
+  try {
+    const tab = await callbackPromise<chrome.tabs.Tab>((done) => chrome.tabs.get(tabId, done));
+    if (tab.url === undefined || groupForUrl(loaded.config, tab.url)?.id !== group.id) return;
+    await interceptSealedNavigation(loaded, group, tabId, tab.url);
+  } catch { /* the tab closed while reconciliation ran */ }
+}
+
+// The interstitial exists to hold the target URL and to give a place to land on failure, not to
+// demand a second click: reaching a protected site is itself the user's request to open it, so
+// Hello starts immediately. A cancelled prompt returns to the interstitial with a retry button.
+async function startUnlockOnTab(loaded: LoadedConfig, group: AccountGroup, tabId: number, event: string): Promise<void> {
+  const root = await loadState(loaded);
+  const state = requiredGroupState(root, group.id);
+  if (state.groupState !== "sealed" || state.pendingLeaseRequest !== undefined || state.evictionRequestPending || state.reconciliation) return;
+  if (!client?.connected) { void connect(); return; }
+  state.navigationUnlockRequestTabId = tabId;
+  state.navigationUnlockError = undefined;
+  state.lastEvent = event;
+  await saveState(root);
+  await requestLease(loaded, group, "inject");
+}
+
 async function interceptSealedNavigation(loaded: LoadedConfig, group: AccountGroup, tabId: number, targetUrl: string): Promise<void> {
+  // Without permission the unlock gate could never complete, so the page is left alone rather
+  // than trapping the user on an interstitial that cannot succeed.
+  if (!await hasScopePermission(group)) return void markPermissionMissing(loaded, group);
   const root = await loadState(loaded);
   const state = requiredGroupState(root, group.id);
   if (state.groupState !== "sealed" || state.reconciliation || state.invalidationPending || state.pendingLeaseRequest !== undefined || state.evictionRequestPending) return;
@@ -508,6 +801,7 @@ async function interceptSealedNavigation(loaded: LoadedConfig, group: AccountGro
   state.lastEvent = "navigation_unlock_intercepted";
   await saveState(root);
   await updateTab(tabId, UNLOCK_PAGE_URL);
+  await startUnlockOnTab(loaded, group, tabId, "navigation_auto_unlock");
 }
 
 async function handleUnlockPageMessage(loaded: LoadedConfig, type: "unlock.status" | "unlock.start", tabId: number | undefined): Promise<Record<string, unknown>> {
@@ -547,18 +841,28 @@ class NativeClient {
   private readonly nonce = randomNonce();
   private outgoing = 0;
   private incoming = 0;
-  constructor(private readonly configDigest: string, private readonly onMessage: (message: WireMessage) => Promise<void>, private readonly onDisconnect: () => Promise<void>) {}
+  constructor(private readonly cachedConfigDigest: string | undefined, private readonly onMessage: (message: WireMessage) => Promise<void>, private readonly onDisconnect: () => Promise<void>) {}
   get connected(): boolean { return this.port !== undefined; }
   start(): void {
     const port = chrome.runtime.connectNative(HOST_NAME);
     this.port = port;
     port.onMessage.addListener((raw) => enqueue(() => this.receive(raw)));
     port.onDisconnect.addListener(() => { this.port = undefined; enqueue(this.onDisconnect); });
-    this.send("handshake", { protocol_version: PROTOCOL_VERSION, extension_id: chrome.runtime.id, config_digest: this.configDigest });
+    this.send("handshake", { protocol_version: PROTOCOL_VERSION, extension_id: chrome.runtime.id, cached_config_digest: this.cachedConfigDigest ?? null });
   }
   send(type: string, payload: Record<string, unknown>): void {
+    const port = this.port;
+    if (port === undefined) throw new Error("native host is not connected");
     this.outgoing += 1;
-    this.port?.postMessage({ v: PROTOCOL_VERSION, conn_nonce: this.nonce, seq: this.outgoing, id: crypto.randomUUID(), type, payload });
+    try {
+      port.postMessage({ v: PROTOCOL_VERSION, conn_nonce: this.nonce, seq: this.outgoing, id: crypto.randomUUID(), type, payload });
+    } catch (error: unknown) {
+      // The port can die between the connected check and this write (a service-worker restart
+      // after a permission grant does exactly that). Drop it here so the reconnect path runs
+      // instead of repeatedly writing into a dead port.
+      this.port = undefined;
+      throw error instanceof Error ? error : new Error("native host write failed");
+    }
   }
   private async receive(raw: unknown): Promise<void> {
     if (!isEnvelope(raw)) throw new Error("malformed native envelope");
@@ -609,6 +913,12 @@ async function handleMonitorAlert(value: unknown): Promise<void> {
     const pending = await monitorOutbox();
     await setLocal(MONITOR_OUTBOX_KEY, pending.filter((item) => item.event_id !== event.event_id));
   }
+  if (event.severity === "info") return;
+  // The rate limit exists to stop notification spam, not to hide events. The toast is the noisy,
+  // interrupting channel and stays limited; the badge and the popup record are cheap and are
+  // always refreshed, so an event that arrives right after the user acknowledged the previous one
+  // still leaves a visible trace instead of passing silently.
+  await recordAlert(event);
   const previousValue = await getLocal(MONITOR_RATE_KEY);
   const previous = isNotificationDecisionState(previousValue) ? previousValue : {};
   const decision = notificationDecision(event, previous, Date.now());
@@ -619,11 +929,56 @@ async function handleMonitorAlert(value: unknown): Promise<void> {
     type: "basic", iconUrl: MONITOR_ICON_URL, title: content.title, message: content.message,
     priority: event.severity === "high" ? 2 : 1,
   });
+}
+
+async function recordAlert(event: MonitorEvent): Promise<void> {
+  const storedValue = await getLocal(LAST_ALERT_KEY);
+  const stored = isStoredAlert(storedValue) ? storedValue : undefined;
+  const sameAsStored = stored?.signal === event.signal && stored.accountGroupId === (event.account_group_id ?? null);
+  const entry: StoredAlert = {
+    signal: event.signal, severity: event.severity,
+    accountGroupId: event.account_group_id ?? null, observedAtUnixMs: event.observed_at_unix_ms,
+    occurrences: sameAsStored ? stored.occurrences + 1 : 1,
+  };
+  await setLocal(LAST_ALERT_KEY, entry);
+  await appendAlertLog(entry);
   await setBadge(event.severity === "high" ? "!" : "•", event.severity === "high" ? "#b3261e" : "#b06000");
+}
+
+// One browser launch can emit the same signal many times over (PLAN §30 dedup finding), so the
+// newest entry is coalesced rather than pushed repeatedly; the raw sequence stays in the audit log.
+async function appendAlertLog(entry: StoredAlert): Promise<void> {
+  const stored = await getLocal(ALERT_LOG_KEY);
+  const log = Array.isArray(stored) ? stored.filter(isStoredAlert) : [];
+  const newest = log[log.length - 1];
+  if (newest !== undefined && newest.signal === entry.signal && newest.accountGroupId === entry.accountGroupId) {
+    log[log.length - 1] = entry;
+  } else {
+    log.push(entry);
+  }
+  await setLocal(ALERT_LOG_KEY, log.slice(-ALERT_LOG_LIMIT));
+}
+
+interface StoredAlert {
+  signal: string;
+  severity: string;
+  accountGroupId: string | null;
+  observedAtUnixMs: number;
+  occurrences: number;
+}
+
+function isStoredAlert(value: unknown): value is StoredAlert {
+  const alert = value as Partial<StoredAlert> | undefined;
+  return typeof alert?.signal === "string" && typeof alert.severity === "string" &&
+    typeof alert.observedAtUnixMs === "number" && typeof alert.occurrences === "number";
 }
 
 function isNotificationDecisionState(value: unknown): value is NotificationDecisionState {
   return typeof value === "object" && value !== null && Object.values(value).every((item) => typeof item === "number" && Number.isFinite(item));
+}
+
+function isExpired(cookie: CookieRecord): boolean {
+  return !cookie.session && typeof cookie.expiration_date === "number" && cookie.expiration_date * 1_000 <= Date.now();
 }
 
 async function setCookie(group: AccountGroup, cookie: CookieRecord): Promise<void> {
@@ -642,90 +997,50 @@ async function setCookie(group: AccountGroup, cookie: CookieRecord): Promise<voi
   });
 }
 
+async function removeCookie(group: AccountGroup, cookie: chrome.cookies.Cookie): Promise<void> {
+  mutatingGroups.add(group.id);
+  try {
+    markExpectedRemoval(group.id, cookie);
+    await callbackPromise((done) => chrome.cookies.remove({ url: cookieUrl(cookie), name: cookie.name, storeId: cookie.storeId, partitionKey: cookie.partitionKey }, done));
+  } finally { mutatingGroups.delete(group.id); }
+}
+
 async function removeAllCookies(group: AccountGroup): Promise<void> {
   mutatingGroups.add(group.id);
   try {
     for (const cookie of await getCookies(group)) {
-      const selector = selectorForCookie(group, cookie);
-      if (selector === undefined) continue;
       markExpectedRemoval(group.id, cookie);
-      await callbackPromise((done) => chrome.cookies.remove({ url: selector.url, name: cookie.name, storeId: cookie.storeId, partitionKey: cookie.partitionKey }, done));
+      await callbackPromise((done) => chrome.cookies.remove({ url: cookieUrl(cookie), name: cookie.name, storeId: cookie.storeId, partitionKey: cookie.partitionKey }, done));
     }
   } finally { mutatingGroups.delete(group.id); }
 }
 
+// ADR-020: every cookie under the group's registrable domain, with no name filtering. Chrome's
+// `domain` filter already covers the scope and its subdomains.
 async function getCookies(group: AccountGroup): Promise<chrome.cookies.Cookie[]> {
-  const sets = await Promise.all(group.cookie_selectors.map((selector) => callbackPromise<chrome.cookies.Cookie[]>((done) => chrome.cookies.getAll({ url: selector.url, name: selector.name }, done))));
+  const found = await callbackPromise<chrome.cookies.Cookie[]>((done) => chrome.cookies.getAll({ domain: group.scope }, done));
   const uniqueCookies = new Map<string, chrome.cookies.Cookie>();
-  for (const cookie of sets.flat()) if (selectorForCookie(group, cookie) !== undefined) uniqueCookies.set(cookieIdentity(cookie), cookie);
+  for (const cookie of found) if (cookieBelongsToGroup(group, cookie)) uniqueCookies.set(cookieIdentity(cookie), cookie);
   return [...uniqueCookies.values()];
 }
 
-async function waitForStableEnrollmentCookies(group: AccountGroup): Promise<chrome.cookies.Cookie[]> {
-  const deadline = Date.now() + ENROLLMENT_TIMEOUT_MS;
-  let signature: string | undefined;
-  let stableSince = 0;
-  let reported = "";
-  while (Date.now() < deadline) {
-    const cookies = await getCookies(group);
-    const metadata = cookies.map((cookie) => {
-      const selector = selectorForCookie(group, cookie);
-      return selector === undefined ? undefined : { selector: selector.id, domain: cookie.domain, path: cookie.path, httpOnly: cookie.httpOnly, secure: cookie.secure, sameSite: cookie.sameSite, session: cookie.session };
-    }).filter((item) => item !== undefined).sort((left, right) => left.selector.localeCompare(right.selector));
-    const serialized = JSON.stringify(metadata);
-    if (serialized !== reported) { reported = serialized; console.info(`FCP group ${group.id} selector diagnostic`, metadata); }
-    if (hasRequiredEnrollmentCookies(group, cookies)) {
-      const next = cookies.map((cookie) => `${cookieIdentity(cookie)}\u0000${cookie.value}`).sort().join("\u0001");
-      if (next !== signature) { signature = next; stableSince = Date.now(); }
-      else if (Date.now() - stableSince >= ENROLLMENT_STABLE_MS) return cookies;
-    } else { signature = undefined; stableSince = 0; }
-    await delay(250);
-  }
-  return [];
+// The host's config and the extension's optional host permissions are independent: uninstalling
+// the extension drops its granted origins while the host keeps the protected-site list on disk.
+// Operating on a scope we cannot read or write would fail on every cookie call, so it is checked
+// up front and surfaced to the user instead (PLAN §29.2).
+function hasScopePermission(group: AccountGroup): Promise<boolean> {
+  return new Promise((resolve) => {
+    chrome.permissions.contains({ origins: navigationPatterns(group) }, (granted) => {
+      resolve(chrome.runtime.lastError === undefined && granted);
+    });
+  });
 }
 
 async function relevantTabIds(group: AccountGroup): Promise<number[]> {
-  const tabs = await callbackPromise<chrome.tabs.Tab[]>((done) => chrome.tabs.query({ url: group.navigation_patterns }, done));
-  return tabs.flatMap((tab) => tab.id !== undefined && groupForUrl({ version: 1, compatibility_version: 1, groups: [group] }, tab.url) !== undefined ? [tab.id] : []);
+  const tabs = await callbackPromise<chrome.tabs.Tab[]>((done) => chrome.tabs.query({ url: navigationPatterns(group) }, done));
+  return tabs.flatMap((tab) => tab.id !== undefined && groupForUrl({ version: 2, compatibility_version: 2, groups: [group] }, tab.url) !== undefined ? [tab.id] : []);
 }
 
-async function healthCheck(group: AccountGroup, tabId: number): Promise<string> {
-  if (group.health_check.kind === "wikipedia_userinfo") {
-    const results = await callbackPromise<chrome.scripting.InjectionResult<{ status: number; authenticated: boolean }>[]>((done) => chrome.scripting.executeScript({
-      target: { tabId }, world: "MAIN",
-      func: async () => {
-        const response = await fetch("/w/api.php?action=query&meta=userinfo&format=json&formatversion=2", { credentials: "include", cache: "no-store" });
-        const body = await response.json() as { query?: { userinfo?: { id?: number; anon?: boolean } } };
-        const user = body.query?.userinfo;
-        return { status: response.status, authenticated: response.ok && user?.anon !== true && typeof user?.id === "number" && user.id > 0 };
-      },
-    }, done));
-    const result = results[0]?.result;
-    return result?.status === 200 && result.authenticated ? "authenticated" : "logged_out";
-  }
-  const results = await callbackPromise<chrome.scripting.InjectionResult<{ status: number; state?: string }>[]>((done) => chrome.scripting.executeScript({
-    target: { tabId }, world: "MAIN",
-    func: async () => {
-      const response = await fetch("/api/protected", { credentials: "include", cache: "no-store" });
-      const body = await response.json() as { state?: string };
-      return { status: response.status, state: body.state };
-    },
-  }, done));
-  const result = results[0]?.result;
-  if (result?.status === 200 && result.state === "authenticated") return "authenticated";
-  return result?.state === "invalid_session" ? "invalid_session" : "logged_out";
-}
-
-async function healthCheckWithBackoff(group: AccountGroup, tabId: number): Promise<string> {
-  let result = "invalid_health_response";
-  for (const wait of [0, 100, 200, 400, 800]) {
-    if (wait > 0) await delay(wait);
-    result = await healthCheck(group, tabId);
-    if (result === "authenticated" || result === "logged_out" || result === "invalid_session") return result;
-    if ((await getCookies(group)).length === 0) return "cookie_disappeared_before_health";
-  }
-  return result;
-}
 
 async function loadState(loaded: LoadedConfig): Promise<RuntimeState> {
   const stored = await storageGet(STATE_KEY);

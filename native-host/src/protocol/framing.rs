@@ -60,7 +60,7 @@ mod tests {
             message: Message::Handshake(Handshake {
                 protocol_version: PROTOCOL_VERSION,
                 extension_id: "test".into(),
-                config_digest: "00".repeat(32),
+                cached_config_digest: None,
             }),
         };
         let mut wire = Vec::new();

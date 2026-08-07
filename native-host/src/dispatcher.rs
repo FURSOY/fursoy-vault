@@ -2,8 +2,13 @@ use std::collections::BTreeMap;
 
 use uuid::Uuid;
 
+use sha2::{Digest, Sha256};
+
+use crate::atomic_file::write_verified;
 use crate::audit::{AuditLogger, unix_ms};
-use crate::config::{LoadedConfig, PolicyLevel};
+use crate::config::{
+    AccountGroup, AccountGroupsConfig, EvictionTrigger, LoadedConfig, PolicyLevel, StorePolicy,
+};
 use crate::crypto::hello::HelloAuthorizer;
 use crate::lease::metadata::{LeaseMetadata, LeaseMetadataStore};
 use crate::lease::store::FileCapabilityLedgerStore;
@@ -11,9 +16,10 @@ use crate::monitor::MonitorEngine;
 use crate::paths::DataPaths;
 use crate::protocol::envelope::PROTOCOL_VERSION;
 use crate::protocol::messages::{
-    AuthCacheClear, CookieDisposition, CookiesInject, CookiesSnapshot, EvictConfirmed, EvictPhase,
-    EvictRequest, EvictResult, GroupState, Handshake, HandshakeAck, HandshakeGroupState,
-    InjectResult, LeaseDeny, LeaseGrant, LeasePurpose, LeaseRequest, Message, SessionInvalidate,
+    AuthCacheClear, ConfigRejected, ConfigUpdated, CookieDisposition, CookiesInject,
+    CookiesSnapshot, EvictConfirmed, EvictPhase, EvictRequest, EvictResult, GroupAdd, GroupRemove,
+    GroupSetPolicy, GroupState, Handshake, HandshakeAck, HandshakeGroupState, InjectResult,
+    LeaseDeny, LeaseGrant, LeasePurpose, LeaseRequest, Message, SessionInvalidate,
     SessionInvalidated, SessionInvalidationReason,
 };
 #[cfg(debug_assertions)]
@@ -53,11 +59,31 @@ struct GroupRuntime {
 pub struct NativeHostApp {
     groups: BTreeMap<Uuid, GroupRuntime>,
     audit: AuditLogger,
+    paths: DataPaths,
+    config: AccountGroupsConfig,
     config_digest: String,
     handshake_complete: bool,
     last_message_group: Option<Uuid>,
     hello_authorizer: Option<HelloAuthorizer>,
     monitor: MonitorEngine,
+}
+
+fn build_group_runtime(paths: &DataPaths, definition: &AccountGroup) -> FcpResult<GroupRuntime> {
+    let vault_store = VaultStore::new(&paths.vault_groups);
+    let vault_exists = vault_store.path_for(definition.id).exists();
+    let capability_store = FileCapabilityLedgerStore::new(paths.capability_path(definition.id));
+    let transactions = VaultTransactions::open(definition.id, vault_store, capability_store)?;
+    let lease_store = LeaseMetadataStore::new(paths.lease_path(definition.id));
+    let lease = lease_store.load_or_initialize(definition.id, vault_exists)?;
+    Ok(GroupRuntime {
+        id: definition.id,
+        policy: definition.policy_level,
+        transactions,
+        lease_store,
+        lease,
+        pending: None,
+        hello_cache_expires_at: None,
+    })
 }
 
 impl NativeHostApp {
@@ -66,26 +92,7 @@ impl NativeHostApp {
         paths.migrate_phase5_group(WIKIPEDIA_ACCOUNT_GROUP_ID)?;
         let mut groups = BTreeMap::new();
         for definition in &loaded.config.groups {
-            let vault_store = VaultStore::new(&paths.vault_groups);
-            let vault_exists = vault_store.path_for(definition.id).exists();
-            let capability_store =
-                FileCapabilityLedgerStore::new(paths.capability_path(definition.id));
-            let transactions =
-                VaultTransactions::open(definition.id, vault_store, capability_store)?;
-            let lease_store = LeaseMetadataStore::new(paths.lease_path(definition.id));
-            let lease = lease_store.load_or_initialize(definition.id, vault_exists)?;
-            groups.insert(
-                definition.id,
-                GroupRuntime {
-                    id: definition.id,
-                    policy: definition.policy_level,
-                    transactions,
-                    lease_store,
-                    lease,
-                    pending: None,
-                    hello_cache_expires_at: None,
-                },
-            );
+            groups.insert(definition.id, build_group_runtime(paths, definition)?);
         }
         let monitor = MonitorEngine::start();
         #[cfg(debug_assertions)]
@@ -105,6 +112,8 @@ impl NativeHostApp {
         Ok(Self {
             groups,
             audit: AuditLogger::open(&paths.audit_directory)?,
+            paths: paths.clone(),
+            config: loaded.config,
             config_digest: loaded.digest,
             handshake_complete: false,
             last_message_group: None,
@@ -143,6 +152,16 @@ impl NativeHostApp {
                     "monitor.alert direction is host-to-extension only".into(),
                 ));
             }
+            // Config mutations are host-wide rather than group-scoped, so they are handled
+            // before the per-group routing below.
+            Message::GroupAdd(request) => return self.handle_group_add(request),
+            Message::GroupRemove(request) => return self.handle_group_remove(request),
+            Message::GroupSetPolicy(request) => return self.handle_group_set_policy(request),
+            Message::ConfigUpdated(_) | Message::ConfigRejected(_) => {
+                return Err(FcpError::Protocol(
+                    "config result direction is host-to-extension only".into(),
+                ));
+            }
             _ => {}
         }
         let group_id = message_group_id(&message).ok_or_else(|| {
@@ -176,14 +195,24 @@ impl NativeHostApp {
         if handshake.extension_id != PRODUCT_EXTENSION_ID {
             return Err(FcpError::Protocol("unexpected extension id".into()));
         }
-        if handshake.config_digest != self.config_digest {
-            return Err(FcpError::Protocol(
-                "account-group config digest mismatch".into(),
-            ));
-        }
+        // Q24: the host is the single source of truth for the config, so a stale cached digest
+        // on the extension side is not an error — the authoritative config rides along in the ack.
         self.handshake_complete = true;
-        let states = self
-            .groups
+        let states = self.group_states();
+        for group_id in self.groups.keys().copied() {
+            self.audit
+                .record(group_id, "handshake", "success", None, None)?;
+        }
+        Ok(vec![Message::HandshakeAck(HandshakeAck {
+            protocol_version: PROTOCOL_VERSION,
+            config_digest: self.config_digest.clone(),
+            config: self.config.clone(),
+            groups: states,
+        })])
+    }
+
+    fn group_states(&self) -> Vec<HandshakeGroupState> {
+        self.groups
             .values()
             .map(|runtime| HandshakeGroupState {
                 account_group_id: runtime.id,
@@ -195,16 +224,174 @@ impl NativeHostApp {
                 lease_id: runtime.lease.lease_id,
                 lease_expiry_unix_ms: runtime.lease.expires_at_unix_ms,
             })
-            .collect();
-        for group_id in self.groups.keys().copied() {
-            self.audit
-                .record(group_id, "handshake", "success", None, None)?;
+            .collect()
+    }
+
+    fn handle_group_add(&mut self, request: GroupAdd) -> FcpResult<Vec<Message>> {
+        let scope = request
+            .scope
+            .trim()
+            .trim_start_matches('.')
+            .to_ascii_lowercase();
+        let display_name = request.display_name.trim().to_owned();
+        let display_name = if display_name.is_empty() {
+            scope.clone()
+        } else {
+            display_name
+        };
+        let mut candidate = self.config.clone();
+        candidate.groups.push(AccountGroup {
+            id: Uuid::new_v4(),
+            display_name,
+            scope,
+            policy_level: request.policy_level,
+            eviction_triggers: vec![
+                EvictionTrigger::LastTabClosed,
+                EvictionTrigger::Idle,
+                EvictionTrigger::Lock,
+                EvictionTrigger::Expiry,
+                EvictionTrigger::Manual,
+            ],
+            store_policy: StorePolicy::NormalProfile,
+        });
+        // Validation is the same routine that guards the on-disk config, so a runtime addition
+        // can never produce a config the host would refuse to load on its next start.
+        if let Err(error) = candidate.validate() {
+            return Ok(vec![Message::ConfigRejected(ConfigRejected {
+                reason: config_rejection_code(&error).into(),
+            })]);
         }
-        Ok(vec![Message::HandshakeAck(HandshakeAck {
-            protocol_version: PROTOCOL_VERSION,
+        let added = candidate
+            .groups
+            .last()
+            .ok_or_else(|| FcpError::Protocol("group addition lost the new group".into()))?
+            .clone();
+        let runtime = build_group_runtime(&self.paths, &added)?;
+        self.commit_config(candidate)?;
+        self.groups.insert(added.id, runtime);
+        self.audit
+            .record(added.id, "config", "success", None, Some("group_added"))?;
+        Ok(vec![self.config_updated_message()])
+    }
+
+    fn handle_group_remove(&mut self, request: GroupRemove) -> FcpResult<Vec<Message>> {
+        let Some(runtime) = self.groups.get_mut(&request.account_group_id) else {
+            return Ok(vec![Message::ConfigRejected(ConfigRejected {
+                reason: "unknown_group".into(),
+            })]);
+        };
+        if runtime.pending.is_some() {
+            return Ok(vec![Message::ConfigRejected(ConfigRejected {
+                reason: "operation_pending".into(),
+            })]);
+        }
+        // Dropping protection must not leave the vault behind: discard it under the same
+        // fail-closed path used for invalidation before the group stops being tracked.
+        runtime.transactions.invalidate()?;
+        let mut candidate = self.config.clone();
+        candidate
+            .groups
+            .retain(|group| group.id != request.account_group_id);
+        if candidate.groups.is_empty() {
+            return Ok(vec![Message::ConfigRejected(ConfigRejected {
+                reason: "last_group_cannot_be_removed".into(),
+            })]);
+        }
+        candidate.validate()?;
+        self.commit_config(candidate)?;
+        self.groups.remove(&request.account_group_id);
+        self.audit.record(
+            request.account_group_id,
+            "config",
+            "success",
+            None,
+            Some("group_removed"),
+        )?;
+        Ok(vec![self.config_updated_message()])
+    }
+
+    fn handle_group_set_policy(&mut self, request: GroupSetPolicy) -> FcpResult<Vec<Message>> {
+        match self.groups.get(&request.account_group_id) {
+            None => {
+                return Ok(vec![Message::ConfigRejected(ConfigRejected {
+                    reason: "unknown_group".into(),
+                })]);
+            }
+            Some(runtime) if runtime.pending.is_some() => {
+                return Ok(vec![Message::ConfigRejected(ConfigRejected {
+                    reason: "operation_pending".into(),
+                })]);
+            }
+            Some(_) => {}
+        }
+        let mut candidate = self.config.clone();
+        let Some(definition) = candidate
+            .groups
+            .iter_mut()
+            .find(|group| group.id == request.account_group_id)
+        else {
+            return Ok(vec![Message::ConfigRejected(ConfigRejected {
+                reason: "unknown_group".into(),
+            })]);
+        };
+        definition.policy_level = request.policy_level;
+        candidate.validate()?;
+        self.commit_config(candidate)?;
+        // The live runtime carries its own copy of the policy, so it is updated in step with the
+        // persisted config; otherwise lease durations would keep following the old level.
+        if let Some(runtime) = self.groups.get_mut(&request.account_group_id) {
+            runtime.policy = request.policy_level;
+            runtime.hello_cache_expires_at = None;
+        }
+        self.audit.record(
+            request.account_group_id,
+            "config",
+            "success",
+            None,
+            Some("policy_changed"),
+        )?;
+        Ok(vec![self.config_updated_message()])
+    }
+
+    fn commit_config(&mut self, candidate: AccountGroupsConfig) -> FcpResult<()> {
+        let bytes = serde_json::to_vec_pretty(&candidate)?;
+        // Same write/read-back/replace discipline as the vault: the digest published to the
+        // extension is computed from the bytes that are actually on disk.
+        write_verified(&self.paths.account_groups_config, &bytes, |persisted| {
+            let parsed: AccountGroupsConfig = serde_json::from_slice(persisted)?;
+            parsed.validate()
+        })?;
+        self.config_digest = config_digest_of(&bytes);
+        self.config = candidate;
+        Ok(())
+    }
+
+    fn config_updated_message(&self) -> Message {
+        Message::ConfigUpdated(ConfigUpdated {
             config_digest: self.config_digest.clone(),
-            groups: states,
-        })])
+            config: self.config.clone(),
+            groups: self.group_states(),
+        })
+    }
+}
+
+fn config_digest_of(bytes: &[u8]) -> String {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let digest = Sha256::digest(bytes);
+    let mut encoded = String::with_capacity(digest.len() * 2);
+    for byte in digest {
+        encoded.push(HEX[(byte >> 4) as usize] as char);
+        encoded.push(HEX[(byte & 0x0f) as usize] as char);
+    }
+    encoded
+}
+
+fn config_rejection_code(error: &FcpError) -> &'static str {
+    match error {
+        FcpError::Format(message) if message.contains("overlap") => "scope_overlaps_existing",
+        FcpError::Format(message) if message.contains("scope is invalid") => "scope_invalid",
+        FcpError::Format(message) if message.contains("outside bounds") => "group_limit_reached",
+        _ => "config_invalid",
     }
 }
 
@@ -379,18 +566,15 @@ impl GroupRuntime {
         if self.lease.state != GroupState::Leased || self.lease.lease_id != Some(result.lease_id) {
             return Err(FcpError::Protocol("inject result lease mismatch".into()));
         }
-        if result.success && result.health_check == "authenticated" {
+        // ADR-020: success is a verified cookie round-trip. The host no longer interprets a
+        // site-specific health check, so a restored-but-stale session is not an error here; it
+        // self-heals when the user logs in again and the next eviction captures fresh cookies.
+        if result.success && result.health_check == "restored" {
             audit.record(self.id, "inject", "success", None, None)?;
             return Ok(Vec::new());
         }
         let detail_code = inject_failure_code(&result.health_check);
         audit.record(self.id, "inject", "failed", None, Some(detail_code))?;
-        if matches!(
-            result.health_check.as_str(),
-            "logged_out" | "invalid_session"
-        ) {
-            return self.invalidate_session(SessionInvalidationReason::RestoreRejected, audit);
-        }
         self.lease.state = GroupState::Degraded;
         self.lease.advance_transition()?;
         self.lease_store.persist(&self.lease)?;
@@ -463,6 +647,7 @@ impl GroupRuntime {
         let detail = match reason {
             SessionInvalidationReason::ExternalLogout => "external_logout",
             SessionInvalidationReason::RestoreRejected => "restore_rejected",
+            SessionInvalidationReason::ScopeEmpty => "scope_empty",
         };
         audit.record(
             self.id,
@@ -758,6 +943,169 @@ mod tests {
         }
     }
 
+    fn handshaken(paths: &DataPaths) -> NativeHostApp {
+        let mut app = NativeHostApp::open(paths).unwrap();
+        app.handle(Message::Handshake(Handshake {
+            protocol_version: PROTOCOL_VERSION,
+            extension_id: PRODUCT_EXTENSION_ID.into(),
+            cached_config_digest: None,
+        }))
+        .unwrap();
+        app
+    }
+
+    #[test]
+    fn adding_a_group_persists_config_and_creates_a_runtime() {
+        let root = std::env::temp_dir().join(format!("fcp-group-add-{}", Uuid::new_v4()));
+        let paths = test_paths(&root);
+        let mut app = handshaken(&paths);
+        let before = app.config_digest.clone();
+        let output = app
+            .handle(Message::GroupAdd(GroupAdd {
+                scope: "Example.COM".into(),
+                display_name: "  ".into(),
+                policy_level: PolicyLevel::Balanced,
+            }))
+            .unwrap();
+        match &output[0] {
+            Message::ConfigUpdated(updated) => {
+                assert_eq!(updated.config.groups.len(), 3);
+                assert_ne!(updated.config_digest, before);
+                let added = updated
+                    .config
+                    .groups
+                    .iter()
+                    .find(|group| group.scope == "example.com")
+                    .expect("normalized scope is stored");
+                // An empty display name falls back to the scope rather than persisting blank.
+                assert_eq!(added.display_name, "example.com");
+                assert!(app.groups.contains_key(&added.id));
+            }
+            other => panic!("expected config.updated, got {other:?}"),
+        }
+        // The host must be able to reload exactly what it just wrote.
+        let reloaded = LoadedConfig::load(&paths.account_groups_config).unwrap();
+        assert_eq!(reloaded.config.groups.len(), 3);
+        assert_eq!(reloaded.digest, app.config_digest);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn overlapping_scope_is_rejected_without_touching_the_live_config() {
+        let root = std::env::temp_dir().join(format!("fcp-group-overlap-{}", Uuid::new_v4()));
+        let paths = test_paths(&root);
+        let mut app = handshaken(&paths);
+        let before = app.config_digest.clone();
+        let output = app
+            .handle(Message::GroupAdd(GroupAdd {
+                scope: "tr.wikipedia.org".into(),
+                display_name: "nested".into(),
+                policy_level: PolicyLevel::Critical,
+            }))
+            .unwrap();
+        match &output[0] {
+            Message::ConfigRejected(rejected) => {
+                assert_eq!(rejected.reason, "scope_overlaps_existing");
+            }
+            other => panic!("expected config.rejected, got {other:?}"),
+        }
+        assert_eq!(app.groups.len(), 2);
+        assert_eq!(app.config_digest, before);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn removing_a_group_drops_its_runtime_and_keeps_the_others() {
+        let root = std::env::temp_dir().join(format!("fcp-group-remove-{}", Uuid::new_v4()));
+        let paths = test_paths(&root);
+        let mut app = handshaken(&paths);
+        let victim = *app.groups.keys().next().unwrap();
+        let survivor = *app.groups.keys().nth(1).unwrap();
+        let output = app
+            .handle(Message::GroupRemove(GroupRemove {
+                account_group_id: victim,
+            }))
+            .unwrap();
+        match &output[0] {
+            Message::ConfigUpdated(updated) => assert_eq!(updated.config.groups.len(), 1),
+            other => panic!("expected config.updated, got {other:?}"),
+        }
+        assert!(!app.groups.contains_key(&victim));
+        assert!(app.groups.contains_key(&survivor));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn changing_policy_persists_and_updates_the_live_runtime() {
+        let root = std::env::temp_dir().join(format!("fcp-group-policy-{}", Uuid::new_v4()));
+        let paths = test_paths(&root);
+        let mut app = handshaken(&paths);
+        let target = *app.groups.keys().next().unwrap();
+        let before = app.groups[&target].policy;
+        let next = if before == PolicyLevel::Critical {
+            PolicyLevel::Convenient
+        } else {
+            PolicyLevel::Critical
+        };
+        let output = app
+            .handle(Message::GroupSetPolicy(GroupSetPolicy {
+                account_group_id: target,
+                policy_level: next,
+            }))
+            .unwrap();
+        match &output[0] {
+            Message::ConfigUpdated(updated) => {
+                let definition = updated
+                    .config
+                    .groups
+                    .iter()
+                    .find(|group| group.id == target)
+                    .unwrap();
+                assert_eq!(definition.policy_level, next);
+            }
+            other => panic!("expected config.updated, got {other:?}"),
+        }
+        // The runtime must not keep enforcing the old lease durations.
+        assert_eq!(app.groups[&target].policy, next);
+        let reloaded = LoadedConfig::load(&paths.account_groups_config).unwrap();
+        assert_eq!(
+            reloaded
+                .config
+                .groups
+                .iter()
+                .find(|group| group.id == target)
+                .unwrap()
+                .policy_level,
+            next
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn removing_the_last_group_is_refused() {
+        let root = std::env::temp_dir().join(format!("fcp-group-last-{}", Uuid::new_v4()));
+        let paths = test_paths(&root);
+        let mut app = handshaken(&paths);
+        let ids: Vec<_> = app.groups.keys().copied().collect();
+        app.handle(Message::GroupRemove(GroupRemove {
+            account_group_id: ids[0],
+        }))
+        .unwrap();
+        let output = app
+            .handle(Message::GroupRemove(GroupRemove {
+                account_group_id: ids[1],
+            }))
+            .unwrap();
+        match &output[0] {
+            Message::ConfigRejected(rejected) => {
+                assert_eq!(rejected.reason, "last_group_cannot_be_removed");
+            }
+            other => panic!("expected config.rejected, got {other:?}"),
+        }
+        assert_eq!(app.groups.len(), 1);
+        fs::remove_dir_all(root).unwrap();
+    }
+
     #[test]
     fn handshake_reports_both_groups_and_digest() {
         let root = std::env::temp_dir().join(format!("fcp-multi-handshake-{}", Uuid::new_v4()));
@@ -767,7 +1115,7 @@ mod tests {
             .handle(Message::Handshake(Handshake {
                 protocol_version: PROTOCOL_VERSION,
                 extension_id: PRODUCT_EXTENSION_ID.into(),
-                config_digest: app.config_digest.clone(),
+                cached_config_digest: Some(app.config_digest.clone()),
             }))
             .unwrap();
         match &output[0] {
@@ -781,18 +1129,40 @@ mod tests {
     }
 
     #[test]
-    fn handshake_rejects_config_digest_mismatch_before_any_group_operation() {
-        let root = std::env::temp_dir().join(format!("fcp-config-mismatch-{}", Uuid::new_v4()));
+    fn stale_extension_cache_is_answered_with_the_authoritative_config() {
+        let root = std::env::temp_dir().join(format!("fcp-config-refresh-{}", Uuid::new_v4()));
         let paths = test_paths(&root);
         let mut app = NativeHostApp::open(&paths).unwrap();
-        let result = app.handle(Message::Handshake(Handshake {
-            protocol_version: PROTOCOL_VERSION,
-            extension_id: PRODUCT_EXTENSION_ID.into(),
-            config_digest: "00".repeat(32),
-        }));
-        assert!(result.is_err());
-        assert!(!app.handshake_complete);
-        assert!(app.groups.values().all(|group| group.pending.is_none()));
+        let output = app
+            .handle(Message::Handshake(Handshake {
+                protocol_version: PROTOCOL_VERSION,
+                extension_id: PRODUCT_EXTENSION_ID.into(),
+                cached_config_digest: Some("00".repeat(32)),
+            }))
+            .unwrap();
+        match &output[0] {
+            Message::HandshakeAck(ack) => {
+                assert_eq!(ack.config_digest, app.config_digest);
+                assert_eq!(ack.config.groups.len(), 2);
+            }
+            _ => panic!("expected handshake ack"),
+        }
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn first_run_without_a_cached_digest_is_accepted() {
+        let root = std::env::temp_dir().join(format!("fcp-config-firstrun-{}", Uuid::new_v4()));
+        let paths = test_paths(&root);
+        let mut app = NativeHostApp::open(&paths).unwrap();
+        let output = app
+            .handle(Message::Handshake(Handshake {
+                protocol_version: PROTOCOL_VERSION,
+                extension_id: PRODUCT_EXTENSION_ID.into(),
+                cached_config_digest: None,
+            }))
+            .unwrap();
+        assert!(matches!(&output[0], Message::HandshakeAck(_)));
         fs::remove_dir_all(root).unwrap();
     }
 
@@ -816,7 +1186,7 @@ mod tests {
         app.handle(Message::Handshake(Handshake {
             protocol_version: PROTOCOL_VERSION,
             extension_id: PRODUCT_EXTENSION_ID.into(),
-            config_digest: app.config_digest.clone(),
+            cached_config_digest: Some(app.config_digest.clone()),
         }))
         .unwrap();
         let target = *app.groups.keys().next().unwrap();
@@ -877,7 +1247,7 @@ mod tests {
         app.handle(Message::Handshake(Handshake {
             protocol_version: PROTOCOL_VERSION,
             extension_id: PRODUCT_EXTENSION_ID.into(),
-            config_digest: app.config_digest.clone(),
+            cached_config_digest: Some(app.config_digest.clone()),
         }))
         .unwrap();
         app.handle(Message::SessionInvalidate(SessionInvalidate {

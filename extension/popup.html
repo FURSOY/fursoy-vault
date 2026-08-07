@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="tr">
+  <head>
+    <meta charset="utf-8" />
+    <link rel="stylesheet" href="popup.css" />
+    <title>FURSOY Cookie Protector</title>
+  </head>
+  <body>
+    <h1>FURSOY Cookie Protector</h1>
+
+    <section id="current" hidden>
+      <h2>Bu site</h2>
+      <p id="current-host" class="host"></p>
+
+      <div id="current-protected" hidden>
+        <p class="ok">Bu site zaten korunuyor.</p>
+        <label for="current-policy">Koruma düzeyi</label>
+        <select id="current-policy">
+          <option value="critical">Kritik — 5 dk kira · 1 dk boşta</option>
+          <option value="balanced">Dengeli — 10 dk kira · 5 dk boşta</option>
+          <option value="convenient">Kullanışlı — 30 dk kira · 15 dk boşta</option>
+        </select>
+        <button id="unprotect-current" type="button">Bu siteyi korumadan çıkar</button>
+      </div>
+
+      <div id="current-unprotected" hidden>
+        <label for="scope">Korunacak alan adı</label>
+        <input id="scope" type="text" spellcheck="false" autocomplete="off" />
+        <p class="hint">
+          Bu alan adının ve alt alan adlarının <strong>tüm çerezleri</strong> korunur. Yanlışsa düzeltebilirsin.
+        </p>
+        <label for="policy">Koruma düzeyi</label>
+        <select id="policy">
+          <option value="critical">Kritik — 5 dk kira · 1 dk boşta</option>
+          <option value="balanced" selected>Dengeli — 10 dk kira · 5 dk boşta</option>
+          <option value="convenient">Kullanışlı — 30 dk kira · 15 dk boşta</option>
+        </select>
+        <button id="protect" type="button" class="primary">Bu siteyi korumaya al</button>
+      </div>
+    </section>
+
+    <p id="connection" class="warning" hidden>Native host bağlı değil. Koruma değişiklikleri yapılamaz.</p>
+    <p id="error" class="warning" hidden></p>
+    <p id="alert" class="alert" hidden></p>
+
+    <section>
+      <h2>Korunan siteler</h2>
+      <ul id="groups" class="groups"></ul>
+      <p id="groups-empty" class="hint" hidden>Henüz korunan site yok.</p>
+      <button id="open-options" type="button">Yönetim ekranını aç</button>
+    </section>
+    <script type="module" src="dist/popup.js"></script>
+  </body>
+</html>

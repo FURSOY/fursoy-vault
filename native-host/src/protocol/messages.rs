@@ -1,6 +1,7 @@
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use uuid::Uuid;
 
+use crate::config::{AccountGroupsConfig, PolicyLevel};
 use crate::{FcpError, FcpResult};
 
 pub const CAPABILITY_DOMAIN: &[u8; 8] = b"FCPHCAP1";
@@ -126,7 +127,10 @@ pub struct CookieRecord {
 pub struct Handshake {
     pub protocol_version: u16,
     pub extension_id: String,
-    pub config_digest: String,
+    /// Digest of the config the extension has cached from a previous session, or `None` on a
+    /// first run. ADR-020/Q24: the host owns the config, so this is a cache hint only — a
+    /// mismatch is answered by sending the authoritative config down, not by failing closed.
+    pub cached_config_digest: Option<String>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -145,7 +149,49 @@ pub enum GroupState {
 pub struct HandshakeAck {
     pub protocol_version: u16,
     pub config_digest: String,
+    /// The authoritative account-group config. The extension keeps no config file of its own;
+    /// it validates and caches whatever the host sends here (ADR-020 slice 2, Q24).
+    pub config: AccountGroupsConfig,
     pub groups: Vec<HandshakeGroupState>,
+}
+
+/// Extension → host: protect a new scope. The host assigns the UUID and persists the config;
+/// the extension never invents group identities.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct GroupAdd {
+    pub scope: String,
+    pub display_name: String,
+    pub policy_level: PolicyLevel,
+}
+
+/// Extension → host: change an existing group's policy level. The scope and vault are untouched.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct GroupSetPolicy {
+    pub account_group_id: Uuid,
+    pub policy_level: PolicyLevel,
+}
+
+/// Extension → host: stop protecting a scope. The vault and lease state are discarded.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct GroupRemove {
+    pub account_group_id: Uuid,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ConfigUpdated {
+    pub config_digest: String,
+    pub config: AccountGroupsConfig,
+    pub groups: Vec<HandshakeGroupState>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ConfigRejected {
+    pub reason: String,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -263,6 +309,10 @@ pub struct EvictResult {
 pub enum SessionInvalidationReason {
     ExternalLogout,
     RestoreRejected,
+    /// ADR-020: at eviction time the protected scope held no cookies, so there is nothing to
+    /// vault. The vault is discarded instead of sealing an empty jar that would demand a
+    /// pointless Hello gesture on the next visit.
+    ScopeEmpty,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -453,6 +503,16 @@ pub enum Message {
     MonitorPoll(MonitorPoll),
     #[serde(rename = "monitor.alert")]
     MonitorAlert(MonitorAlert),
+    #[serde(rename = "group.add")]
+    GroupAdd(GroupAdd),
+    #[serde(rename = "group.remove")]
+    GroupRemove(GroupRemove),
+    #[serde(rename = "group.set_policy")]
+    GroupSetPolicy(GroupSetPolicy),
+    #[serde(rename = "config.updated")]
+    ConfigUpdated(ConfigUpdated),
+    #[serde(rename = "config.rejected")]
+    ConfigRejected(ConfigRejected),
 }
 
 fn encode_hex(bytes: &[u8]) -> String {

@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="tr">
+  <head>
+    <meta charset="utf-8" />
+    <link rel="stylesheet" href="options.css" />
+    <title>FURSOY Cookie Protector — Yönetim</title>
+  </head>
+  <body>
+    <header>
+      <h1>FURSOY Cookie Protector</h1>
+      <p id="connection" class="warning" hidden>Native host bağlı değil. Koruma değişiklikleri yapılamaz.</p>
+      <p id="error" class="warning" hidden></p>
+    </header>
+
+    <section>
+      <h2>Korunan siteler</h2>
+      <table id="groups-table">
+        <thead>
+          <tr>
+            <th>Alan adı</th>
+            <th>Koruma seviyesi</th>
+            <th>Durum</th>
+            <th>Çerez</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody id="groups"></tbody>
+      </table>
+      <p id="groups-empty" class="hint" hidden>Henüz korunan site yok.</p>
+    </section>
+
+    <section>
+      <h2>Site ekle</h2>
+      <form id="add-form" autocomplete="off">
+        <div class="row">
+          <label for="scope">Alan adı</label>
+          <input id="scope" type="text" spellcheck="false" placeholder="ornek.com" required />
+        </div>
+        <div class="row">
+          <label for="policy">Koruma seviyesi</label>
+          <select id="policy">
+            <option value="critical">Kritik — 5 dk kira · 1 dk boşta · anında tahliye</option>
+            <option value="balanced" selected>Dengeli — 10 dk kira · 5 dk boşta · 2 dk bekleme</option>
+            <option value="convenient">Kullanışlı — 30 dk kira · 15 dk boşta · 5 dk bekleme</option>
+          </select>
+        </div>
+        <button id="add" type="submit" class="primary">Korumaya al</button>
+        <p class="hint">
+          Bu alan adının ve alt alan adlarının <strong>tüm çerezleri</strong> korunur. Chrome ayrıca
+          kendi izin onayını isteyecektir; onaylamazsan site eklenmez.
+        </p>
+      </form>
+    </section>
+
+    <section>
+      <h2>Olay günlüğü</h2>
+      <p class="hint">
+        Kullanıcıya gösterilen uyarılar. Bilgi seviyesindeki olaylar yalnızca native host'un
+        kurcalama-tespitli audit kaydında tutulur; burada görünmez.
+      </p>
+      <table id="log-table">
+        <thead>
+          <tr>
+            <th>Zaman</th>
+            <th>Önem</th>
+            <th>Olay</th>
+            <th>Site</th>
+            <th>Tekrar</th>
+          </tr>
+        </thead>
+        <tbody id="log"></tbody>
+      </table>
+      <p id="log-empty" class="hint" hidden>Kayıtlı olay yok.</p>
+      <button id="clear-log" type="button">Günlüğü temizle</button>
+    </section>
+
+    <script type="module" src="dist/options.js"></script>
+  </body>
+</html>

@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::fs;
 use std::path::Path;
 
@@ -10,7 +10,7 @@ use crate::{FcpError, FcpResult};
 
 const BUNDLED_CONFIG: &[u8] = include_bytes!("../../config/account-groups.json");
 const MAX_GROUPS: usize = 32;
-const MAX_SELECTORS: usize = 256;
+const MAX_SCOPE_LEN: usize = 253;
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -20,29 +20,17 @@ pub struct AccountGroupsConfig {
     pub groups: Vec<AccountGroup>,
 }
 
+/// ADR-020: a group is identified by the registrable domain the user asked to protect. Every
+/// cookie under that scope is vaulted; there is no per-site selector or health-check contract.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct AccountGroup {
     pub id: Uuid,
     pub display_name: String,
-    pub domains: Vec<String>,
-    pub navigation_patterns: Vec<String>,
-    pub cookie_selectors: Vec<CookieSelector>,
+    pub scope: String,
     pub policy_level: PolicyLevel,
     pub eviction_triggers: Vec<EvictionTrigger>,
-    pub health_check: HealthCheck,
     pub store_policy: StorePolicy,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct CookieSelector {
-    pub id: String,
-    pub name: String,
-    pub domain: String,
-    pub path: String,
-    pub required_for_enrollment: bool,
-    pub url: String,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -109,21 +97,6 @@ pub enum EvictionTrigger {
     Manual,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct HealthCheck {
-    pub kind: HealthCheckKind,
-    pub origin: String,
-    pub path: String,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum HealthCheckKind {
-    WikipediaUserinfo,
-    JsonSessionState,
-}
-
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum StorePolicy {
@@ -152,7 +125,7 @@ impl LoadedConfig {
 
 impl AccountGroupsConfig {
     pub fn validate(&self) -> FcpResult<()> {
-        if self.version != 1 || self.compatibility_version != 1 {
+        if self.version != 2 || self.compatibility_version != 2 {
             return Err(FcpError::Format(
                 "unsupported account-group config version".into(),
             ));
@@ -163,71 +136,32 @@ impl AccountGroupsConfig {
             ));
         }
         let mut group_ids = HashSet::new();
-        let mut selector_owners: HashMap<(String, String, String), Uuid> = HashMap::new();
-        let mut exact_navigation_hosts: HashMap<String, Uuid> = HashMap::new();
-        let mut selector_count = 0usize;
+        let mut scopes: Vec<String> = Vec::new();
         for group in &self.groups {
             if group.id.is_nil() || !group_ids.insert(group.id) {
                 return Err(FcpError::Format(
                     "account-group UUID is nil or duplicated".into(),
                 ));
             }
-            if group.display_name.trim().is_empty()
-                || group.domains.is_empty()
-                || group.navigation_patterns.is_empty()
-                || group.cookie_selectors.is_empty()
-            {
+            if group.display_name.trim().is_empty() {
                 return Err(FcpError::Format(
                     "account-group has an empty required field".into(),
                 ));
             }
-            selector_count = selector_count
-                .checked_add(group.cookie_selectors.len())
-                .ok_or_else(|| FcpError::Format("selector count overflow".into()))?;
-            for pattern in &group.navigation_patterns {
-                let host = pattern_host(pattern)?;
-                if let Some(owner) = exact_navigation_hosts.insert(host, group.id)
-                    && owner != group.id
+            let scope = normalize_scope(&group.scope);
+            if !is_valid_scope(&scope) {
+                return Err(FcpError::Format("account-group scope is invalid".into()));
+            }
+            // A scope nested inside another would make cookie ownership ambiguous.
+            for existing in &scopes {
+                if scope == *existing
+                    || scope.ends_with(&format!(".{existing}"))
+                    || existing.ends_with(&format!(".{scope}"))
                 {
-                    return Err(FcpError::Format(
-                        "navigation ownership overlaps groups".into(),
-                    ));
+                    return Err(FcpError::Format("account-group scopes overlap".into()));
                 }
             }
-            let mut selector_ids = HashSet::new();
-            for selector in &group.cookie_selectors {
-                if selector.id.trim().is_empty()
-                    || selector.name.is_empty()
-                    || !selector.path.starts_with('/')
-                    || !selector.url.contains("://")
-                    || !selector_ids.insert(selector.id.as_str())
-                {
-                    return Err(FcpError::Format(
-                        "invalid or duplicated cookie selector".into(),
-                    ));
-                }
-                let identity = (
-                    selector.name.clone(),
-                    selector.domain.trim_start_matches('.').to_ascii_lowercase(),
-                    selector.path.clone(),
-                );
-                if let Some(owner) = selector_owners.insert(identity, group.id)
-                    && owner != group.id
-                {
-                    return Err(FcpError::Format(
-                        "cookie selector belongs to multiple groups".into(),
-                    ));
-                }
-            }
-            if !group
-                .cookie_selectors
-                .iter()
-                .any(|selector| selector.required_for_enrollment)
-            {
-                return Err(FcpError::Format(
-                    "group has no required enrollment selector".into(),
-                ));
-            }
+            scopes.push(scope);
             let triggers: HashSet<_> = group.eviction_triggers.iter().copied().collect();
             if group.policy_level != PolicyLevel::Monitor
                 && ![
@@ -244,27 +178,25 @@ impl AccountGroupsConfig {
                 ));
             }
         }
-        if selector_count > MAX_SELECTORS {
-            return Err(FcpError::Format(
-                "cookie selector count exceeds limit".into(),
-            ));
-        }
         Ok(())
     }
 }
 
-fn pattern_host(pattern: &str) -> FcpResult<String> {
-    let (_, rest) = pattern
-        .split_once("://")
-        .ok_or_else(|| FcpError::Format("navigation pattern lacks scheme".into()))?;
-    let host = rest
-        .split('/')
-        .next()
-        .ok_or_else(|| FcpError::Format("navigation pattern lacks host".into()))?;
-    if host.is_empty() {
-        return Err(FcpError::Format("navigation pattern has empty host".into()));
-    }
-    Ok(host.to_ascii_lowercase())
+fn normalize_scope(scope: &str) -> String {
+    scope.trim_start_matches('.').to_ascii_lowercase()
+}
+
+fn is_valid_scope(scope: &str) -> bool {
+    // A single label is not a registrable domain: internal page hostnames such as `newtab` must
+    // not validate as something the user can protect. `localhost` is the deliberate exception.
+    (scope.contains('.') || scope == "localhost")
+        && !scope.is_empty()
+        && scope.len() <= MAX_SCOPE_LEN
+        && !scope.ends_with('.')
+        && !scope.contains("..")
+        && scope
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '-')
 }
 
 fn encode_hex(bytes: &[u8]) -> String {
@@ -287,6 +219,61 @@ mod tests {
         config.validate().unwrap();
         assert_eq!(config.groups.len(), 2);
         assert_ne!(config.groups[0].id, config.groups[1].id);
+        assert_ne!(config.groups[0].scope, config.groups[1].scope);
+    }
+
+    fn group(scope: &str) -> AccountGroup {
+        AccountGroup {
+            id: Uuid::new_v4(),
+            display_name: "test".into(),
+            scope: scope.into(),
+            policy_level: PolicyLevel::Balanced,
+            eviction_triggers: vec![
+                EvictionTrigger::LastTabClosed,
+                EvictionTrigger::Idle,
+                EvictionTrigger::Lock,
+                EvictionTrigger::Expiry,
+            ],
+            store_policy: StorePolicy::NormalProfile,
+        }
+    }
+
+    fn config_of(groups: Vec<AccountGroup>) -> AccountGroupsConfig {
+        AccountGroupsConfig {
+            version: 2,
+            compatibility_version: 2,
+            groups,
+        }
+    }
+
+    #[test]
+    fn nested_scopes_are_rejected_so_cookie_ownership_stays_unambiguous() {
+        let config = config_of(vec![group("example.com"), group("mail.example.com")]);
+        assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn sibling_scopes_are_accepted() {
+        let config = config_of(vec![group("example.com"), group("example.org")]);
+        config.validate().unwrap();
+    }
+
+    #[test]
+    fn malformed_scopes_are_rejected() {
+        for scope in [
+            "",
+            "example..com",
+            "example.com.",
+            "example.com/path",
+            "ex ample.com",
+            "newtab",
+            "extensions",
+        ] {
+            assert!(
+                config_of(vec![group(scope)]).validate().is_err(),
+                "scope {scope:?} should be rejected"
+            );
+        }
     }
 
     #[test]

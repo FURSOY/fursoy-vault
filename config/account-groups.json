@@ -1,37 +1,21 @@
 {
-  "version": 1,
-  "compatibility_version": 1,
+  "version": 2,
+  "compatibility_version": 2,
   "groups": [
     {
       "id": "7a144677-3f5c-4a86-a767-16fd3ca315b8",
       "display_name": "Wikipedia",
-      "domains": ["wikipedia.org", "*.wikipedia.org"],
-      "navigation_patterns": ["https://wikipedia.org/*", "https://*.wikipedia.org/*"],
-      "cookie_selectors": [
-        { "id": "local_session", "name": "trwikiSession", "domain": "tr.wikipedia.org", "path": "/", "required_for_enrollment": true, "url": "https://tr.wikipedia.org/" },
-        { "id": "local_user_id", "name": "trwikiUserID", "domain": "tr.wikipedia.org", "path": "/", "required_for_enrollment": true, "url": "https://tr.wikipedia.org/" },
-        { "id": "local_user_name", "name": "trwikiUserName", "domain": "tr.wikipedia.org", "path": "/", "required_for_enrollment": true, "url": "https://tr.wikipedia.org/" },
-        { "id": "local_token", "name": "trwikiToken", "domain": "tr.wikipedia.org", "path": "/", "required_for_enrollment": false, "url": "https://tr.wikipedia.org/" },
-        { "id": "central_session", "name": "centralauth_Session", "domain": "wikipedia.org", "path": "/", "required_for_enrollment": true, "url": "https://tr.wikipedia.org/" },
-        { "id": "central_user", "name": "centralauth_User", "domain": "wikipedia.org", "path": "/", "required_for_enrollment": true, "url": "https://tr.wikipedia.org/" },
-        { "id": "central_token", "name": "centralauth_Token", "domain": "wikipedia.org", "path": "/", "required_for_enrollment": false, "url": "https://tr.wikipedia.org/" }
-      ],
+      "scope": "wikipedia.org",
       "policy_level": "balanced",
       "eviction_triggers": ["last_tab_closed", "idle", "lock", "expiry", "manual"],
-      "health_check": { "kind": "wikipedia_userinfo", "origin": "https://tr.wikipedia.org", "path": "/w/api.php?action=query&meta=userinfo&format=json&formatversion=2" },
       "store_policy": "normal_profile"
     },
     {
       "id": "c2b71d84-6d3f-45d4-a184-994083ba7659",
       "display_name": "Controlled Session App",
-      "domains": ["localhost"],
-      "navigation_patterns": ["http://localhost/*"],
-      "cookie_selectors": [
-        { "id": "controlled_session", "name": "FCP-mvp-session", "domain": "localhost", "path": "/", "required_for_enrollment": true, "url": "http://localhost:43119/" }
-      ],
+      "scope": "localhost",
       "policy_level": "critical",
       "eviction_triggers": ["last_tab_closed", "idle", "lock", "expiry", "manual"],
-      "health_check": { "kind": "json_session_state", "origin": "http://localhost:43119", "path": "/api/protected" },
       "store_policy": "normal_profile"
     }
   ]

@@ -3,6 +3,7 @@ use std::io::{Read, Write};
 use uuid::Uuid;
 
 use crate::dispatcher::NativeHostApp;
+use crate::instance_lock::InstanceLock;
 use crate::paths::DataPaths;
 use crate::protocol::envelope::{Envelope, PROTOCOL_VERSION};
 use crate::protocol::framing::{read_envelope, write_envelope};
@@ -13,6 +14,8 @@ use crate::{FcpError, FcpResult};
 /// text goes to stderr because stdout is exclusively the length-prefixed protocol stream.
 pub fn run_connection(reader: &mut impl Read, writer: &mut impl Write) -> FcpResult<()> {
     let paths = DataPaths::discover()?;
+    // Taken before anything is opened: a concurrent instance must not reach the audit chain.
+    let _lock = InstanceLock::acquire(&paths.root)?;
     let mut app = NativeHostApp::open(&paths)?;
     run_connection_with_app(reader, writer, &mut app)
 }
@@ -99,7 +102,7 @@ mod tests {
             message: Message::Handshake(Handshake {
                 protocol_version: PROTOCOL_VERSION,
                 extension_id: "test".into(),
-                config_digest: "00".repeat(32),
+                cached_config_digest: None,
             }),
         };
         assert!(validate_first_envelope(&envelope).is_ok());

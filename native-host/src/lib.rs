@@ -9,6 +9,7 @@ pub mod dispatcher;
 pub mod dpapi;
 pub mod error;
 pub mod host_loop;
+pub mod instance_lock;
 pub mod lease;
 pub mod monitor;
 pub mod paths;

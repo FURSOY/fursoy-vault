@@ -1,0 +1,128 @@
+:root {
+  color-scheme: light dark;
+  font-family: system-ui, sans-serif;
+}
+
+body {
+  margin: 0;
+  padding: 1rem;
+  width: 22rem;
+}
+
+h1 {
+  font-size: 1rem;
+  margin: 0 0 0.75rem;
+}
+
+h2 {
+  font-size: 0.8rem;
+  letter-spacing: 0.03em;
+  margin: 1rem 0 0.4rem;
+  opacity: 0.7;
+  text-transform: uppercase;
+}
+
+label {
+  display: block;
+  font-size: 0.8rem;
+  margin: 0.6rem 0 0.2rem;
+}
+
+input,
+select,
+button {
+  box-sizing: border-box;
+  font: inherit;
+  padding: 0.4rem 0.5rem;
+  width: 100%;
+}
+
+button {
+  cursor: pointer;
+}
+
+button:disabled {
+  cursor: wait;
+  opacity: 0.6;
+}
+
+.primary {
+  margin-top: 0.75rem;
+  padding: 0.55rem;
+}
+
+.host {
+  font-weight: 600;
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.hint {
+  font-size: 0.75rem;
+  margin: 0.3rem 0 0;
+  opacity: 0.75;
+}
+
+.warning {
+  background: color-mix(in srgb, currentColor 8%, transparent);
+  border-left: 3px solid #b06000;
+  font-size: 0.8rem;
+  margin: 0 0 0.75rem;
+  padding: 0.5rem;
+}
+
+.ok {
+  font-size: 0.85rem;
+  margin: 0.4rem 0 0;
+}
+
+.groups {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.groups li {
+  align-items: baseline;
+  border-top: 1px solid color-mix(in srgb, currentColor 15%, transparent);
+  display: flex;
+  gap: 0.5rem;
+  padding: 0.5rem 0;
+}
+
+.groups .scope {
+  flex: 1;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.groups .state {
+  font-size: 0.75rem;
+  opacity: 0.75;
+  white-space: nowrap;
+}
+
+.groups button {
+  padding: 0.2rem 0.5rem;
+  width: auto;
+}
+
+.groups .blocked {
+  color: #b3261e;
+}
+
+.alert {
+  background: color-mix(in srgb, currentColor 8%, transparent);
+  border-left: 3px solid #b3261e;
+  font-size: 0.8rem;
+  margin: 0 0 0.75rem;
+  padding: 0.5rem;
+}
+
+#open-options {
+  margin-top: 0.75rem;
+}
+
+#unprotect-current {
+  margin-top: 0.6rem;
+}
