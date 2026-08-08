@@ -1528,7 +1528,7 @@ işaretlenir.
 | **Faz 5** | Tek grup, uçtan uca MVP (vault + host + extension) | Çalışan dikey dilim | ✅ **TAMAMLANDI** — kontrollü uygulama `0.1.9`, düşük-riskli gerçek site `tr.wikipedia.org` `0.1.11`; TPM/Hello + vault + host + extension ve çoklu-cookie group zinciri doğrulandı |
 | **Faz 5.1** | Navigasyon-öncesi kullanıcı kontrollü unlock gate | `webNavigation` yakalama + `unlock.html` + tam URL'ye dönüş | ✅ **TAMAMLANDI** — `0.1.12` manuel test tam geçti; ilk görünür yükleme authenticated, F5 gereksinimi yok |
 | **Faz 6** | Çoklu grup, policy seviyeleri, reconciliation sertleştirme | `0.2.0`, exp-06 kabul raporu | ✅ **TAMAMLANDI** — otomatik kontroller ve iki-grup manuel kabul matrisi 12/12 PASS; Q4/Q12/Q19 kapandı |
-| **Faz 7** | Watcher / monitoring katmanı | `0.3.1`, exp-07 kabul raporu | 🟡 **KISMİ** — çekirdek izleme döngüsü (remote-debugging tespiti, rate-limit, aktif lease sırasında host disconnect) 2026-08-06'da manuel doğrulandı; 9 maddelik kabul matrisinin 5–9 arası maddeleri koşulmadı. Q23 açık |
+| **Faz 7** | Watcher / monitoring katmanı | `0.3.1`, exp-07 kabul raporu | ✅ **Fiilen tamamlandı** (2026-08-08) — #1–4, #7–9 doğrulandı; #6 ADR-020 ile anlamsızlaştı (selector kaldırıldı); #5 (sealed grupta dış cookie / boş-kavanoz) kullanıcı tarafından denendi ama audit log'da ayrı bir `scope_empty` kaydı gözlenmedi, resmi kanıt zayıf. "Known broken" (2026-08-05 WIP notu) kök nedeni bulunup düzeltildi ve canlı doğrulandı: bkz. aşağıdaki oturum notu |
 | **Faz 8** | **Kullanıcı tanımlı koruma (ADR-020)** — tüm-çerez kasalama, selector/login-tespit yollarının kaldırılması, site ekleme UI'ı | Config şeması v2 + yeni protokol sözleşmesi + kabul raporu | ✅ **Dilim 1 ve dilim 2 uygulandı ve doğrulandı** (2026-08-06); Q24 kapandı. Tam kabul matrisi koşulmadı |
 | **Faz 9** | Edge / Brave desteği | v0.4 | — |
 
@@ -2163,6 +2163,49 @@ göründüğü doğrulandı.
 olduğundan tek bir Chrome başlatması ~9 tekrarlı uyarı üretiyor (renderer/GPU/utility alt process'leri
 komut satırını taşıyor). Kullanıcı tarafından bilinçli olarak ertelendi.
 
+### Faz 7 kabul turu — kalan maddeler koşuldu (2026-08-08)
+
+ADR-021 (Hello backend göçü) ve büyük commit hijyeni sonrası, koşulmayan 5 maddenin gerçekten
+hâlâ geçerli olup olmadığı test edildi.
+
+- **"Known broken" kök nedeni bulundu ve düzeltildi.** 2026-08-05 WIP commit notundaki çökme,
+  kod hatası değil, operasyonel bir hataydı (bkz. 2026-08-06 oturumu, "Kök neden" paragrafı):
+  `fcp-host.exe` elle çalıştırılırken Chrome'un kendi örneği de bağlıydı, iki süreç aynı audit
+  HMAC zincirine yazınca zincir bozuluyordu. `instance_lock.rs` bunu önlemek için yazıldı ve
+  `host_loop.rs`'e (stdin okumadan önce) bağlandı. **Canlı doğrulandı:** Chrome'un gerçek örneği
+  çalışırken elle ikinci bir örnek başlatıldı, üç saniyeden kısa sürede temiz bir hatayla
+  reddedildi (`another native host instance already owns the data directory`); Chrome'un örneği
+  etkilenmedi.
+- **#2 (remote-debugging tespiti) tekrar doğrulandı**, **#3 (rate-limit ikinci tur) PASS** —
+  10 dakikalık pencere içinde ikinci tetiklemede yeni bir toast çıkmadı (beklenen).
+- **#4 (aktif lease sırasında host sonlandırma) + #8 (outbox/reconnect) PASS** — `Stop-Process
+  fcp-host` sonrası audit'e `host_disconnect_active_lease` → `reconnect_success` →
+  `reconciliation success` sırayla düştü.
+- **#7 (`FCP_MONITOR_RECONCILIATION_FIXTURE`)** debug build'de test edildi: host env var
+  ayarlanmış halde çöküp çökmediği doğrulandı — çökmedi, temiz açılıp kapandı.
+- **#9 (audit yeniden açılış)** extension reload sonrası audit `sequence` alanının kesintisiz
+  devam ettiği, hiçbir `audit.corrupted-*` dizini oluşmadığı doğrulandı.
+- **#5 (sealed grupta dış cookie / boş-kavanoz) — kanıt zayıf.** Kullanıcı bunu denediğini
+  bildirdi, ancak o pencerede audit log'da hiçbir `scope_empty` kaydı gözlenmedi; koşulan
+  tahliyelerin tamamı normal `eviction success` yoluyla gitti (kasada gerçekten çerez vardı).
+  Bu maddenin gerçekten tetiklenmesi için hedef grubun eviction anında **sıfır** çerez taşıması
+  gerekir (örn. hiç giriş yapılmamış yeni eklenmiş bir site). Fonksiyonel olarak çalıştığı
+  düşünülüyor (kod yolu ADR-020'de zaten tasarlandı) ama doğrudan audit kanıtı yok.
+- **Regresyon tespit edildi ve düzeltildi:** `remote_debugging_port`/`pipe` sinyali
+  `account_group_id` taşımadığından (süreç geneli, tek bir gruba bağlı değil), olay günlüğündeki
+  "Site" sütunu ve bildirim metni hep boştu. İki site gerçekten leased haldeyken tetiklenen canlı
+  testte doğrulandı. Düzeltme: `handleMonitorAlert` o anda leased olan grupları hesaplayıp hem
+  kayıtlı log girdisine (`StoredAlert.affectedScopes`) hem bildirim metnine geçiriyor; popup ve
+  options sayfası da bunu gösteriyor.
+- **Yeni gözlem — Windows toast bildirimi bu oturumda hiç çıkmadı.** 2026-08-06'da SVG→PNG ikon
+  düzeltmesiyle çalıştığı doğrulanmıştı; bu oturumda badge/log/audit doğru çalışsa da OS toast'ı
+  hiç görünmedi ve service worker konsolunda hata yoktu. Kullanıcının kendi Windows bildirim
+  ayarları/Focus Assist şüpheli görüldü, kod tarafında bir hata bulunamadı; kesin kök neden
+  **doğrulanmadı**, düşük öncelikli açık nokta olarak bırakıldı.
+
+**Sonuç: Faz 7 fiilen tamamlandı sayılır.** Tek gerçek boşluk #5'in doğrudan audit kanıtıdır;
+blocker değildir.
+
 ### ADR-020 dilim 1 uygulaması ve doğrulaması (2026-08-06)
 
 Aynı gün, ADR-020 kararının birinci dilimi kodlandı ve manuel doğrulandı. Kapsam: config şeması v2
@@ -2368,18 +2411,26 @@ tutarsızdı. Bu güncellemeyle düzeltildi (bkz. üstteki [Durum](#fursoy-cooki
 oturumunda ADR-021 ile Hello imzalama arka ucu değiştirildi (webauthn.dll) — bu da ayrı bir
 kabul/regresyon turu gerektirir.
 
+**Güncelleme (2026-08-08, aynı gün):** Madde 1 fiilen kapandı — bkz. "Faz 7 kabul turu — kalan
+maddeler koşuldu" (§30). "Known broken" kök nedeni bulunup (`instance_lock.rs`) canlı doğrulandı;
+kabul matrisinin #1–4 ve #7–9 maddeleri geçti, #6 anlamsızlaştı, yalnızca #5'in doğrudan audit
+kanıtı eksik kaldı.
+
 **Açık kalan, gerçekten "sıradaki iş" olan maddeler** (öncelik sırası kullanıcı tarafından
 belirlenecektir):
 
-1. **Faz 7 izleme katmanının kabul matrisi** — çekirdek döngü `0.3.1`'de doğrulandı ama tam matris
-   koşulmadı; son commit mesajı "host crashes, known broken" notu taşıyordu. Bugünkü Hello
-   göçünün (ADR-021) bunu düzeltip düzeltmediği **doğrulanmadı** — ayrı bir kontrol gerekir.
+1. **Faz 7 matris #5** (sealed grupta dış cookie / boş-kavanoz) — kullanıcı denedi ama audit'te
+   `scope_empty` kaydı gözlenmedi; hedef grubun eviction anında gerçekten sıfır çerez taşıması
+   sağlanarak tekrar denenmeli.
 2. **ADR-020'nin tam kabul matrisi** — dilim 1+2 birlikte, birden fazla site ve policy seviyesinde
    uçtan uca koşulmadı (yalnızca Wikipedia + x.com nokta testleri yapıldı).
 3. **ADR-021 kabulü** — webauthn.dll göçünün gerçek kullanımda (birden fazla site, birden fazla
    gün) regresyon üretmediğinin doğrulanması; özellikle `hello_cache_ms`'in artık etkisiz olmasının
    kabul edilebilir olup olmadığına dair kullanıcı geri bildirimi.
-4. **Q23** (başarısız restore sonrası re-enroll olmama) kök nedeni, ilgili eski kod yolu
+4. **Windows toast bildirimi** 2026-08-08 oturumunda hiç çıkmadı (badge/log/audit doğru
+   çalışırken) — kök nedeni doğrulanmadı, kullanıcının kendi Windows bildirim ayarları şüpheli
+   görüldü ama kesinleşmedi.
+5. **Q23** (başarısız restore sonrası re-enroll olmama) kök nedeni, ilgili eski kod yolu
    kaldırılmış olsa bile yazılı olarak doğrulanmalı; aynı hata sınıfının yeni modelde
    tekrarlanmadığı gösterilmelidir.
 
