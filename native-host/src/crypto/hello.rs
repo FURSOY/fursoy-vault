@@ -36,7 +36,7 @@ use crate::{FcpError, FcpResult};
 /// an external Relying Party, so any syntactically valid RP id works. Fixed so the credential
 /// created on first run can always be found again.
 const RP_ID: &str = "fursoy-cookie-protector.local";
-const RP_NAME: &str = "FURSOY Cookie Protector";
+const RP_NAME: &str = "FURSOY Vault";
 const ORIGIN: &str = "https://fursoy-cookie-protector.local";
 /// There is exactly one local "user" for this credential; the id only needs to be stable, not
 /// secret or unique across installs.

@@ -1,4 +1,4 @@
-export const HOST_NAME = "com.fursoy.cookie_protector";
+export const HOST_NAME = "com.fursoy.vault";
 export const PROTOCOL_VERSION = 3;
 
 export type PolicyLevel = "critical" | "balanced" | "convenient" | "monitor";

@@ -28,7 +28,7 @@ use crate::transaction::VaultTransactions;
 use crate::vault::store::VaultStore;
 use crate::{FcpError, FcpResult, WIKIPEDIA_ACCOUNT_GROUP_ID};
 
-pub const NATIVE_HOST_NAME: &str = "com.fursoy.cookie_protector";
+pub const NATIVE_HOST_NAME: &str = "com.fursoy.vault";
 pub const PRODUCT_EXTENSION_ID: &str = "ikodegbaomnahbjiokfogpedaoifhbde";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

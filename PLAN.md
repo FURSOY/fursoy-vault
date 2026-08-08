@@ -1,4 +1,8 @@
-# FURSOY Cookie Protector — Proje Planı ve Teknik Karar Kaydı
+# FURSOY Vault — Proje Planı ve Teknik Karar Kaydı
+
+> **İsim notu (2026-08-08):** Ürün "FURSOY Cookie Protector"dan "FURSOY Vault"a yeniden
+> adlandırıldı ([ADR-022](#adr-022--ürün-fursoy-vault-olarak-yeniden-adlandırıldı-ve-i18n-altyapısı-kuruldu)).
+> Bu belgenin tarihsel bölümleri eski adı korur; yalnızca başlık ve güncel referanslar değişti.
 
 > Bu belge projenin **ana hafızasıdır**. Projeyi hiç görmemiş bir geliştirici bu belgeyi
 > okuyarak doğru bağlamla devam edebilmelidir. Konuşma geçmişine bağımlılık kabul edilmez.
@@ -29,7 +33,11 @@ API'sine taşındı**: onay penceresinin tarayıcının arkasında açılması s
 manipülasyonuyla düzeltilemeyen, dokümante edilmemiş bir Windows sınırlaması olduğu doğrulandı)
 kalıcı olarak çözüldü, karşılığında `hello_cache_ms`/tekrar-sormama rahatlığı kayboldu (bkz. ADR-021
 "Kabul edilen sınırlar"). Aynı oturumda `cookie_roundtrip_failed` sağlık kontrolündeki gerçek bir
-hata (sitenin kendi eklediği çerezleri hata sanması) da düzeltildi.
+hata (sitenin kendi eklediği çerezleri hata sanması) da düzeltildi. **2026-08-08'de ayrıca
+[ADR-022](#adr-022--ürün-fursoy-vault-olarak-yeniden-adlandırıldı-ve-i18n-altyapısı-kuruldu) ile
+ürün "FURSOY Vault" olarak yeniden adlandırıldı** (veri klasörü, native messaging host kimliği ve
+tüm görünen metinler dahil, mevcut kurulumdan güvenli göç ile) ve **i18n motoru kuruldu** (mekanizma
+hazır; mevcut metinlerin mesaj anahtarlarına taşınması görsel yeniden tasarımla birlikte yapılacak).
 
 ---
 
@@ -2407,7 +2415,7 @@ güvencesiz duruyordu.
 yanlıştı — ADR-020'nin uygulama sözleşmesi zaten yazılmış, kodlanmış ve her iki dilimiyle
 (tüm-çerez kasalama + kullanıcının kendi sitesini eklemesi) 2026-08-06'da manuel doğrulanmıştı.
 Belgenin özet/yol haritası bölümleri bunu yansıtmıyordu; §30 ve ADR-020'nin kendisiyle
-tutarsızdı. Bu güncellemeyle düzeltildi (bkz. üstteki [Durum](#fursoy-cookie-protector--proje-planı-ve-teknik-karar-kaydı)
+tutarsızdı. Bu güncellemeyle düzeltildi (bkz. üstteki [Durum](#fursoy-vault--proje-planı-ve-teknik-karar-kaydı)
 özeti, [§25](#25-yol-haritası) Faz 8 satırı, ADR-020).
 
 **Gerçek durum:** Faz 8 (ADR-020) tasarım ve uygulama açısından tamamlanmıştır; kalan iş yalnızca
@@ -3115,3 +3123,70 @@ pencere gerçekten sahipli/önde açıldı — hiçbir harici z-sırası hack'i 
   görünen jest sıklığını app tarafında sınırlamak) — bu ADR kapsamında **yapılmadı**; olası bir
   gelecek işi olarak `hello_cache_ms` alanı bilerek dormant bırakıldı (bkz. yukarıdaki "Kabul
   edilen sınırlar").
+
+---
+
+### ADR-022 — Ürün FURSOY Vault olarak yeniden adlandırıldı ve i18n altyapısı kuruldu
+
+**Durum:** Kabul edildi ve uygulandı (2026-08-08).
+
+**Bağlam:** Ürün adı "FURSOY Cookie Protector" idi. Kullanıcı adı "FURSOY Vault" olarak
+değiştirmeye karar verdi ve aynı zamanda tüm arayüz metninin hardcoded Türkçe yerine
+değiştirilebilir bir dil altyapısına (i18n) geçmesini istedi. Kapsam bilinçli olarak ikiye
+bölündü: (1) bu ADR — yeniden adlandırma + i18n **motorunun** kurulması; (2) ileride ayrı bir
+"tasarım" oturumunda yapılacak olan paylaşılan bir design-token sistemi ve ~150 hardcoded string'in
+mesaj anahtarlarına taşınması. Kullanıcı bu ayrımı açıkça istedi: *"bence şimdilik sadece 3.yü yap
+... anahtaarlari çevirmene gerek yok sonra birde desing yaparıız"*.
+
+**Karar:** Ad her yerde değiştirildi ve i18n için `chrome.i18n` yerine bağımlılıksız, saf bir
+motor (`extension/src/i18n.ts`) yazıldı — `chrome.i18n` çalışma zamanında temiz bir dil değişimini
+desteklemiyor, oysa kullanıcı ayarlardan sonradan dil değiştirilebilsin istedi.
+
+**Uygulama detayları:**
+
+- **Yeniden adlandırma kapsamı (tam):** veri klasörü (`%LOCALAPPDATA%\FursoyCookieProtector` →
+  `...\FursoyVault`), native messaging host kimliği (`com.fursoy.cookie_protector` →
+  `com.fursoy.vault`, [paths.rs](native-host/src/paths.rs), [dispatcher.rs](native-host/src/dispatcher.rs),
+  [protocol.ts](extension/src/protocol.ts), `register.ps1`/`unregister.ps1`) ve tüm görünen metin
+  (`manifest.json` adı/açıklaması/`action.default_title`, `popup.html`/`options.html`/`unlock.html`
+  başlıkları, Hello credential'ındaki `RP_NAME` — `RP_ID` kasıtlı olarak `fursoy-cookie-protector.local`
+  korundu, kimliğin bir parçası, değiştirilmesi mevcut credential'ı geçersiz kılardı).
+- **Veri göçü:** [paths.rs](native-host/src/paths.rs)'teki mevcut `migrate_one()` atomik-taşıma
+  yardımcısı, eski kökten yeni köke tüm veri dizini için tekrar kullanıldı (dosya-dosya değil,
+  dizin-dizin): eski kök varsa ve yeni kök yoksa taşı, yeni kök zaten varsa dokunma. `register.ps1`
+  build'den önce aynı mantığı PowerShell'de tekrarlıyor ve eski native-messaging registry anahtarını
+  temizliyor.
+- **i18n motoru** ([i18n.ts](extension/src/i18n.ts)): `Locale = "tr" | "en"`, `resolveLocale()`
+  (tarayıcı dilinden ilk-çalıştırma tahmini), `isLocale()`, `translate(locale, key, params?)`.
+  `monitor.ts`'nin kurduğu desene uyarak `chrome.*` çağrısı içermiyor (saf/test edilebilir);
+  chrome-bağımlı kısım (depolama okuma/yazma, `LOCALE_STORAGE_KEY`) ileride `background.ts`'e
+  bağlanacak. `locales/tr.ts`/`locales/en.ts` şimdilik boş `Record<string,string>` — anahtar
+  içeriği bilerek doldurulmadı (bkz. Bağlam). `tests/i18n.test.mjs` ile temel davranış (fallback,
+  param substitüsyonu) test edildi.
+
+**Göç sırasında bulunan ve çözülen yan olaylar:**
+
+- **`hello-credential.json` kaybı.** Chrome, `fcp-host.exe` sonlandırıldıktan sonra 1 saniyeden
+  kısa sürede otomatik yeniden bağlanıp süreci yeniden başlatıyor; bu, kilitli veri dizinini
+  taşıma girişimlerini defalarca bozdu. İlk kısmi göç denemesinde yalnızca
+  `hello-credential.json` taşınmış, geri kalan (audit/vault/leases/config) `host.lock` açık
+  olduğu için eski klasörde kalmıştı; yarım kalan `FursoyVault` klasörünün temizlenmesi bu dosyayı
+  kalıcı olarak sildi. **Etki düşük:** uygulama bir sonraki kullanımda otomatik yeni bir Hello
+  credential'ı oluşturur (kullanıcıya bildirildi). Kesin çözüm: kullanıcının Chrome'u tamamen
+  kapatması sağlanıp göç öyle çalıştırıldı; sonuç 7 gerçek grup dahil doğrulandı.
+- **Geçici "Specified native messaging host not found" hatası.** Manifest/registry doğruluğu,
+  yanlış eklenti klasörü, Chrome kurumsal politikaları, Defender müdahalesi, exe çalıştırılabilirliği,
+  önbellek bayatlığı tek tek elendi; ayrı adla yeni bir kayıt da aynı şekilde başarısız oldu (isim
+  rezervasyonu değildi). Kesin kök neden belirlenemedi — muhtemelen tam PC yeniden başlatmasıyla
+  temizlenen tanımlanamamış bir OS/Chrome durumu — ancak çözüldüğü audit log üzerinden kanıtlandı:
+  gerçek bağlantı zaten başarıyla kurulmuştu ve `host.lock`'u tutuyordu (`InstanceLock`, bkz. ADR
+  öncesi Faz 7 bulgusu), bu yüzden ayrı bir manuel test süreci beklenen şekilde reddedildi.
+
+**Kabul edilen sınırlar:**
+
+- i18n motoru yalnızca mekanizmadır; mevcut ~150 hardcoded Türkçe string'in mesaj anahtarlarına
+  taşınması bilerek yapılmadı, görsel yeniden tasarımla (Faz B, tarihsiz/planlanmamış) birlikte
+  yapılacak.
+- Paylaşılan design-token sistemi (tutarlı renk/padding/disabled-durum kuralları) bu ADR
+  kapsamında **yapılmadı** — aynı Faz B'ye ertelendi.
+- Edge tarayıcısı için native-messaging desteği (ayrı registry yolu) kapsam dışı bırakıldı.

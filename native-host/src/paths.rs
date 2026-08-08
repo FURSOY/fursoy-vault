@@ -29,7 +29,13 @@ impl DataPaths {
                         "LOCALAPPDATA is unavailable",
                     ))
                 })?;
-                PathBuf::from(local_app_data).join("FursoyCookieProtector")
+                let local_app_data = PathBuf::from(local_app_data);
+                let root = local_app_data.join("FursoyVault");
+                // Renamed from FursoyCookieProtector. install/register.ps1 already moves this
+                // directory at install time; this is the fallback for a host run directly
+                // (dev/test) without going through the installer first.
+                migrate_one(&local_app_data.join("FursoyCookieProtector"), &root)?;
+                root
             }
         };
         Ok(Self {
@@ -72,4 +78,59 @@ fn migrate_one(legacy: &Path, target: &Path) -> FcpResult<()> {
     }
     fs::rename(legacy, target)?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use uuid::Uuid;
+
+    #[test]
+    fn migrate_one_moves_a_whole_legacy_root_directory() {
+        let base = std::env::temp_dir().join(format!("fcp-paths-test-{}", Uuid::new_v4()));
+        let legacy_root = base.join("FursoyCookieProtector");
+        let new_root = base.join("FursoyVault");
+        fs::create_dir_all(legacy_root.join("vault")).unwrap();
+        fs::write(legacy_root.join("hello-credential.json"), b"{}").unwrap();
+
+        migrate_one(&legacy_root, &new_root).unwrap();
+
+        assert!(!legacy_root.exists());
+        assert!(new_root.join("hello-credential.json").exists());
+        assert!(new_root.join("vault").is_dir());
+
+        fs::remove_dir_all(&base).unwrap();
+    }
+
+    #[test]
+    fn migrate_one_does_nothing_if_the_new_root_already_exists() {
+        let base = std::env::temp_dir().join(format!("fcp-paths-test-{}", Uuid::new_v4()));
+        let legacy_root = base.join("FursoyCookieProtector");
+        let new_root = base.join("FursoyVault");
+        fs::create_dir_all(&legacy_root).unwrap();
+        fs::write(legacy_root.join("marker"), b"old").unwrap();
+        fs::create_dir_all(&new_root).unwrap();
+        fs::write(new_root.join("marker"), b"new").unwrap();
+
+        migrate_one(&legacy_root, &new_root).unwrap();
+
+        // Never overwrites an already-migrated (or freshly installed) new root.
+        assert!(legacy_root.exists());
+        assert_eq!(fs::read(new_root.join("marker")).unwrap(), b"new");
+
+        fs::remove_dir_all(&base).unwrap();
+    }
+
+    #[test]
+    fn migrate_one_does_nothing_if_no_legacy_root_exists() {
+        let base = std::env::temp_dir().join(format!("fcp-paths-test-{}", Uuid::new_v4()));
+        let legacy_root = base.join("FursoyCookieProtector");
+        let new_root = base.join("FursoyVault");
+
+        migrate_one(&legacy_root, &new_root).unwrap();
+
+        assert!(!new_root.exists());
+        fs::create_dir_all(&base).unwrap();
+        fs::remove_dir_all(&base).unwrap();
+    }
 }

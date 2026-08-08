@@ -6,7 +6,7 @@
   "scripts": {
     "check": "tsc -p tsconfig.json --noEmit",
     "build": "tsc -p tsconfig.json",
-    "test": "npm run build && node tests/protocol.test.mjs && node tests/monitor.test.mjs"
+    "test": "npm run build && node tests/protocol.test.mjs && node tests/monitor.test.mjs && node tests/i18n.test.mjs"
   },
   "devDependencies": {
     "typescript": "5.9.2"
