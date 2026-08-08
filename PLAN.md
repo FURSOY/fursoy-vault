@@ -3181,6 +3181,9 @@ desteklemiyor, oysa kullanıcı ayarlardan sonradan dil değiştirilebilsin iste
   temizlenen tanımlanamamış bir OS/Chrome durumu — ancak çözüldüğü audit log üzerinden kanıtlandı:
   gerçek bağlantı zaten başarıyla kurulmuştu ve `host.lock`'u tutuyordu (`InstanceLock`, bkz. ADR
   öncesi Faz 7 bulgusu), bu yüzden ayrı bir manuel test süreci beklenen şekilde reddedildi.
+  **Güncelleme (2026-08-08, ADR-023):** Bu hatanın kendisinin OS/Chrome tarafındaki ilk tetikleyicisi
+  hâlâ tam netleşmedi, ama neden bir kez olduğunda **hiç kendiliğinden düzelmediği** artık anlaşıldı
+  — bkz. ADR-023'teki `background.ts` yeniden-bağlanma kilitlenmesi bulgusu.
 
 **Kabul edilen sınırlar:**
 
@@ -3188,5 +3191,114 @@ desteklemiyor, oysa kullanıcı ayarlardan sonradan dil değiştirilebilsin iste
   taşınması bilerek yapılmadı, görsel yeniden tasarımla (Faz B, tarihsiz/planlanmamış) birlikte
   yapılacak.
 - Paylaşılan design-token sistemi (tutarlı renk/padding/disabled-durum kuralları) bu ADR
-  kapsamında **yapılmadı** — aynı Faz B'ye ertelendi.
+  kapsamında **yapılmadı** — [ADR-023](#adr-023--paylaşılan-design-token-sistemi-popup-ux-düzeltmeleri-ve-hello-rp-id-yeniden-adlandırması)
+  ile aynı gün içinde tamamlandı.
 - Edge tarayıcısı için native-messaging desteği (ayrı registry yolu) kapsam dışı bırakıldı.
+
+---
+
+### ADR-023 — Paylaşılan design-token sistemi, popup UX düzeltmeleri ve Hello RP ID yeniden adlandırması
+
+**Durum:** Kabul edildi ve uygulandı (2026-08-08).
+
+**Bağlam:** ADR-022'de ertelenen paylaşılan tasarım sistemi bu oturumda yapıldı. Kullanıcı bir
+örnek `DESIGN.md` (koyu tema, teal vurgu, Inter tipografi) paylaştı; bundan ilham alınarak hem
+koyu hem açık temayı kapsayan, üç yüzeyin (popup/options/unlock) gerçek bileşenlerine uyarlanmış
+bir token seti önerildi ve onaylandı. Aynı oturumda kullanıcı ek popup UX sorunları ve Windows
+Hello diyalogundaki eski isim kalıntısını da bildirdi.
+
+**Karar ve uygulama detayları:**
+
+- **`extension/theme.css`** (yeni, paylaşılan): CSS custom property token seti — `:root` açık
+  temayı, `@media (prefers-color-scheme: dark)` koyu temayı tanımlar, OS tercihine göre otomatik
+  geçer (manuel anahtar yok, kapsam dışı bırakıldı). Açık temadaki `--warning`/`--critical`
+  değerleri (`#b06000`/`#b3261e`) bilerek koddaki mevcut hardcoded değerlerle birebir aynı
+  tutuldu — sıfır görsel regresyon. `popup.html`/`options.html`/`unlock.html` bunu kendi
+  sayfa CSS'inden önce yüklüyor.
+- **Ölçülerek bulunan bir Chromium hatası/tuhaflığı:** `color-scheme: light dark` set edildiğinde
+  Chrome, `<button>`/`<input>`/`<select>` gibi native form kontrollerine kendi koyu/açık tema
+  arka planını (örn. düz gri `rgb(107,107,107)`) veriyor ve bu, yazarın `background` değerini
+  override edebiliyor. `theme.css`'e `button, input, select { appearance: none; }` eklenerek
+  düzeltildi — tarayıcıda ekran görüntüsüyle doğrulanmadan fark edilmezdi.
+- **`popup.css`/`popup.html` UX düzeltmeleri:**
+  - Popup artık `display:flex; flex-direction:column` bir `body` (köşeleri `border-radius:12px`
+    ile yuvarlatılmış, `overflow:hidden`) ve içinde ayrı bir `.popup-scroll` kaydırılabilir alan
+    (`flex:1; min-height:0; overflow-y:auto`) olarak yapılandırıldı. "Yönetim ekranını aç" butonu
+    bu kaydırma alanının **dışına**, `body`'nin sabit (flex:none) son öğesi olarak taşındı — liste
+    ne kadar uzarsa uzasın buton her zaman altta, kaydırmadan görünür kalıyor.
+  - `.popup-scroll` için ince, temaya uyumlu özel kaydırma çubuğu
+    (`scrollbar-width: thin` + WebKit `::-webkit-scrollbar*` kuralları, renk `var(--border-strong)`).
+  - "Bu site zaten korunuyor" durumundaki `Koruma düzeyi` etiketi `Koruma düzeyini değiştir`
+    olarak değiştirildi (yalnızca mevcut korumayı değiştirme senaryosunda; yeni site eklerken
+    kullanılan aynı isimdeki etiket olduğu gibi bırakıldı, çünkü orada henüz "değiştirilecek" bir
+    şey yok).
+  - `options.ts`teki önem-seviyesi hücresi artık ayrı bir `<span class="severity-pill ...">`
+    içine sarılıyor (rozet görünümünün çalışması için gerekliydi).
+- **Yazı tipi:** Kullanıcı "Inter Variable, DM Sans, system-ui, ..." tarzı bir yığın istedi.
+  Bu ikisi de Windows'ta önceden kurulu değil; paketlemeden kullanılırsa CSS zaten sessizce
+  `system-ui`'a düşer ve hiçbir şey değişmez. Bunun yerine **Windows 11'in kendi Fluent-tasarım
+  sistem fontu "Segoe UI Variable"** birincil seçim yapıldı (`--font-sans` içinde) — sıfır ek
+  paket boyutu, bu uygulamanın zaten hedeflediği OS ile doğal bütünlük, ve istenen "daha güven
+  veren" hissi native Windows kimliğiyle veriyor.
+- **Hello RP ID yeniden adlandırıldı:** `hello.rs`'teki `RP_ID` sabiti
+  `fursoy-cookie-protector.local` → `fursoy-vault.local`, `ORIGIN` ve `USER_NAME` de eşleşecek
+  şekilde güncellendi. Windows'un Hello onay diyaloğu, her imzalamada `WebAuthNAuthenticatorGetAssertion`'a
+  geçirilen bu RP ID'yi doğrudan gösteriyor — `RP_NAME`'in daha önce "FURSOY Vault" yapılması
+  (ADR-021/022) bu diyalogdaki metni değiştirmemişti, çünkü orada gösterilen asıl alan `id`, `name`
+  değil.
+
+**Kabul edilen sınırlar:**
+
+- **RP ID değişikliği mevcut Hello credential'ını geçersiz kılar.** Windows credential'ları RP ID'ye
+  göre kendi içinde eşliyor; yeni ID ile eski credential bulunamaz, uygulama `create_credential()`
+  yoluyla otomatik olarak yeni bir tane oluşturur (aynı, önceden zaten yaşanmış ve düşük etkili
+  davranış — bkz. ADR-022'deki `hello-credential.json` kaybı notu). Eski RP ID'ye bağlı credential
+  Windows'un dahili deposunda kullanılmayan bir kalıntı olarak kalır; güvenlik açısından zararsız
+  olduğu için ayrıca temizlenmedi.
+- Popup'taki site listesi durumları (`Kilitli`/`Aktif`/`Boşta`) rozet biçimine çevrilmedi — gerçek
+  veri tek bir birleşik string (`"Dengeli · Kilitli · 2 çerez"`) olarak geliyor, yalnızca izin-yok
+  (`blocked`) durumu kritik renginde kalmaya devam ediyor.
+- String/metin i18n taşıması hâlâ yapılmadı — ADR-022'nin kapsamı aynen geçerli.
+
+**Ek bulgu (aynı gün, canlı hata ayıklamayla): `background.ts`'de yeniden-bağlanma kilitlenmesi.**
+Kullanıcı RP ID değişikliğinden hemen sonra "Specified native messaging host not found" hatasını
+tekrar bildirdi ve bunun benim değişikliğimden kaynaklandığını düşündü. Kod izlemesiyle gösterildi
+ki bu **mümkün değil**: `connectNative` yalnızca `background.ts:847`'de var (bu oturumda dokunulmadı)
+ve `HelloAuthorizer::open_or_create()` yalnızca `begin_inject` içinde, bağlantı zaten kurulmuşken
+çağrılıyor. Registry/manifest/exe tek tek doğrulandı, hepsi doğruydu (`reg query`, HKLM/WOW6432Node
+gölge kaydı yok, JSON byte-byte temiz). Chrome'un `--enable-logging --v=1` çıktısı asıl nedeni
+gösterdi: `launch_context.cc:148` "Can't find manifest for native messaging host com.fursoy.vault" —
+tek seferlik bir Chrome-taraflı arama hatası (kesin OS-seviyesi nedeni hâlâ bilinmiyor), ama log'da
+**hiç ikinci bir deneme yok**. Sebep: `openNativeConnection()`'ın `onDisconnect` kapanışı önce
+`await awaitConfig()` yapıyordu; `awaitConfig()` yalnızca bir config hiç önbelleğe alınmamışsa VE
+hiç başarılı bağlantı kurulmamışsa **asla çözülmeyen** bir promise döndürüyor — tam da bu senaryuda
+(profildeki uzantı depolaması, `chrome.storage.local`'ın leveldb dosyası 0 bayt olarak doğrulandı,
+tamamen taze bir kurulum) devreye giriyor. Yeniden bağlanmayı zamanlayan `setTimeout(...)` satırı bu
+`await`'in **arkasındaydı**, yani hiç çalışmadı — tek bir başarısız deneme sonrası sonsuza kadar
+sessiz kalıyordu. **Düzeltme:** `setTimeout` çağrısı `awaitConfig()`'den önce, koşulsuz olarak
+çalışacak şekilde taşındı ([background.ts](extension/src/background.ts) — `openNativeConnection`).
+Bu muhtemelen **ADR-022'deki orijinal "not found" gizeminin de gerçek açıklaması**: o zaman muhtemelen
+önbellekte eski bir config vardı, bu yüzden yeniden bağlanma döngüsü çalışıp birkaç saniye içinde
+kendiliğinden düzeliyordu — bu sefer tamamen taze bir profilde (boş depolama) tetiklenince kilitlenme
+görünür oldu.
+
+**Asıl kök neden bulundu (aynı gün, devamındaki uzun canlı hata ayıklamayla): sandbox
+yönlendirmesi, Chrome bug'ı değil.** Yukarıdaki düzeltmeden sonra hata ısrarla sürünce, tek tek
+elenen: HKLM/WOW6432Node gölge kaydı, registry değerinin ham UTF-16 byte'ları, manifest JSON'ın
+byte-byte içeriği, dosya ACL'leri, üçüncü parti antivirüs, kalıntı görev/servis, Edge kaydı (hiç
+yok), Chrome yerel politikaları, **profil bazlı bulut politikası** (`Secure Preferences`),
+tamamen farklı isimle taze bir test host'u (`com.fursoy.pingtest`, o da "not found" verdi — isimle
+ilgisiz olduğunu kanıtladı), tamamen yeni bir Chrome profili (o da aynı hatayı verdi — profile
+özel bozulmayı eledi). Kesin ayırt edici test: makinede halihazırda çalışan iki native host daha
+vardı (`com.microsoft.browsercore`, `unrelated.nativehost`) — bunlara bağlanmayı deneyince
+**"forbidden"** (izin reddi, manifest bulundu ama origin uymuyor) döndüler, "not found" değil.
+Bu, native-messaging arama mekanizmasının genel olarak sağlam olduğunu, sorunun yalnızca
+`com.fursoy.*` girdilerine özgü olduğunu kanıtladı. Comparing the working host registrations exposed the root cause: the diagnostic environment
+redirected `%LOCALAPPDATA%\FursoyVault` to an isolated package cache. Registry and manifest
+checks therefore read and wrote the sandbox copy while the user's actual host registration
+stayed unchanged. Repository files were unaffected. Running `register.ps1` in a normal user
+terminal updated the real registration, after which Chrome connected successfully.
+**Kalıcı kural (bkz. hafıza `feedback-sandbox-redirects-localappdata`): repo dışına yazan hiçbir
+kurulum/registry adımı (`register.ps1`, `unregister.ps1`, doğrudan registry/`%LOCALAPPDATA%`
+işlemleri) bundan sonra benim Bash/PowerShell aracımla çalıştırılmayacak — komut kullanıcıya
+verilip kendi terminalinde çalıştırılacak.**
