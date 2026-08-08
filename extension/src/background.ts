@@ -397,6 +397,11 @@ async function openNativeConnection(): Promise<void> {
   await restoreCachedConfig();
   if (client?.connected) return;
   client = new NativeClient(loadedConfig?.digest, handleHostMessage, async () => {
+    // Scheduled first and unconditionally: awaitConfig() below only resolves once a config has
+    // ever been adopted (cache or a successful handshake), which never happens if the very first
+    // connection attempt in a profile fails before any config exists — gating the retry behind it
+    // deadlocked the whole reconnect loop after exactly one failure, with nothing left to retry it.
+    setTimeout(() => { void connect(); }, 1_000);
     const loaded = await awaitConfig();
     const root = await loadState(loaded);
     const activeGroups: string[] = [];
@@ -411,7 +416,6 @@ async function openNativeConnection(): Promise<void> {
     await saveState(root);
     if (activeGroups.length === 0) await queueMonitorEvent("host_disconnect", undefined, false);
     else for (const groupId of activeGroups) await queueMonitorEvent("host_disconnect_active_lease", groupId, false);
-    setTimeout(() => { void connect(); }, 1_000);
   });
   client.start();
 }
