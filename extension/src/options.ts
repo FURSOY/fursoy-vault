@@ -208,8 +208,11 @@ async function changePolicy(group: GroupSummary, select: HTMLSelectElement): Pro
 function renderLogRow(entry: StoredAlert, groups: GroupSummary[]): HTMLTableRowElement {
   const row = document.createElement("tr");
   const group = groups.find((item) => item.id === entry.accountGroupId);
-  const severity = cell(SEVERITY_LABELS[entry.severity] ?? entry.severity);
-  severity.className = `severity-${entry.severity}`;
+  const severity = document.createElement("td");
+  const severityPill = document.createElement("span");
+  severityPill.className = `severity-pill severity-${entry.severity}`;
+  severityPill.textContent = SEVERITY_LABELS[entry.severity] ?? entry.severity;
+  severity.append(severityPill);
   const site = group?.scope ?? (entry.affectedScopes !== undefined && entry.affectedScopes.length > 0
     ? entry.affectedScopes.join(", ")
     : "—");

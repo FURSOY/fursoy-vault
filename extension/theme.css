@@ -1,0 +1,61 @@
+:root {
+  color-scheme: light dark;
+  --bg: #f5f7fb;
+  --surface: #ffffff;
+  --surface-high: #eef1f8;
+  --surface-highest: #e3e7f2;
+  --border: #d8dded;
+  --border-strong: #c3cade;
+  --ink: #141b30;
+  --ink-muted: #5b6584;
+  --accent: #0f8b96;
+  --accent-ink: #ffffff;
+  --accent-soft: rgba(15, 139, 150, 0.10);
+  --warning: #b06000;
+  --warning-soft: rgba(176, 96, 0, 0.10);
+  --critical: #b3261e;
+  --critical-soft: rgba(179, 38, 30, 0.10);
+  /* "Segoe UI Variable" is Windows 11's own Fluent-design system font (ships with the OS this
+     app targets, zero bytes to bundle) — picked over shipping Inter/DM Sans as webfont files in
+     a small local extension, while still landing the "sharper, more trustworthy" look. */
+  --font-sans: "Segoe UI Variable Text", "Segoe UI Variable", "Segoe UI", system-ui, -apple-system, "Helvetica Neue", Arial, sans-serif;
+  --font-mono: ui-monospace, "Cascadia Code", "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  --radius-sm: 6px;
+  --radius-lg: 10px;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #0b1326;
+    --surface: #131b2e;
+    --surface-high: #1c2540;
+    --surface-highest: #262f4d;
+    --border: #2a3454;
+    --border-strong: #3a4568;
+    --ink: #e4e9fb;
+    --ink-muted: #94a0c4;
+    --accent: #4fd6e0;
+    --accent-ink: #04262b;
+    --accent-soft: rgba(79, 214, 224, 0.14);
+    --warning: #e8a33d;
+    --warning-soft: rgba(232, 163, 61, 0.14);
+    --critical: #ff6b64;
+    --critical-soft: rgba(255, 107, 100, 0.14);
+  }
+}
+
+body {
+  background: var(--bg);
+  color: var(--ink);
+  font-family: var(--font-sans);
+}
+
+/* Chromium themes native button/input/select chrome from color-scheme, which
+   otherwise fights the author background below even with an explicit color set. */
+button,
+input,
+select {
+  -webkit-appearance: none;
+  appearance: none;
+  font-family: inherit;
+}

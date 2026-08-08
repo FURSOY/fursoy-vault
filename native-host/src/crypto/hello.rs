@@ -33,15 +33,17 @@ use crate::protocol::messages::{CapabilityPayload, SignedCapability};
 use crate::{FcpError, FcpResult};
 
 /// Not a real, resolvable domain: this credential is never used by a browser or checked against
-/// an external Relying Party, so any syntactically valid RP id works. Fixed so the credential
-/// created on first run can always be found again.
-const RP_ID: &str = "fursoy-cookie-protector.local";
+/// an external Relying Party, so any syntactically valid RP id works. Windows shows this string
+/// verbatim in the Hello consent dialog on every sign (not just at enrollment), so it was renamed
+/// alongside the product (was "fursoy-cookie-protector.local") — this invalidates any existing
+/// stored credential, which the app transparently recreates on next use (see ADR-023).
+const RP_ID: &str = "fursoy-vault.local";
 const RP_NAME: &str = "FURSOY Vault";
-const ORIGIN: &str = "https://fursoy-cookie-protector.local";
+const ORIGIN: &str = "https://fursoy-vault.local";
 /// There is exactly one local "user" for this credential; the id only needs to be stable, not
 /// secret or unique across installs.
 const USER_ID: &[u8; 16] = b"FCP.Hello.User.1";
-const USER_NAME: &str = "fursoy-cookie-protector";
+const USER_NAME: &str = "fursoy-vault";
 const COSE_ALGORITHM_ES256: i32 = -7;
 
 pub struct HelloAuthorizer {
