@@ -16,6 +16,7 @@ interface StoredAlert {
   accountGroupId: string | null;
   observedAtUnixMs: number;
   occurrences: number;
+  affectedScopes?: string[];
 }
 
 interface PopupState {
@@ -209,11 +210,14 @@ function renderLogRow(entry: StoredAlert, groups: GroupSummary[]): HTMLTableRowE
   const group = groups.find((item) => item.id === entry.accountGroupId);
   const severity = cell(SEVERITY_LABELS[entry.severity] ?? entry.severity);
   severity.className = `severity-${entry.severity}`;
+  const site = group?.scope ?? (entry.affectedScopes !== undefined && entry.affectedScopes.length > 0
+    ? entry.affectedScopes.join(", ")
+    : "—");
   row.append(
     cell(new Date(entry.observedAtUnixMs).toLocaleString(), "numeric"),
     severity,
     cell(SIGNAL_LABELS[entry.signal] ?? entry.signal),
-    cell(group?.scope ?? "—"),
+    cell(site),
     cell(String(entry.occurrences), "numeric"),
   );
   return row;

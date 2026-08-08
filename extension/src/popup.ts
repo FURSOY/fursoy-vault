@@ -16,6 +16,7 @@ interface StoredAlert {
   accountGroupId: string | null;
   observedAtUnixMs: number;
   occurrences: number;
+  affectedScopes?: string[];
 }
 
 interface PopupState {
@@ -174,7 +175,8 @@ async function refresh(): Promise<void> {
 function renderAlert(alert: StoredAlert | undefined, groups: GroupSummary[]): void {
   if (alert === undefined) return;
   const group = groups.find((item) => item.id === alert.accountGroupId);
-  const where = group === undefined ? "" : ` — ${group.scope}`;
+  const scopes = group?.scope ?? (alert.affectedScopes !== undefined && alert.affectedScopes.length > 0 ? alert.affectedScopes.join(", ") : undefined);
+  const where = scopes === undefined ? "" : ` — ${scopes}`;
   const when = new Date(alert.observedAtUnixMs).toLocaleTimeString();
   const times = alert.occurrences > 1 ? ` · ${alert.occurrences} kez` : "";
   alertBox.textContent = `${SIGNAL_LABELS[alert.signal] ?? alert.signal}${where} (${when}${times})`;

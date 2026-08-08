@@ -103,11 +103,17 @@ export function notificationDecision(
   return { show: true, next: { ...previous, [fingerprint]: now } };
 }
 
-export function notificationText(event: MonitorEvent): { title: string; message: string } {
+export function notificationText(event: MonitorEvent, activeScopes: readonly string[] = []): { title: string; message: string } {
   switch (event.signal) {
     case "remote_debugging_port":
-    case "remote_debugging_pipe":
-      return { title: "Yüksek riskli tarayıcı başlatması", message: "Chrome uzaktan hata ayıklama parametresiyle başlatıldı." };
+    case "remote_debugging_pipe": {
+      // The signal itself is process-wide, not tied to a group (§9.3), so the affected sites are
+      // whatever is currently leased at display time rather than something carried on the event.
+      const exposure = activeScopes.length > 0
+        ? ` Şu an açık korumalı site(ler): ${activeScopes.join(", ")}.`
+        : " Şu an açık korumalı site yok.";
+      return { title: "Yüksek riskli tarayıcı başlatması", message: `Chrome uzaktan hata ayıklama parametresiyle başlatıldı.${exposure}` };
+    }
     case "host_disconnect_active_lease":
       return { title: "Cookie koruması bağlantısı kesildi", message: "Açık bir oturum varken native host bağlantısı kayboldu; fail-closed temizlik başlatıldı." };
     case "reconciliation_failed":

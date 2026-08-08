@@ -914,24 +914,41 @@ async function handleMonitorAlert(value: unknown): Promise<void> {
     await setLocal(MONITOR_OUTBOX_KEY, pending.filter((item) => item.event_id !== event.event_id));
   }
   if (event.severity === "info") return;
+  // A process-wide signal like remote debugging carries no account_group_id, so "what's at risk"
+  // is answered from current lease state at recording time rather than something the event
+  // itself would ever carry. Computed once and shared by the log entry and the notification text
+  // so both agree on the same snapshot.
+  const affectedScopes = event.account_group_id === undefined || event.account_group_id === null
+    ? await currentlyLeasedScopes()
+    : [];
   // The rate limit exists to stop notification spam, not to hide events. The toast is the noisy,
   // interrupting channel and stays limited; the badge and the popup record are cheap and are
   // always refreshed, so an event that arrives right after the user acknowledged the previous one
   // still leaves a visible trace instead of passing silently.
-  await recordAlert(event);
+  await recordAlert(event, affectedScopes);
   const previousValue = await getLocal(MONITOR_RATE_KEY);
   const previous = isNotificationDecisionState(previousValue) ? previousValue : {};
   const decision = notificationDecision(event, previous, Date.now());
   if (!decision.show) return;
   await setLocal(MONITOR_RATE_KEY, decision.next);
-  const content = notificationText(event);
+  const content = notificationText(event, affectedScopes);
   await createNotification(`fcp-monitor-${event.event_id}`, {
     type: "basic", iconUrl: MONITOR_ICON_URL, title: content.title, message: content.message,
     priority: event.severity === "high" ? 2 : 1,
   });
 }
 
-async function recordAlert(event: MonitorEvent): Promise<void> {
+// A process-wide signal like remote debugging isn't tied to any one group, so "what's at risk"
+// is answered from current lease state at display time rather than carried on the event itself.
+async function currentlyLeasedScopes(): Promise<string[]> {
+  const loaded = await awaitConfig();
+  const root = await loadState(loaded);
+  return loaded.config.groups
+    .filter((group) => root.groups[group.id]?.groupState === "leased")
+    .map((group) => group.scope);
+}
+
+async function recordAlert(event: MonitorEvent, affectedScopes: readonly string[]): Promise<void> {
   const storedValue = await getLocal(LAST_ALERT_KEY);
   const stored = isStoredAlert(storedValue) ? storedValue : undefined;
   const sameAsStored = stored?.signal === event.signal && stored.accountGroupId === (event.account_group_id ?? null);
@@ -939,6 +956,7 @@ async function recordAlert(event: MonitorEvent): Promise<void> {
     signal: event.signal, severity: event.severity,
     accountGroupId: event.account_group_id ?? null, observedAtUnixMs: event.observed_at_unix_ms,
     occurrences: sameAsStored ? stored.occurrences + 1 : 1,
+    affectedScopes: affectedScopes.length > 0 ? [...affectedScopes] : undefined,
   };
   await setLocal(LAST_ALERT_KEY, entry);
   await appendAlertLog(entry);
@@ -965,12 +983,15 @@ interface StoredAlert {
   accountGroupId: string | null;
   observedAtUnixMs: number;
   occurrences: number;
+  // Only set for process-wide signals (no accountGroupId): which sites were leased at the time.
+  affectedScopes?: string[];
 }
 
 function isStoredAlert(value: unknown): value is StoredAlert {
   const alert = value as Partial<StoredAlert> | undefined;
   return typeof alert?.signal === "string" && typeof alert.severity === "string" &&
-    typeof alert.observedAtUnixMs === "number" && typeof alert.occurrences === "number";
+    typeof alert.observedAtUnixMs === "number" && typeof alert.occurrences === "number" &&
+    (alert.affectedScopes === undefined || (Array.isArray(alert.affectedScopes) && alert.affectedScopes.every((scope) => typeof scope === "string")));
 }
 
 function isNotificationDecisionState(value: unknown): value is NotificationDecisionState {
