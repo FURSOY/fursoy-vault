@@ -1510,7 +1510,7 @@ işaretlenir.
 | **Q20** | Sistem idle sinyali, medya oynatma veya görünür sayfadaki pasif ama gerçek kullanımı nasıl ayırt edecek? YouTube/video gibi senaryolarda klavye-fare olmaması yanlış erken tahliye üretebilir. | Aktif pasif kullanımda oturumun gereksiz kilitlenmesi | Faz 6'da tab visibility, audible/media state ve site aktivitesini güvenlik sınırını gevşetmeden değerlendiren policy tasarla |
 | **Q21** | ✅ Kapandı, **2026-08-07'de revize edildi** — `webNavigation.onBeforeNavigate`, `sealed + yeni ana-frame navigasyonu` durumunda tam hedef URL'yi saklayıp sekmeyi `unlock.html` ara sayfasına yönlendirir; Hello ve cookie round-trip başarısından sonra sekme path/query korunarak hedefe döner. `leased` navigasyonlara dokunulmaz. **Revizyon:** inject artık ayrı bir düğme jesti beklemez, ara sayfa açılır açılmaz başlar (bkz. aşağıdaki not). İptal/hata durumunda ara sayfada kalınır ve düğmeyle tekrar denenir. | Restore UX'i; F5 gereksinimi kaldırıldı | Faz 5.1 `0.1.12` Wikipedia manuel testi: ana akış, leased, Hello reddi/tekrar ve idle senaryoları PASS |
 | **Q22** | 🟡 Blocker değil — Uygulama `hello_cached`/aynı `KeyCredential` handle yolunu 10 dakikalık Dengeli pencere içinde doğru seçtiği halde Windows Hello UI yeniden gösterildi. Last-tab eviction cache'i temizlemiyor; uygulama penceresi OS'nin promptsuz credential cache süresini garanti etmiyor. Gerçek OS prompt-cache süresi nedir? | Beklenenden fazla prompt; güvenlik fail-safe kalır | Ayrı süre ölçümü: aynı process/handle ile artan aralıklarda prompt gözlemi |
-| **Q23** | **Başarısız restore sonrası grup yeniden enroll olmuyor.** `0.3.1`'de kontrollü uygulama grubu `restore_rejected` ile invalidate olduktan sonra, kullanıcı siteye taze login yapıp 10+ dakika beklediği halde audit'e hiç `enrollment` kaydı düşmedi; grup kalıcı olarak `uninitialized` kaldı. Extension'ın reload edilmesi durumu düzeltir. `waitForStableEnrollmentCookies` mi boş dönüyor, yoksa state makinesi mi takılı kalıyor? | **Koruma sessizce durur** — kullanıcı korunduğunu sanır, hiçbir uyarı çıkmaz | ADR-020 login-tespit yolunu kaldırdığı için bu kod yolu yeniden yazılacaktır; yine de kök neden yazılı olarak doğrulanmalı ki yeni modelde tekrarlanmasın. Repro: §30 Faz 7 bulguları |
+| **Q23** | ✅ **Kapandı (2026-08-08).** Orijinal kod yolu (`restore_rejected`/`waitForStableEnrollmentCookies`, login-tespit sezgisi) ADR-020 ile tamamen kaldırıldı, artık mevcut değil. Modern eşdeğer risk — bir grubun `degraded` durumunda kalıcı olarak sıkışıp kalması — koda bakılarak elendi: `degraded` bir grup (a) o siteye tekrar navigasyonla, (b) kapsamda herhangi bir cookie değişikliği algılanmasıyla, (c) her `handshake.ack`'te host'un `reconciliation_required` bildirdiği her grup için otomatik olarak uzlaştırılıyor (`background.ts` satır ~294, ~380, ~554). Bu, Faz 7'nin B3 testinde (host process'i öldürüp yeniden bağlanmasını bekleme) **canlı doğrulandı**: grup `degraded`'a düştü, ~38 saniye içinde **extension reload gerekmeden** kendiliğinden `reconciliation success` ile düzeldi — tam da eski Q23'ün "yalnız reload düzeltiyor" belirtisinin artık geçerli olmadığını gösteriyor. | ~~Koruma sessizce durur~~ artık geçerli değil | Kapalı — ek test planlanmıyor |
 | **Q24** | ✅ Kapandı — Host config'in tek sahibidir ve config'i handshake'te extension'a gönderir; extension kendi kopyasını taşımaz, aldığını doğrular ve yalnız offline fail-closed tahliye için cache'ler. Ekleme/silme `group.add`/`group.remove` ile hosta gider, host UUID atar ve açılıştaki validator'dan geçirip atomik yazar. | Grup ekleme akışı; config-digest fail-closed sözleşmesi korundu | ADR-020 dilim 2 uygulaması |
 | **Q25** | Kullanıcı-eklenen bir sitenin koruması, extension yeniden kurulduğunda **sessizce** durur: optional host izinleri kurulumla gider, host'taki site listesi kalır. Şu an bu durum tespit edilip kullanıcıya gösteriliyor ve tek düğmeyle onarılıyor. Daha iyi bir yol var mı — ör. izin kaybını extension başlangıcında proaktif bildirim olarak yükseltmek? | Kullanıcı korunduğunu sanırken korunmuyor olabilir | Faz 8 kabul testinde izin-kaybı senaryosunun ayrı bir madde olarak koşulması |
 
@@ -2426,17 +2426,18 @@ belirlenecektir):
 1. **Faz 7 matris #5'in dar `scope_empty` yolu** — geniş ilkesi (`[redacted test site]` enrollment testiyle,
    bkz. §30) kanıtlandı; eviction anında gerçekten sıfır çerez taşıyan bir grupla dar yol hâlâ
    doğrudan gözlenmedi. Kullanıcı kararıyla düşük öncelikli bırakıldı, ekstra deneme planlanmıyor.
-2. **ADR-020'nin tam kabul matrisi** — dilim 1+2 birlikte, birden fazla site ve policy seviyesinde
-   uçtan uca koşulmadı (yalnızca Wikipedia + x.com nokta testleri yapıldı).
+2. **ADR-020'nin "resmi" tam kabul matrisi** hâlâ tek oturumda uçtan uca koşulmadı, ama
+   2026-08-08 oturumu kapsamı fiilen genişletti: `youtube.com`, `x.com`, `wikipedia.org`,
+   `steampowered.com`, `instagram.com`, `github.com`, `[redacted test site]` — 7 farklı gerçek site,
+   çoğunlukla Kritik politikada, tekrarlı enroll/inject/evict/idle/lock döngüleriyle test
+   edildi. Bu, belgenin önceki "yalnızca Wikipedia + x.com nokta testi" notundan çok daha geniş
+   bir kanıt tabanı; resmiyette matris olarak işaretlenmedi ama pratik risk düşük.
 3. **ADR-021 kabulü** — webauthn.dll göçünün gerçek kullanımda (birden fazla site, birden fazla
    gün) regresyon üretmediğinin doğrulanması; özellikle `hello_cache_ms`'in artık etkisiz olmasının
    kabul edilebilir olup olmadığına dair kullanıcı geri bildirimi.
 4. **Windows toast bildirimi** 2026-08-08 oturumunda hiç çıkmadı (badge/log/audit doğru
    çalışırken) — kök nedeni doğrulanmadı, kullanıcının kendi Windows bildirim ayarları şüpheli
    görüldü ama kesinleşmedi.
-5. **Q23** (başarısız restore sonrası re-enroll olmama) kök nedeni, ilgili eski kod yolu
-   kaldırılmış olsa bile yazılı olarak doğrulanmalı; aynı hata sınıfının yeni modelde
-   tekrarlanmadığı gösterilmelidir.
 
 **Kullanıcının açık onayı olmadan yüksek riskli site testi veya gerçek ana hesap testi
 başlatılmayacaktır.** §29.1 test sırası geçerliliğini korur.
