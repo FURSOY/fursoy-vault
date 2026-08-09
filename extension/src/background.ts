@@ -134,7 +134,10 @@ chrome.permissions.onAdded.addListener(() => enqueue(flushPendingAdd));
 
 chrome.webNavigation.onBeforeNavigate.addListener((details) => enqueue(async () => {
   if (details.frameId !== 0) return;
-  const loaded = await awaitConfig();
+  // See the matching comment on chrome.tabs.onUpdated below — any page navigating (including the
+  // very tab this extension itself opens) can fire before the first handshake ever completes.
+  const loaded = loadedConfig;
+  if (loaded === undefined) return;
   const group = groupForUrl(loaded.config, details.url);
   if (group !== undefined) await interceptSealedNavigation(loaded, group, details.tabId, details.url);
 }));
@@ -305,7 +308,12 @@ function isPopupMessage(value: unknown): value is PopupMessage {
 
 chrome.tabs.onUpdated.addListener((tabId, change, tab) => enqueue(async () => {
   if (change.status !== "complete" && change.url === undefined) return;
-  const loaded = await awaitConfig();
+  // Not awaitConfig(): this can fire (a tab loading) before the very first handshake ever
+  // completes, and awaiting here would deadlock the whole serialized queue behind itself — the
+  // handshake response that would resolve it is queued right behind this same task. Nothing
+  // useful to do yet if no config has ever been adopted; a later real event re-triggers this.
+  const loaded = loadedConfig;
+  if (loaded === undefined) return;
   const activeGroup = groupForUrl(loaded.config, tab.url);
   const root = await loadState(loaded);
   for (const group of loaded.config.groups) {
@@ -331,7 +339,9 @@ chrome.tabs.onUpdated.addListener((tabId, change, tab) => enqueue(async () => {
 }));
 
 chrome.tabs.onRemoved.addListener((tabId) => enqueue(async () => {
-  const loaded = await awaitConfig();
+  // See the matching comment on chrome.tabs.onUpdated above.
+  const loaded = loadedConfig;
+  if (loaded === undefined) return;
   const root = await loadState(loaded);
   for (const group of loaded.config.groups) {
     const state = root.groups[group.id];
@@ -351,7 +361,9 @@ chrome.tabs.onRemoved.addListener((tabId) => enqueue(async () => {
 }));
 
 chrome.idle.onStateChanged.addListener((idleState) => enqueue(async () => {
-  const loaded = await awaitConfig();
+  // See the matching comment on chrome.tabs.onUpdated above.
+  const loaded = loadedConfig;
+  if (loaded === undefined) return;
   const root = await loadState(loaded);
   if (idleState === "active") {
     for (const group of loaded.config.groups) chrome.alarms.clear(alarmName("idle", group.id));
@@ -383,7 +395,9 @@ chrome.alarms.onAlarm.addListener((alarm) => enqueue(async () => {
   }
   const parsed = parseAlarmName(alarm.name);
   if (parsed === undefined) return;
-  const loaded = await awaitConfig();
+  // See the matching comment on chrome.tabs.onUpdated above.
+  const loaded = loadedConfig;
+  if (loaded === undefined) return;
   const group = loaded.config.groups.find((item) => item.id === parsed.groupId);
   if (group === undefined) return;
   const root = await loadState(loaded);
@@ -401,7 +415,9 @@ chrome.alarms.onAlarm.addListener((alarm) => enqueue(async () => {
 }));
 
 chrome.cookies.onChanged.addListener((info) => enqueue(async () => {
-  const loaded = await awaitConfig();
+  // See the matching comment on chrome.tabs.onUpdated above.
+  const loaded = loadedConfig;
+  if (loaded === undefined) return;
   const group = groupForCookie(loaded.config, info.cookie);
   if (group === undefined) return;
   // ADR-020: cookie removals carry no meaning. The system does not try to tell a real logout
@@ -440,7 +456,10 @@ async function openNativeConnection(): Promise<void> {
     // connection attempt in a profile fails before any config exists — gating the retry behind it
     // deadlocked the whole reconnect loop after exactly one failure, with nothing left to retry it.
     setTimeout(() => { void connect(); }, 1_000);
-    const loaded = await awaitConfig();
+    // Also non-blocking, same reason: if the very first connection ever disconnects before its
+    // own handshake completed, there is no config yet and nothing here to fail-closed evict.
+    const loaded = loadedConfig;
+    if (loaded === undefined) return;
     const root = await loadState(loaded);
     const activeGroups: string[] = [];
     for (const group of loaded.config.groups) {
@@ -1155,4 +1174,7 @@ function unique(values: number[]): number[] { return [...new Set(values)]; }
 function enqueue(task: () => Promise<void>): void { queue = queue.then(task, task).catch((error: unknown) => console.error("FCP fail-closed controller error", error)); }
 
 chrome.runtime.onStartup.addListener(() => { void connect(); });
+chrome.runtime.onInstalled.addListener((details) => {
+  if (details.reason === "install") void chrome.tabs.create({ url: "onboarding.html" });
+});
 void connect();

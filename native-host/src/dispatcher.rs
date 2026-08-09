@@ -109,9 +109,10 @@ impl NativeHostApp {
                 occurrence_count: 1,
             })?;
         }
+        let audit = AuditLogger::open(&paths.audit_directory)?;
         Ok(Self {
             groups,
-            audit: AuditLogger::open(&paths.audit_directory)?,
+            audit,
             paths: paths.clone(),
             config: loaded.config,
             config_digest: loaded.digest,
