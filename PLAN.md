@@ -3383,3 +3383,51 @@ icat etmemizi (rastgele profil kimliğini `chrome.storage.local`'da saklayıp ha
 geçirmek) gerektirir — gerçek bir mühendislik işi. Tarayıcı bazında ayrım (Chrome vs Edge) daha
 kolay olurdu çünkü registry zaten tarayıcı başına ayrı isim alanında. Şimdilik yapılmadı,
 Faz 9 (Edge desteği) zamanı değerlendirilecek.
+
+---
+
+### ADR-025 — Native host güncelleme kontrolü (yalnızca bildirim, otomatik uygulama yok)
+
+**Durum:** Kabul edildi ve uygulandı (2026-08-08).
+
+**Bağlam:** Onboarding sihirbazına başlamadan önce, kullanıcı companion uygulamanın güncelleme
+mekanizmasının önce gelmesinin daha mantıklı olduğuna karar verdi — kurulum paketinin şekli
+zaten güncelleme akışına göre kurulacaktı.
+
+**Karar:** Native host, kendini **hiçbir zaman** güncellemiyor/indirmiyor. Yalnızca kendi sürüm
+numarasını (`env!("CARGO_PKG_VERSION")`) her handshake'te extension'a bildiriyor
+(`HandshakeAck.host_version`, yeni zorunlu alan). Extension, 12 saatte bir (ayrıca her başarılı
+handshake'te bir kez) `https://api.github.com/repos/FURSOY/fursoy-vault/releases/latest`'i
+kontrol edip `tag_name`'i host'un bildirdiği sürümle karşılaştırıyor; daha yeni bir sürüm varsa
+`options.html`'de bir bildirim + indirme sayfası linki gösteriyor. **Tam otomatik indirme/kendini
+değiştirme bilinçli olarak yapılmadı** — kod imzalama kesinleşmeden bunu güvenli yapmanın yolu
+yok, ve bu tür bir sessiz kendini-değiştirme davranışı tam olarak ürünün azaltmaya çalıştığı türde
+bir saldırı yüzeyi açardı. Kullanıcı ilk kurulumla aynı şekilde, kendi elleriyle indirip çalıştırır.
+
+**Uygulama detayları:**
+
+- `protocol/messages.rs`'teki `HandshakeAck`'e `host_version: String` eklendi (zorunlu alan,
+  `deny_unknown_fields` korunuyor).
+- `protocol.ts`'te aynı alan mecburi (`requiredString`); `background.ts` bunu `hostVersion`
+  modül değişkeninde tutuyor, her handshake sonrası `checkForUpdate()`'i (bekletmeden,
+  `void` ile) tetikliyor.
+- Sonuç yalnızca `chrome.storage.local`'a yazılıyor (`fcp-update-check-v1`); hiçbir şey
+  otomatik indirilmiyor. `options.html`'de `#update-notice` banner'ı bunu okuyup gösteriyor.
+- `manifest.json`'a yeni, dar kapsamlı bir zorunlu izin eklendi: `host_permissions:
+  ["https://api.github.com/*"]` — uzantının GitHub dışında hiçbir ağ isteği atmadığı, tek amaçlı
+  bir izin.
+- GitHub reposu bu oturumda `FURSOY-Cookie-Protector`'dan `fursoy-vault`'a taşınmıştı (kullanıcı
+  tarafından, GitHub üzerinden); yerel `git remote`'un hâlâ eski adı gösterdiği fark edildi ve
+  düzeltildi (`git remote set-url`) — GitHub eski URL'leri yönlendirdiği için işlevsel bir sorun
+  yoktu, yalnızca yerel tutarsızlıktı.
+
+**Kabul edilen sınırlar:**
+
+- Kurulum paketinin kendisi (imzasız/imzalı .exe, GitHub Release'e asset olarak yükleme) bu
+  ADR'nin kapsamında **değil** — sıradaki iş. Şu an `checkForUpdate()` gerçek bir Release
+  yayınlanana kadar GitHub API'sinden `404` alacak (istek başarısız → sessizce hiçbir şey
+  yapmıyor, sonraki kontrolde tekrar dener) — zararsız ama işlevsiz, ilk Release yayınlanana
+  kadar.
+- Sürüm karşılaştırması basit bir nokta-ayrılmış sayısal karşılaştırma (`compareVersions`) —
+  ön-sürüm etiketleri (`-beta`, `-rc1` gibi) doğru sıralanmaz. v1 için yeterli, yalnızca
+  `X.Y.Z` etiketleri kullanılacaksa sorun değil.
