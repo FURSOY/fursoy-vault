@@ -3302,3 +3302,84 @@ terminal updated the real registration, after which Chrome connected successfull
 kurulum/registry adımı (`register.ps1`, `unregister.ps1`, doğrudan registry/`%LOCALAPPDATA%`
 işlemleri) bundan sonra benim Bash/PowerShell aracımla çalıştırılmayacak — komut kullanıcıya
 verilip kendi terminalinde çalıştırılacak.**
+
+---
+
+### ADR-024 — Yayın öncesi hazırlık: kalan isim kalıntıları, test-only dev izinleri ve sıfır-grup mimarisi
+
+**Durum:** Kabul edildi ve uygulandı (2026-08-08).
+
+**Bağlam:** Kullanıcıyla yayın öncesi bir hazırlık taraması yapıldı (kod imzalama, CWS
+gereksinimleri, Edge desteği, lisans, idle/policy tasarımı, onboarding). Taramadan çıkan somut
+kod işleri bu ADR'de toplanıyor.
+
+**Uygulama detayları:**
+
+- **Kalan isim kalıntıları temizlendi:** `fcp-host.exe` → `fursoy-vault-host.exe` (Cargo.toml,
+  kaynak dosya, `register.ps1`); `extension/package.json`/`package-lock.json`'daki iç npm adı
+  `fursoy-vault-extension`; `native-host/README.md`'deki bayat `FursoyCookieProtector` yol
+  referansı güncellendi.
+- **Kripto kimlik dizeleri de yeniden adlandırıldı (bilinçli, geri dönüşü olmayan bir istisna):**
+  `platform_kek.rs`'teki `KEK_NAME`/`KEK_KEY_ID` ve `dpapi.rs`'teki `AUDIT_ENTROPY` normalde asla
+  dokunulmaması gereken kimliklerdi (değişince mevcut TPM anahtarı ve audit zinciri kalıcı olarak
+  kurtarılamaz hale gelir). Kullanıcı bilinçli olarak şimdi (henüz gerçek kullanıcı verisi yokken)
+  yapılmasına karar verdi — launch sonrası bir daha böyle bir yeniden adlandırma **yapılmayacak**,
+  bir dahaki sefer gerçek bir migration planı gerekir. Değişiklik `cargo test` ile doğrulandı
+  (60/60), veri kaybı riski kabul edildi ve zaten kullanıcının kendi eski test verisiyle sınırlıydı.
+- **Dev-only izinler ve tohum config kaldırıldı:** `manifest.json`'daki `host_permissions`
+  (`wikipedia.org`, `*.wikipedia.org`, `localhost` — geliştirme sırasında Chrome'un izin
+  onay ekranına takılmamak için eklenmişti) tamamen silindi; gerçek "site ekle" akışı zaten
+  `chrome.permissions.request` ile çalışma zamanında izin istiyor, bu üçü hiç gerekmiyordu.
+  `config/account-groups.json` (native host'a `include_bytes!` ile gömülü ilk-çalıştırma
+  yedeği) artık `groups: []` — gerçek bir kurulum kimseye sormadan Wikipedia/localhost'u
+  korumaya almayacak.
+- **Bulunan ve düzeltilen gerçek mimari engel: sıfır-grup durumu desteklenmiyordu.** Yukarıdaki
+  değişiklik yapılırken ortaya çıktı — `config.rs::validate()` boş grup listesini reddediyordu ve
+  `dispatcher.rs`'in grup silme yolu son grubun silinmesini `last_group_cannot_be_removed` ile
+  engelliyordu. Bu, onboarding planındaki "boş kurulum, kullanıcı ilk sitesini kendi eklesin"
+  seçeneğiyle doğrudan çelişiyordu: host her başladığında config'i doğruluyor, sıfır grupla hiç
+  açılmıyordu — yani kullanıcı ilk grubunu eklemeden önce host'un zaten ayakta olması gerektiği
+  bir tavuk-yumurta kilitlenmesi vardı. Extension tarafının UI'ı (`popup.html`'deki "Henüz
+  korunan site yok." boş-durum metni) buna zaten hazır **görünüyordu**, ama canlı testte ortaya
+  çıktı ki değildi: `protocol.ts::validateConfig()` aynı "en az 1 grup" kuralının **bağımsız bir
+  kopyasını** taşıyordu (`config.groups.length < 1`), Rust tarafından habersiz. Host yeniden
+  başlayıp boş config'i handshake'te gönderince extension kendi doğrulayıcısında patlıyordu —
+  ama bunu görmek de ayrı bir küçük düzeltme gerektirdi: `background.ts::enqueue()`'nin hata
+  yakalayıcısı gerçek hatayı hiç loglamıyordu, sadece sabit "FCP fail-closed controller error"
+  metnini basıyordu (artık hata nesnesini de logluyor). Üç kısıtlama da kaldırıldı: Rust
+  `validate()` ve TS `validateConfig()` artık yalnızca üst sınırı (32) kontrol ediyor, grup silme
+  artık son grup için de izin veriyor. Dispatcher test paketindeki gizli bağımlılık da düzeltildi:
+  birçok test, gömülü tohum config'in her zaman 2 grup sağladığı varsayımına (`test_paths()`
+  aracılığıyla) dayanıyordu; artık `test_paths()` kendi bağımsız, üretimden ayrı 2 gruplu test
+  fixture'ını yazıyor.
+
+**Kabul edilen sınırlar:**
+
+- `FcpError`/`FcpResult` gibi kod içi tip adları (413 kullanım, 27 dosya) hâlâ eski kısaltmayı
+  taşıyor — kullanıcıya hiç görünmüyor, güvenli ama geniş bir mekanik değişiklik olacağından
+  bilerek bu turda yapılmadı.
+- `dispatcher.rs::deny_for_error()`'daki son çare `WIKIPEDIA_ACCOUNT_GROUP_ID` fallback'i (hiç
+  grup yokken bir hata mesajı üretmek zorunda kalınırsa) hâlâ anlamsız bir placeholder UUID
+  kullanıyor — zararsız (nadiren tetiklenir, extension bilinmeyen grup ID'sini zaten güvenli
+  şekilde yok sayar) ama düzeltilmedi.
+
+**Ek düzeltme (aynı gün, kullanıcı canlı testte fark etti): çakışan alan adı eklerken uzun,
+açıklamasız bir bekleme.** `popup.ts`/`options.ts`'teki site-ekleme akışı, zaten korunan bir
+alan adını tekrar girince önce izin isteme adımına (Chrome izin diyaloğu) girip ancak ondan
+sonra host'un `scope_overlaps_existing` reddini görüyordu — kullanıcıya "donmuş" gibi
+hissettiriyordu. Düzeltme: her iki dosyaya da host/`protocol.ts` ile aynı çakışma mantığını
+yansıtan bir istemci-taraflı `scopeOverlapsExisting()` ön kontrolü eklendi; artık zaten
+korunan/iç-içe bir alan adı, izin isteme veya host'a gitme adımına hiç girmeden anında
+reddediliyor. `describeError()`'daki artık hiç gönderilmeyen `last_group_cannot_be_removed`
+kolu da (bu ADR'de kaldırılan kural) her iki dosyadan temizlendi.
+
+**Açık soru olarak not edildi (Faz 9'a bağlı): kasa, Windows kullanıcısı bazında paylaşılıyor,
+Chrome profili ya da tarayıcı bazında değil.** Veri `%LOCALAPPDATA%` altında ve native-messaging
+kaydı registry'de — ikisi de Chrome **profiline** değil Windows kullanıcısına bağlı; iki farklı
+Chrome profili (ya da ileride Chrome+Edge) aynı kasayı, aynı site listesini paylaşır, ve
+`host.lock` tek-instance kilidi yüzünden aynı anda yalnızca biri aktif bağlanabilir. Profil bazlı
+ayrım, uzantının Chrome'dan doğrudan alamadığı bir "hangi profildeyim" bilgisini kendi
+icat etmemizi (rastgele profil kimliğini `chrome.storage.local`'da saklayıp handshake'te host'a
+geçirmek) gerektirir — gerçek bir mühendislik işi. Tarayıcı bazında ayrım (Chrome vs Edge) daha
+kolay olurdu çünkü registry zaten tarayıcı başına ayrı isim alanında. Şimdilik yapılmadı,
+Faz 9 (Edge desteği) zamanı değerlendirilecek.
