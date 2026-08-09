@@ -21,6 +21,9 @@ Copy-Item -LiteralPath (Join-Path $releaseTemplate "install.bat") -Destination $
 Copy-Item -LiteralPath (Join-Path $releaseTemplate "uninstall.ps1") -Destination $stagingRoot
 Copy-Item -LiteralPath (Join-Path $releaseTemplate "uninstall.bat") -Destination $stagingRoot
 Copy-Item -LiteralPath (Join-Path $releaseTemplate "README.txt") -Destination $stagingRoot
+Copy-Item -LiteralPath (Join-Path $repoRoot "LICENSE") -Destination $stagingRoot
+Copy-Item -LiteralPath (Join-Path $repoRoot "SOURCE.txt") -Destination $stagingRoot
+[System.IO.File]::WriteAllText((Join-Path $stagingRoot "VERSION"), "$version`n", [System.Text.UTF8Encoding]::new($false))
 
 # Filename is deliberately NOT versioned: onboarding.ts links directly to
 # https://github.com/FURSOY/fursoy-vault/releases/latest/download/fursoy-vault-windows.zip, a

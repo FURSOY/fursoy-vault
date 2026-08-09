@@ -39,4 +39,5 @@ export const en: Record<string, string> = {
   "policy.critical": "Critical — 5 min lease · 1 min idle · evicts instantly",
   "policy.balanced": "Balanced — 10 min lease · 5 min idle · 2 min grace",
   "policy.convenient": "Convenient — 30 min lease · 15 min idle · 5 min grace",
+  "policy.monitor": "Monitor only — no cookie vaulting",
 };

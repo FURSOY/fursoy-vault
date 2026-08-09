@@ -1,0 +1,22 @@
+FURSOY Vault source and build information
+=========================================
+
+License: GNU General Public License version 3.0 (GPL-3.0-only); see LICENSE.
+Canonical source: https://github.com/FURSOY/fursoy-vault
+
+The complete corresponding source for a release is the repository tree at the matching `vX.Y.Z`
+tag. Release assets must be published together with that tag; do not publish an asset built from an
+untagged or dirty tree.
+
+Reproducible extension build (Node.js 22):
+  cd extension
+  npm ci
+  npm run package
+
+Windows companion build (stable Rust toolchain):
+  cd native-host
+  cargo build --release --locked
+  powershell -File install/package-release.ps1
+
+CI repeats the extension packaging and compares SHA-256 hashes, runs all Rust/TypeScript checks,
+and publishes the resulting hashes/artifacts for comparison.

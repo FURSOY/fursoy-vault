@@ -13,6 +13,7 @@ export type MonitorSignal =
   | "host_disconnect_active_lease"
   | "reconnect_success"
   | "reconciliation_failed"
+  | "audit_integrity_recovered"
   | "lease_outside_cookie_created"
   | "selector_changed"
   | "monitor_queue_overflow";
@@ -39,7 +40,8 @@ export function signalSeverity(signal: MonitorSignal): MonitorSeverity {
     case "remote_debugging_port":
     case "remote_debugging_pipe":
     case "host_disconnect_active_lease":
-    case "reconciliation_failed": return "high";
+    case "reconciliation_failed":
+    case "audit_integrity_recovered": return "high";
     case "lease_outside_cookie_created":
     case "monitor_queue_overflow": return "medium";
     case "process_inspection_wmi_connect_access_denied":
@@ -118,6 +120,8 @@ export function notificationText(event: MonitorEvent, activeScopes: readonly str
       return { title: "Cookie koruması bağlantısı kesildi", message: "Açık bir oturum varken native host bağlantısı kayboldu; fail-closed temizlik başlatıldı." };
     case "reconciliation_failed":
       return { title: "Oturum uzlaştırması başarısız", message: "Korunan bir hesap grubu güvenli duruma getirilemedi." };
+    case "audit_integrity_recovered":
+      return { title: "Audit bütünlüğü bozuldu", message: "Hasarlı audit zinciri kanıt olarak karantinaya alındı ve yeni bir zincir başlatıldı." };
     case "lease_outside_cookie_created":
       return { title: "Lease dışında cookie oluştu", message: "Kilitli bir hesap grubunda cookie yeniden oluştu ve tahliye işlemi başlatıldı." };
     case "monitor_queue_overflow":
@@ -142,7 +146,7 @@ function isMonitorSignal(value: string): value is MonitorSignal {
     "process_inspection_wmi_poll_access_denied", "process_inspection_wmi_poll_failed",
     "process_inspection_command_line_access_denied", "process_inspection_command_line_unavailable",
     "host_disconnect", "host_disconnect_active_lease", "reconnect_success",
-    "reconciliation_failed", "lease_outside_cookie_created", "selector_changed",
+    "reconciliation_failed", "audit_integrity_recovered", "lease_outside_cookie_created", "selector_changed",
     "monitor_queue_overflow",
   ].includes(value);
 }

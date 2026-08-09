@@ -132,6 +132,9 @@ pub struct CookieRecord {
 pub struct Handshake {
     pub protocol_version: u16,
     pub extension_id: String,
+    pub extension_version: String,
+    pub min_host_version: String,
+    pub capabilities: Vec<String>,
     /// Digest of the config the extension has cached from a previous session, or `None` on a
     /// first run. ADR-020/Q24: the host owns the config, so this is a cache hint only — a
     /// mismatch is answered by sending the authoritative config down, not by failing closed.
@@ -162,6 +165,8 @@ pub struct HandshakeAck {
     /// latest GitHub release and surface an update notice. The host never fetches anything
     /// itself; it only reports what it is.
     pub host_version: String,
+    pub min_extension_version: String,
+    pub capabilities: Vec<String>,
 }
 
 /// Extension → host: protect a new scope. The host assigns the UUID and persists the config;
@@ -201,6 +206,14 @@ pub struct ConfigUpdated {
 #[serde(deny_unknown_fields)]
 pub struct ConfigRejected {
     pub reason: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct OperationError {
+    pub request_id: Uuid,
+    pub account_group_id: Option<Uuid>,
+    pub code: String,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -245,9 +258,12 @@ pub struct LeaseDeny {
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct CookiesInject {
+pub struct CookiesInjectChunk {
     pub account_group_id: Uuid,
     pub lease_id: Uuid,
+    pub chunk_index: u32,
+    pub chunk_count: u32,
+    pub cookie_count: u32,
     pub cookies: Vec<CookieRecord>,
 }
 
@@ -279,10 +295,13 @@ pub struct EvictRequest {
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct CookiesSnapshot {
+pub struct CookiesSnapshotChunk {
     pub account_group_id: Uuid,
     pub lease_id: Option<Uuid>,
     pub operation_id: Uuid,
+    pub chunk_index: u32,
+    pub chunk_count: u32,
+    pub cookie_count: u32,
     pub cookies: Vec<CookieRecord>,
 }
 
@@ -369,6 +388,7 @@ pub enum MonitorSignal {
     HostDisconnectActiveLease,
     ReconnectSuccess,
     ReconciliationFailed,
+    AuditIntegrityRecovered,
     LeaseOutsideCookieCreated,
     SelectorChanged,
     MonitorQueueOverflow,
@@ -380,7 +400,8 @@ impl MonitorSignal {
             Self::RemoteDebuggingPort
             | Self::RemoteDebuggingPipe
             | Self::HostDisconnectActiveLease
-            | Self::ReconciliationFailed => MonitorSeverity::High,
+            | Self::ReconciliationFailed
+            | Self::AuditIntegrityRecovered => MonitorSeverity::High,
             Self::LeaseOutsideCookieCreated | Self::MonitorQueueOverflow => MonitorSeverity::Medium,
             Self::HostDisconnect
             | Self::ReconnectSuccess
@@ -416,6 +437,7 @@ impl MonitorSignal {
             Self::HostDisconnectActiveLease => "host_disconnect_active_lease",
             Self::ReconnectSuccess => "reconnect_success",
             Self::ReconciliationFailed => "reconciliation_failed",
+            Self::AuditIntegrityRecovered => "audit_integrity_recovered",
             Self::LeaseOutsideCookieCreated => "lease_outside_cookie_created",
             Self::SelectorChanged => "selector_changed",
             Self::MonitorQueueOverflow => "monitor_queue_overflow",
@@ -488,14 +510,14 @@ pub enum Message {
     LeaseGrant(LeaseGrant),
     #[serde(rename = "lease.deny")]
     LeaseDeny(LeaseDeny),
-    #[serde(rename = "cookies.inject")]
-    CookiesInject(CookiesInject),
+    #[serde(rename = "cookies.inject.chunk")]
+    CookiesInjectChunk(CookiesInjectChunk),
     #[serde(rename = "inject.result")]
     InjectResult(InjectResult),
     #[serde(rename = "evict.request")]
     EvictRequest(EvictRequest),
-    #[serde(rename = "cookies.snapshot")]
-    CookiesSnapshot(CookiesSnapshot),
+    #[serde(rename = "cookies.snapshot.chunk")]
+    CookiesSnapshotChunk(CookiesSnapshotChunk),
     #[serde(rename = "evict.confirmed")]
     EvictConfirmed(EvictConfirmed),
     #[serde(rename = "evict.result")]
@@ -522,6 +544,8 @@ pub enum Message {
     ConfigUpdated(ConfigUpdated),
     #[serde(rename = "config.rejected")]
     ConfigRejected(ConfigRejected),
+    #[serde(rename = "operation.error")]
+    OperationError(OperationError),
 }
 
 fn encode_hex(bytes: &[u8]) -> String {

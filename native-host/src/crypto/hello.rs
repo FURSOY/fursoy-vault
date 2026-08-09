@@ -1,33 +1,38 @@
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+use std::path::Path;
 
 use windows::Win32::Networking::WindowsWebServices::{
     WEBAUTHN_ATTESTATION_CONVEYANCE_PREFERENCE_NONE, WEBAUTHN_AUTHENTICATOR_ATTACHMENT_PLATFORM,
-    WEBAUTHN_AUTHENTICATOR_GET_ASSERTION_OPTIONS, WEBAUTHN_AUTHENTICATOR_GET_ASSERTION_OPTIONS_CURRENT_VERSION,
-    WEBAUTHN_AUTHENTICATOR_MAKE_CREDENTIAL_OPTIONS, WEBAUTHN_AUTHENTICATOR_MAKE_CREDENTIAL_OPTIONS_CURRENT_VERSION,
-    WEBAUTHN_CLIENT_DATA, WEBAUTHN_CLIENT_DATA_CURRENT_VERSION, WEBAUTHN_COSE_CREDENTIAL_PARAMETER,
+    WEBAUTHN_AUTHENTICATOR_GET_ASSERTION_OPTIONS,
+    WEBAUTHN_AUTHENTICATOR_GET_ASSERTION_OPTIONS_CURRENT_VERSION,
+    WEBAUTHN_AUTHENTICATOR_MAKE_CREDENTIAL_OPTIONS,
+    WEBAUTHN_AUTHENTICATOR_MAKE_CREDENTIAL_OPTIONS_CURRENT_VERSION, WEBAUTHN_CLIENT_DATA,
+    WEBAUTHN_CLIENT_DATA_CURRENT_VERSION, WEBAUTHN_COSE_CREDENTIAL_PARAMETER,
     WEBAUTHN_COSE_CREDENTIAL_PARAMETER_CURRENT_VERSION, WEBAUTHN_COSE_CREDENTIAL_PARAMETERS,
     WEBAUTHN_CREDENTIAL, WEBAUTHN_CREDENTIAL_CURRENT_VERSION, WEBAUTHN_CREDENTIAL_EX,
     WEBAUTHN_CREDENTIAL_EX_CURRENT_VERSION, WEBAUTHN_CREDENTIAL_LIST, WEBAUTHN_CREDENTIALS,
-    WEBAUTHN_CTAP_TRANSPORT_INTERNAL,
-    WEBAUTHN_RP_ENTITY_INFORMATION, WEBAUTHN_RP_ENTITY_INFORMATION_CURRENT_VERSION,
-    WEBAUTHN_USER_ENTITY_INFORMATION, WEBAUTHN_USER_ENTITY_INFORMATION_CURRENT_VERSION,
+    WEBAUTHN_CTAP_TRANSPORT_INTERNAL, WEBAUTHN_RP_ENTITY_INFORMATION,
+    WEBAUTHN_RP_ENTITY_INFORMATION_CURRENT_VERSION, WEBAUTHN_USER_ENTITY_INFORMATION,
+    WEBAUTHN_USER_ENTITY_INFORMATION_CURRENT_VERSION,
     WEBAUTHN_USER_VERIFICATION_REQUIREMENT_REQUIRED, WebAuthNAuthenticatorGetAssertion,
     WebAuthNAuthenticatorMakeCredential, WebAuthNFreeAssertion, WebAuthNFreeCredentialAttestation,
 };
-use windows::Win32::System::Com::{COINIT_MULTITHREADED, CoInitializeEx, CoUninitialize};
 use windows::Win32::Security::Cryptography::{
     BCRYPT_ALG_HANDLE, BCRYPT_ECCPUBLIC_BLOB, BCRYPT_ECDSA_P256_ALGORITHM,
     BCRYPT_ECDSA_PUBLIC_P256_MAGIC, BCRYPT_FLAGS, BCRYPT_KEY_HANDLE, BCryptCloseAlgorithmProvider,
     BCryptDestroyKey, BCryptImportKeyPair, BCryptOpenAlgorithmProvider, BCryptVerifySignature,
 };
+use windows::Win32::System::Com::{COINIT_MULTITHREADED, CoInitializeEx, CoUninitialize};
 use windows::Win32::UI::WindowsAndMessaging::GetForegroundWindow;
 use windows::core::PCWSTR;
 
 use crate::atomic_file::write_verified;
 use crate::crypto::capability::{CapabilitySigner, CapabilityVerifier};
 use crate::crypto::fill_random;
-use crate::crypto::webauthn_codec::{der_ecdsa_signature_to_raw, hex_decode, hex_encode, parse_attested_credential};
+use crate::crypto::webauthn_codec::{
+    der_ecdsa_signature_to_raw, hex_decode, hex_encode, parse_attested_credential,
+};
 use crate::paths::DataPaths;
 use crate::protocol::messages::{CapabilityPayload, SignedCapability};
 use crate::{FcpError, FcpResult};
@@ -88,43 +93,36 @@ impl HelloAuthorizer {
         let apartment = ComApartment::initialize()?;
         let paths = DataPaths::discover()?;
         if paths.hello_credential.exists() {
-            let bytes = std::fs::read(&paths.hello_credential)?;
-            let registry: CredentialRegistry = serde_json::from_slice(&bytes)?;
-            if registry.version != 1 {
-                return Err(FcpError::Format(
-                    "unsupported Hello credential registry version".into(),
-                ));
+            match load_registry(&paths.hello_credential) {
+                Ok((credential_id, public_key_x, public_key_y)) => {
+                    return Ok(Self {
+                        credential_id,
+                        public_key_x,
+                        public_key_y,
+                        _apartment: apartment,
+                    });
+                }
+                Err(_) => {
+                    // The registry is only a pointer/public-key cache; vault encryption does not
+                    // depend on it. Preserve corrupt evidence and enroll a fresh platform key.
+                    quarantine_registry(&paths.hello_credential)?;
+                }
             }
-            return Ok(Self {
-                credential_id: hex_decode(&registry.credential_id_hex)?,
-                public_key_x: to_array_32(&hex_decode(&registry.public_key_x_hex)?)?,
-                public_key_y: to_array_32(&hex_decode(&registry.public_key_y_hex)?)?,
-                _apartment: apartment,
-            });
         }
-        let (credential_id, public_key_x, public_key_y) = create_credential()?;
-        let registry = CredentialRegistry {
-            version: 1,
-            credential_id_hex: hex_encode(&credential_id),
-            public_key_x_hex: hex_encode(&public_key_x),
-            public_key_y_hex: hex_encode(&public_key_y),
-        };
-        let bytes = serde_json::to_vec_pretty(&registry)?;
-        write_verified(&paths.hello_credential, &bytes, |persisted| {
-            let parsed: CredentialRegistry = serde_json::from_slice(persisted)?;
-            if parsed.credential_id_hex != registry.credential_id_hex {
-                return Err(FcpError::Format(
-                    "Hello credential registry failed to round-trip".into(),
-                ));
-            }
-            Ok(())
-        })?;
-        Ok(Self {
-            credential_id,
-            public_key_x,
-            public_key_y,
-            _apartment: apartment,
-        })
+        create_authorizer(apartment, &paths.hello_credential)
+    }
+
+    pub fn recreate() -> FcpResult<Self> {
+        let apartment = ComApartment::initialize()?;
+        let paths = DataPaths::discover()?;
+        if paths.hello_credential.exists() {
+            quarantine_registry(&paths.hello_credential)?;
+        }
+        create_authorizer(apartment, &paths.hello_credential)
+    }
+
+    pub fn is_missing_credential_error(error: &FcpError) -> bool {
+        matches!(error, FcpError::Capability(message) if message == "hello_credential_missing")
     }
 
     /// Signs `payload` with a fresh Windows Hello gesture. `WebAuthNAuthenticatorGetAssertion` is
@@ -194,12 +192,14 @@ impl HelloAuthorizer {
             pwszHashAlgId: windows::core::w!("SHA-256"),
         };
 
-        let mut options = WEBAUTHN_AUTHENTICATOR_GET_ASSERTION_OPTIONS::default();
         // A V1 dwVersion tells Windows to only honour the fields that existed in that struct
         // layout — pAllowCredentialList was added later, so leaving this at V1 silently dropped
         // it regardless of what was set below, which is a second, independent reason the earlier
         // AllowCredentialCount: 0 happened.
-        options.dwVersion = WEBAUTHN_AUTHENTICATOR_GET_ASSERTION_OPTIONS_CURRENT_VERSION;
+        let mut options = WEBAUTHN_AUTHENTICATOR_GET_ASSERTION_OPTIONS {
+            dwVersion: WEBAUTHN_AUTHENTICATOR_GET_ASSERTION_OPTIONS_CURRENT_VERSION,
+            ..Default::default()
+        };
         options.dwAuthenticatorAttachment = WEBAUTHN_AUTHENTICATOR_ATTACHMENT_PLATFORM;
         options.dwUserVerificationRequirement = WEBAUTHN_USER_VERIFICATION_REQUIREMENT_REQUIRED;
         options.CredentialList = WEBAUTHN_CREDENTIALS {
@@ -217,7 +217,14 @@ impl HelloAuthorizer {
                 Some(&options),
             )
         }
-        .map_err(|error| FcpError::Capability(format!("Windows Hello signing failed: {error}")))?;
+        .map_err(|error| {
+            let code = error.code().0 as u32;
+            if code == 0x8009_0011 || code == 0x8007_0490 {
+                FcpError::Capability("hello_credential_missing".into())
+            } else {
+                FcpError::Capability(format!("Windows Hello signing failed: {error}"))
+            }
+        })?;
 
         let (authenticator_data, signature_der) = unsafe {
             let authenticator_data = std::slice::from_raw_parts(
@@ -244,6 +251,59 @@ impl HelloAuthorizer {
         self.verify_signature(&signed)?;
         Ok(signed)
     }
+}
+
+fn load_registry(path: &Path) -> FcpResult<(Vec<u8>, [u8; 32], [u8; 32])> {
+    let bytes = std::fs::read(path)?;
+    let registry: CredentialRegistry = serde_json::from_slice(&bytes)?;
+    if registry.version != 1 {
+        return Err(FcpError::Format(
+            "unsupported Hello credential registry version".into(),
+        ));
+    }
+    Ok((
+        hex_decode(&registry.credential_id_hex)?,
+        to_array_32(&hex_decode(&registry.public_key_x_hex)?)?,
+        to_array_32(&hex_decode(&registry.public_key_y_hex)?)?,
+    ))
+}
+
+fn quarantine_registry(path: &Path) -> FcpResult<()> {
+    let parent = path
+        .parent()
+        .ok_or_else(|| FcpError::Format("Hello registry has no parent".into()))?;
+    let quarantine = parent.join(format!(
+        "hello-credential.corrupt-{}.json",
+        uuid::Uuid::new_v4()
+    ));
+    std::fs::rename(path, quarantine)?;
+    Ok(())
+}
+
+fn create_authorizer(apartment: ComApartment, registry_path: &Path) -> FcpResult<HelloAuthorizer> {
+    let (credential_id, public_key_x, public_key_y) = create_credential()?;
+    let registry = CredentialRegistry {
+        version: 1,
+        credential_id_hex: hex_encode(&credential_id),
+        public_key_x_hex: hex_encode(&public_key_x),
+        public_key_y_hex: hex_encode(&public_key_y),
+    };
+    let bytes = serde_json::to_vec_pretty(&registry)?;
+    write_verified(registry_path, &bytes, |persisted| {
+        let parsed: CredentialRegistry = serde_json::from_slice(persisted)?;
+        if parsed.credential_id_hex != registry.credential_id_hex {
+            return Err(FcpError::Format(
+                "Hello credential registry failed to round-trip".into(),
+            ));
+        }
+        Ok(())
+    })?;
+    Ok(HelloAuthorizer {
+        credential_id,
+        public_key_x,
+        public_key_y,
+        _apartment: apartment,
+    })
 }
 
 fn create_credential() -> FcpResult<(Vec<u8>, [u8; 32], [u8; 32])> {
@@ -290,8 +350,10 @@ fn create_credential() -> FcpResult<(Vec<u8>, [u8; 32], [u8; 32])> {
         pwszHashAlgId: windows::core::w!("SHA-256"),
     };
 
-    let mut options = WEBAUTHN_AUTHENTICATOR_MAKE_CREDENTIAL_OPTIONS::default();
-    options.dwVersion = WEBAUTHN_AUTHENTICATOR_MAKE_CREDENTIAL_OPTIONS_CURRENT_VERSION;
+    let mut options = WEBAUTHN_AUTHENTICATOR_MAKE_CREDENTIAL_OPTIONS {
+        dwVersion: WEBAUTHN_AUTHENTICATOR_MAKE_CREDENTIAL_OPTIONS_CURRENT_VERSION,
+        ..Default::default()
+    };
     options.dwAuthenticatorAttachment = WEBAUTHN_AUTHENTICATOR_ATTACHMENT_PLATFORM;
     options.dwUserVerificationRequirement = WEBAUTHN_USER_VERIFICATION_REQUIREMENT_REQUIRED;
     options.dwAttestationConveyancePreference = WEBAUTHN_ATTESTATION_CONVEYANCE_PREFERENCE_NONE;
@@ -330,6 +392,7 @@ impl CapabilitySigner for HelloAuthorizer {
 impl CapabilityVerifier for HelloAuthorizer {
     fn verify_signature(&self, capability: &SignedCapability) -> FcpResult<()> {
         capability.payload.validate_shape()?;
+        validate_authenticator_context(&capability.authenticator_data)?;
         let signature: &[u8; 64] = capability
             .signature
             .as_slice()
@@ -345,6 +408,28 @@ impl CapabilityVerifier for HelloAuthorizer {
     }
 }
 
+fn validate_authenticator_context(authenticator_data: &[u8]) -> FcpResult<()> {
+    if authenticator_data.len() < 37 {
+        return Err(FcpError::Capability(
+            "assertion authenticatorData is truncated".into(),
+        ));
+    }
+    let expected_rp_id_hash = Sha256::digest(RP_ID.as_bytes());
+    if authenticator_data[..32] != expected_rp_id_hash[..] {
+        return Err(FcpError::Capability("assertion RP ID hash mismatch".into()));
+    }
+    let flags = authenticator_data[32];
+    if flags & 0x01 == 0 {
+        return Err(FcpError::Capability("assertion lacks user presence".into()));
+    }
+    if flags & 0x04 == 0 {
+        return Err(FcpError::Capability(
+            "assertion lacks user verification".into(),
+        ));
+    }
+    Ok(())
+}
+
 /// Deterministic clientDataJSON: the "challenge" is the hex of the exact bytes being
 /// authorized, so `sign` and `verify_signature` always reconstruct identical bytes without
 /// needing to persist the clientDataJSON itself.
@@ -356,7 +441,12 @@ fn client_data_json(challenge_bytes: &[u8], ceremony_type: &str) -> Vec<u8> {
     .into_bytes()
 }
 
-fn verify_ecdsa_p256(x: &[u8; 32], y: &[u8; 32], digest: &[u8], signature: &[u8; 64]) -> FcpResult<()> {
+fn verify_ecdsa_p256(
+    x: &[u8; 32],
+    y: &[u8; 32],
+    digest: &[u8],
+    signature: &[u8; 64],
+) -> FcpResult<()> {
     let mut blob = Vec::with_capacity(8 + 32 + 32);
     blob.extend_from_slice(&BCRYPT_ECDSA_PUBLIC_P256_MAGIC.to_le_bytes());
     blob.extend_from_slice(&32u32.to_le_bytes());
@@ -365,7 +455,12 @@ fn verify_ecdsa_p256(x: &[u8; 32], y: &[u8; 32], digest: &[u8], signature: &[u8;
 
     let mut alg_handle = BCRYPT_ALG_HANDLE::default();
     let status = unsafe {
-        BCryptOpenAlgorithmProvider(&mut alg_handle, BCRYPT_ECDSA_P256_ALGORITHM, PCWSTR::null(), Default::default())
+        BCryptOpenAlgorithmProvider(
+            &mut alg_handle,
+            BCRYPT_ECDSA_P256_ALGORITHM,
+            PCWSTR::null(),
+            Default::default(),
+        )
     };
     check_ntstatus(status, "BCryptOpenAlgorithmProvider")?;
     let alg_guard = AlgHandle(alg_handle);
@@ -426,4 +521,27 @@ fn to_array_32(bytes: &[u8]) -> FcpResult<[u8; 32]> {
 
 fn widen(text: &str) -> Vec<u16> {
     text.encode_utf16().chain(std::iter::once(0)).collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn assertion_data(flags: u8) -> Vec<u8> {
+        let mut data = vec![0u8; 37];
+        data[..32].copy_from_slice(&Sha256::digest(RP_ID.as_bytes()));
+        data[32] = flags;
+        data
+    }
+
+    #[test]
+    fn assertion_binds_rp_presence_and_user_verification() {
+        assert!(validate_authenticator_context(&assertion_data(0x01 | 0x04)).is_ok());
+        assert!(validate_authenticator_context(&assertion_data(0x01)).is_err());
+        assert!(validate_authenticator_context(&assertion_data(0x04)).is_err());
+        let mut wrong_rp = assertion_data(0x05);
+        wrong_rp[0] ^= 1;
+        assert!(validate_authenticator_context(&wrong_rp).is_err());
+        assert!(validate_authenticator_context(&[0u8; 36]).is_err());
+    }
 }

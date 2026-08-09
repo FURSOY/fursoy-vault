@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
+use crate::atomic_file::write_verified;
 use crate::{FcpError, FcpResult};
 
 const BUNDLED_CONFIG: &[u8] = include_bytes!("../../config/account-groups.json");
@@ -29,7 +30,6 @@ pub struct AccountGroup {
     pub display_name: String,
     pub scope: String,
     pub policy_level: PolicyLevel,
-    pub eviction_triggers: Vec<EvictionTrigger>,
     pub store_policy: StorePolicy,
 }
 
@@ -87,16 +87,6 @@ impl PolicyLevel {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum EvictionTrigger {
-    LastTabClosed,
-    Idle,
-    Lock,
-    Expiry,
-    Manual,
-}
-
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum StorePolicy {
@@ -111,11 +101,33 @@ pub struct LoadedConfig {
 
 impl LoadedConfig {
     pub fn load(installed_path: &Path) -> FcpResult<Self> {
-        let bytes = if installed_path.exists() {
+        let mut bytes = if installed_path.exists() {
             fs::read(installed_path)?
         } else {
             BUNDLED_CONFIG.to_vec()
         };
+        let mut value: serde_json::Value = serde_json::from_slice(&bytes)?;
+        if value.get("version").and_then(serde_json::Value::as_u64) == Some(2) {
+            let groups = value
+                .get_mut("groups")
+                .and_then(serde_json::Value::as_array_mut)
+                .ok_or_else(|| FcpError::Format("legacy config groups are malformed".into()))?;
+            for group in groups {
+                group
+                    .as_object_mut()
+                    .ok_or_else(|| FcpError::Format("legacy config group is malformed".into()))?
+                    .remove("eviction_triggers");
+            }
+            value["version"] = serde_json::Value::from(3);
+            value["compatibility_version"] = serde_json::Value::from(3);
+            bytes = serde_json::to_vec_pretty(&value)?;
+            if installed_path.exists() {
+                write_verified(installed_path, &bytes, |candidate| {
+                    let migrated: AccountGroupsConfig = serde_json::from_slice(candidate)?;
+                    migrated.validate()
+                })?;
+            }
+        }
         let config: AccountGroupsConfig = serde_json::from_slice(&bytes)?;
         config.validate()?;
         let digest = encode_hex(&Sha256::digest(&bytes));
@@ -125,7 +137,7 @@ impl LoadedConfig {
 
 impl AccountGroupsConfig {
     pub fn validate(&self) -> FcpResult<()> {
-        if self.version != 2 || self.compatibility_version != 2 {
+        if self.version != 3 || self.compatibility_version != 3 {
             return Err(FcpError::Format(
                 "unsupported account-group config version".into(),
             ));
@@ -152,9 +164,6 @@ impl AccountGroupsConfig {
                 ));
             }
             let scope = normalize_scope(&group.scope);
-            if !is_valid_scope(&scope) {
-                return Err(FcpError::Format("account-group scope is invalid".into()));
-            }
             // A scope nested inside another would make cookie ownership ambiguous.
             for existing in &scopes {
                 if scope == *existing
@@ -164,22 +173,10 @@ impl AccountGroupsConfig {
                     return Err(FcpError::Format("account-group scopes overlap".into()));
                 }
             }
-            scopes.push(scope);
-            let triggers: HashSet<_> = group.eviction_triggers.iter().copied().collect();
-            if group.policy_level != PolicyLevel::Monitor
-                && ![
-                    EvictionTrigger::LastTabClosed,
-                    EvictionTrigger::Idle,
-                    EvictionTrigger::Lock,
-                    EvictionTrigger::Expiry,
-                ]
-                .iter()
-                .all(|trigger| triggers.contains(trigger))
-            {
-                return Err(FcpError::Format(
-                    "protecting policy omits a mandatory trigger".into(),
-                ));
+            if !is_valid_scope(&scope) {
+                return Err(FcpError::Format("account-group scope is invalid".into()));
             }
+            scopes.push(scope);
         }
         Ok(())
     }
@@ -190,16 +187,23 @@ fn normalize_scope(scope: &str) -> String {
 }
 
 fn is_valid_scope(scope: &str) -> bool {
-    // A single label is not a registrable domain: internal page hostnames such as `newtab` must
-    // not validate as something the user can protect. `localhost` is the deliberate exception.
-    (scope.contains('.') || scope == "localhost")
-        && !scope.is_empty()
-        && scope.len() <= MAX_SCOPE_LEN
-        && !scope.ends_with('.')
-        && !scope.contains("..")
-        && scope
+    if scope == "localhost" {
+        return true;
+    }
+    if scope.is_empty()
+        || scope.len() > MAX_SCOPE_LEN
+        || scope.ends_with('.')
+        || scope.contains("..")
+        || !scope
             .chars()
             .all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '-')
+    {
+        return false;
+    }
+    if scope.parse::<std::net::Ipv4Addr>().is_ok() {
+        return true;
+    }
+    psl::domain_str(scope).is_some_and(|domain| domain == scope)
 }
 
 fn encode_hex(bytes: &[u8]) -> String {
@@ -231,20 +235,14 @@ mod tests {
             display_name: "test".into(),
             scope: scope.into(),
             policy_level: PolicyLevel::Balanced,
-            eviction_triggers: vec![
-                EvictionTrigger::LastTabClosed,
-                EvictionTrigger::Idle,
-                EvictionTrigger::Lock,
-                EvictionTrigger::Expiry,
-            ],
             store_policy: StorePolicy::NormalProfile,
         }
     }
 
     fn config_of(groups: Vec<AccountGroup>) -> AccountGroupsConfig {
         AccountGroupsConfig {
-            version: 2,
-            compatibility_version: 2,
+            version: 3,
+            compatibility_version: 3,
             groups,
         }
     }
@@ -271,6 +269,9 @@ mod tests {
             "ex ample.com",
             "newtab",
             "extensions",
+            "co.uk",
+            "github.io",
+            "999.1.1.1",
         ] {
             assert!(
                 config_of(vec![group(scope)]).validate().is_err(),
@@ -293,5 +294,28 @@ mod tests {
             PolicyLevel::Convenient.parameters().idle_threshold_seconds,
             900
         );
+    }
+
+    #[test]
+    fn version_two_config_is_atomically_migrated_without_fake_triggers() {
+        let root = std::env::temp_dir().join(format!("fcp-config-{}", Uuid::new_v4()));
+        fs::create_dir_all(&root).unwrap();
+        let path = root.join("account-groups.json");
+        let id = Uuid::new_v4();
+        fs::write(
+            &path,
+            format!(
+                r#"{{"version":2,"compatibility_version":2,"groups":[{{"id":"{id}","display_name":"Example","scope":"example.com","policy_level":"balanced","store_policy":"normal_profile","eviction_triggers":["idle","manual"]}}]}}"#
+            ),
+        )
+        .unwrap();
+
+        let loaded = LoadedConfig::load(&path).unwrap();
+        assert_eq!(loaded.config.version, 3);
+        let persisted = fs::read_to_string(&path).unwrap();
+        assert!(persisted.contains("\"version\": 3"));
+        assert!(!persisted.contains("eviction_triggers"));
+
+        fs::remove_dir_all(root).unwrap();
     }
 }

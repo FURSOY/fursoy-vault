@@ -1,4 +1,4 @@
-type PolicyLevel = "critical" | "balanced" | "convenient";
+type PolicyLevel = "critical" | "balanced" | "convenient" | "monitor";
 
 interface GroupSummary {
   id: string;
@@ -27,6 +27,8 @@ interface PopupState {
   groups?: GroupSummary[];
   error?: string;
   alert?: StoredAlert;
+  pending?: boolean;
+  requestId?: string;
 }
 
 const SIGNAL_LABELS: Record<string, string> = {
@@ -36,6 +38,7 @@ const SIGNAL_LABELS: Record<string, string> = {
   host_disconnect: "Native host bağlantısı koptu",
   reconnect_success: "Native host bağlantısı geri geldi",
   reconciliation_failed: "Uzlaştırma başarısız oldu",
+  audit_integrity_recovered: "Audit bütünlüğü bozuldu; hasarlı zincir karantinaya alındı",
   lease_outside_cookie_created: "Kilitli sitede çerez oluştu",
   selector_changed: "Korunan çerezlerde değişiklik",
   monitor_queue_overflow: "İzleme kuyruğu doldu, olaylar atlandı",
@@ -126,6 +129,10 @@ async function protectCurrentSite(): Promise<void> {
 }
 
 async function unprotect(group: GroupSummary): Promise<void> {
+  const warning = group.state === "sealed"
+    ? `“${group.scope}” şu anda kilitli. Kaldırırsanız kasadaki tek oturum kopyası kalıcı olarak silinecek ve site oturumu geri getirilemeyecek. Devam edilsin mi?`
+    : `“${group.scope}” korumadan çıkarılacak ve kasası kalıcı olarak silinecek. Devam edilsin mi?`;
+  if (!window.confirm(warning)) return;
   const response = await sendAwaitingHost({ type: "popup.unprotect", groupId: group.id });
   if (response?.ok !== true) return showError(describeError(response?.error));
   const before = groupCount();
@@ -243,6 +250,7 @@ function describeError(code: string | undefined): string {
     case "scope_invalid": return "Alan adı geçersiz.";
     case "group_limit_reached": return "Korunan site sınırına ulaşıldı.";
     case "operation_pending": return "Bu site üzerinde bir işlem sürüyor; birazdan tekrar deneyin.";
+    case "monitor_transition_requires_unlocked_session": return "Yalnız izleme moduna geçmeden önce kilitli oturumu bir kez açın; aksi halde kasadaki tek oturum kopyası kaybolur.";
     case "native_host_not_connected": return "Native host bağlı değil.";
     case "unknown_group": return "Bu site zaten korunmuyor.";
     default: return "İşlem tamamlanamadı.";
@@ -275,10 +283,20 @@ function activeTab(): Promise<chrome.tabs.Tab | undefined> {
 async function sendAwaitingHost(message: Record<string, unknown>): Promise<PopupState | undefined> {
   for (let attempt = 0; attempt < 20; attempt += 1) {
     const response = await send(message);
-    if (response?.error !== "native_host_not_connected") return response;
+    if (response?.error !== "native_host_not_connected") return awaitConfigAck(response);
     await new Promise((resolve) => { setTimeout(resolve, 200); });
   }
   return { ok: false, error: "native_host_not_connected" };
+}
+
+async function awaitConfigAck(response: PopupState | undefined): Promise<PopupState | undefined> {
+  if (response?.pending !== true || typeof response.requestId !== "string") return response;
+  for (let attempt = 0; attempt < 50; attempt += 1) {
+    await new Promise((resolve) => { setTimeout(resolve, 100); });
+    const status = await send({ type: "popup.operation", requestId: response.requestId });
+    if (status?.pending !== true) return status;
+  }
+  return { ok: false, error: "operation_timeout" };
 }
 
 function send(message: Record<string, unknown>): Promise<PopupState | undefined> {

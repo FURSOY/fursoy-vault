@@ -147,6 +147,18 @@ impl VaultTransactions {
         self.vault_store.delete(self.group_id)
     }
 
+    pub fn stage_invalidation(&self) -> FcpResult<()> {
+        self.vault_store.stage_delete(self.group_id)
+    }
+
+    pub fn rollback_staged_invalidation(&self) -> FcpResult<()> {
+        self.vault_store.rollback_staged_delete(self.group_id)
+    }
+
+    pub fn commit_staged_invalidation(&self) -> FcpResult<()> {
+        self.vault_store.commit_staged_delete(self.group_id)
+    }
+
     fn require_authorization(
         &self,
         authorization: &ConsumedCapability,

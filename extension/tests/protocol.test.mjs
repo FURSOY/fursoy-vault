@@ -1,6 +1,9 @@
 import assert from "node:assert/strict";
 import {
+  cookieIdentity,
+  cookieRoundTripMatches,
   cookieUrl,
+  compareSemanticVersions,
   guessScope,
   hostInScope,
   navigationPatterns,
@@ -13,14 +16,13 @@ function group(overrides = {}) {
     display_name: "Test",
     scope: "example.com",
     policy_level: "balanced",
-    eviction_triggers: ["last_tab_closed", "idle", "lock", "expiry", "manual"],
     store_policy: "normal_profile",
     ...overrides,
   };
 }
 
 function config(groups) {
-  return { version: 2, compatibility_version: 2, groups };
+  return { version: 3, compatibility_version: 3, groups };
 }
 
 // A registrable domain must own its subdomains, and nothing outside it.
@@ -34,6 +36,21 @@ assert.equal(hostInScope("example.com", "example.com.evil.test"), false);
 assert.equal(cookieUrl({ domain: ".wikipedia.org", path: "/", secure: true }), "https://wikipedia.org/");
 assert.equal(cookieUrl({ domain: "localhost", path: "/", secure: false }), "http://localhost/");
 
+const vaulted = {
+  domain: ".example.com", expiration_date: 2_000_000_000, host_only: false, http_only: true,
+  name: "session", partition_key: { top_level_site: "https://top.example/", has_cross_site_ancestor: true },
+  path: "/", same_site: "no_restriction", secure: true, session: false, store_id: "0", value: "secret",
+};
+const restored = {
+  domain: ".example.com", expirationDate: 2_000_000_000.5, hostOnly: false, httpOnly: true,
+  name: "session", partitionKey: { topLevelSite: "https://top.example", hasCrossSiteAncestor: true },
+  path: "/", sameSite: "no_restriction", secure: true, session: false, storeId: "0", value: "secret",
+};
+assert.equal(cookieRoundTripMatches(vaulted, restored), true);
+assert.notEqual(cookieIdentity(vaulted), cookieIdentity({ ...restored, partitionKey: { ...restored.partitionKey, hasCrossSiteAncestor: false } }));
+assert.equal(cookieRoundTripMatches(vaulted, { ...restored, value: "changed" }), false);
+assert.equal(cookieRoundTripMatches(vaulted, { ...restored, httpOnly: false }), false);
+
 assert.deepEqual(navigationPatterns(group()), ["*://example.com/*", "*://*.example.com/*"]);
 
 // Scope guessing: the popup shows this, so it only has to be right for the common cases.
@@ -41,6 +58,7 @@ assert.equal(guessScope("tr.wikipedia.org"), "wikipedia.org");
 assert.equal(guessScope("example.com"), "example.com");
 assert.equal(guessScope("www.example.co.uk"), "example.co.uk");
 assert.equal(guessScope("shop.example.com.tr"), "example.com.tr");
+assert.equal(guessScope("user.github.io"), "user.github.io");
 assert.equal(guessScope("localhost"), "localhost");
 assert.equal(guessScope("127.0.0.1"), "127.0.0.1");
 
@@ -59,10 +77,15 @@ validateConfig(config([
 ]));
 
 // A bare label is an internal page hostname (chrome://newtab/), not a registrable domain.
-for (const scope of ["", "example..com", "example.com.", "example.com/path", "ex ample.com", "newtab", "extensions"]) {
+for (const scope of ["", "example..com", "example.com.", "example.com/path", "ex ample.com", "newtab", "extensions", "co.uk", "github.io", "999.1.1.1"]) {
   assert.throws(() => validateConfig(config([group({ scope })])), undefined, `scope ${JSON.stringify(scope)} must be rejected`);
 }
 
 assert.throws(() => validateConfig({ version: 1, compatibility_version: 1, groups: [group()] }));
+
+assert.equal(compareSemanticVersions("0.3.1", "0.3.1"), 0);
+assert.ok(compareSemanticVersions("0.4.0", "0.3.9") > 0);
+assert.throws(() => compareSemanticVersions("0.3", "0.3.1"));
+assert.throws(() => compareSemanticVersions("latest", "0.3.1"));
 
 console.log("protocol tests: PASS");

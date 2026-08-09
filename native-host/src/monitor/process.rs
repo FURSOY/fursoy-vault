@@ -1,10 +1,18 @@
 use std::collections::{HashSet, VecDeque};
+use std::ffi::c_void;
+use std::os::windows::ffi::OsStrExt;
+use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
-use std::time::Duration;
 
 use uuid::Uuid;
+use windows::Win32::Foundation::{HANDLE, HWND};
+use windows::Win32::Security::WinTrust::{
+    WINTRUST_ACTION_GENERIC_VERIFY_V2, WINTRUST_DATA, WINTRUST_DATA_0, WINTRUST_FILE_INFO,
+    WTD_CACHE_ONLY_URL_RETRIEVAL, WTD_CHOICE_FILE, WTD_REVOKE_NONE, WTD_STATEACTION_CLOSE,
+    WTD_STATEACTION_VERIFY, WTD_UI_NONE, WinVerifyTrust,
+};
 use windows::Win32::System::Com::{
     CLSCTX_INPROC_SERVER, COINIT_MULTITHREADED, CoCreateInstance, CoInitializeEx,
     CoSetProxyBlanket, CoUninitialize, EOAC_NONE, RPC_C_AUTHN_LEVEL_CALL,
@@ -24,7 +32,6 @@ use crate::protocol::messages::{MonitorEvent, MonitorSignal, MonitorSource};
 use crate::{FcpError, FcpResult};
 
 const CLSID_WBEM_LOCATOR: GUID = GUID::from_u128(0x4590f811_1d3a_11d0_891f_00aa004b2e24);
-const POLL_INTERVAL: Duration = Duration::from_secs(1);
 
 pub struct ProcessObserver {
     stop: Arc<AtomicBool>,
@@ -70,29 +77,63 @@ fn observe_processes(pending: &Arc<Mutex<VecDeque<MonitorEvent>>>, stop: &Atomic
         }
     };
     let mut seen = HashSet::new();
-    let mut command_line_failures = HashSet::new();
-    while !stop.load(Ordering::Acquire) {
-        let snapshot = match poll_processes(&services) {
-            Ok(value) => value,
-            Err(error) => {
-                let _ = enqueue_signal(pending, poll_failure_signal(&error));
-                break;
-            }
-        };
-        let active: HashSet<u32> = snapshot.iter().map(|(process_id, _)| *process_id).collect();
-        seen.retain(|(process_id, _)| active.contains(process_id));
-        command_line_failures.retain(|process_id| active.contains(process_id));
-        for (process_id, command_line) in snapshot {
-            match command_line {
-                Ok(value) => enqueue_matches(process_id, &value, pending, &mut seen),
-                Err(error) if command_line_failures.insert(process_id) => {
-                    let _ = enqueue_signal(pending, command_line_failure_signal(&error));
-                }
-                Err(_) => {}
+    // One baseline snapshot catches the Chrome process that launched this host. After that, WMI
+    // start events replace the old one-second full-process polling loop.
+    match poll_processes(&services) {
+        Ok(snapshot) => {
+            for (process_id, command_line) in snapshot {
+                enqueue_matches(process_id, &command_line, pending, &mut seen);
             }
         }
-        wait_until_next_poll(stop);
+        Err(error) => {
+            let _ = enqueue_signal(pending, poll_failure_signal(&error));
+        }
     }
+    let events = match subscribe_process_starts(&services) {
+        Ok(value) => value,
+        Err(error) => {
+            let _ = enqueue_signal(pending, poll_failure_signal(&error));
+            return;
+        }
+    };
+    while !stop.load(Ordering::Acquire) {
+        let event = match next_object(&events, 1_000) {
+            Ok(Some(value)) => value,
+            Ok(None) => continue,
+            Err(error) => {
+                let _ = enqueue_signal(pending, poll_failure_signal(&error));
+                continue;
+            }
+        };
+        let process_id = match get_u32(&event, windows::core::w!("ProcessID")) {
+            Ok(value) => value,
+            Err(_) => continue,
+        };
+        match inspect_process(&services, process_id) {
+            Ok(Some(command_line)) => {
+                enqueue_matches(process_id, &command_line, pending, &mut seen)
+            }
+            Ok(None) => {}
+            Err(error) => {
+                let _ = enqueue_signal(pending, command_line_failure_signal(&error));
+            }
+        }
+    }
+}
+
+fn subscribe_process_starts(services: &IWbemServices) -> FcpResult<IEnumWbemClassObject> {
+    let language = BSTR::from("WQL");
+    let query = BSTR::from(
+        "SELECT ProcessID, ProcessName FROM Win32_ProcessStartTrace WHERE ProcessName = 'chrome.exe'",
+    );
+    Ok(unsafe {
+        services.ExecNotificationQuery(
+            &language,
+            &query,
+            WBEM_FLAG_FORWARD_ONLY | WBEM_FLAG_RETURN_IMMEDIATELY,
+            None,
+        )?
+    })
 }
 
 fn connect_wmi() -> FcpResult<IWbemServices> {
@@ -117,10 +158,11 @@ fn connect_wmi() -> FcpResult<IWbemServices> {
     Ok(services)
 }
 
-fn poll_processes(services: &IWbemServices) -> FcpResult<Vec<(u32, FcpResult<String>)>> {
+fn poll_processes(services: &IWbemServices) -> FcpResult<Vec<(u32, String)>> {
     let language = BSTR::from("WQL");
-    let query =
-        BSTR::from("SELECT ProcessId, CommandLine FROM Win32_Process WHERE Name = 'chrome.exe'");
+    let query = BSTR::from(
+        "SELECT ProcessId, ExecutablePath, CommandLine FROM Win32_Process WHERE Name = 'chrome.exe'",
+    );
     let objects = unsafe {
         services.ExecQuery(
             &language,
@@ -132,22 +174,106 @@ fn poll_processes(services: &IWbemServices) -> FcpResult<Vec<(u32, FcpResult<Str
     let mut snapshot = Vec::new();
     while let Some(object) = next_object(&objects, 2_000)? {
         let process_id = get_u32(&object, windows::core::w!("ProcessId"))?;
-        snapshot.push((
-            process_id,
-            get_string(&object, windows::core::w!("CommandLine")),
-        ));
+        let executable_path = get_string(&object, windows::core::w!("ExecutablePath"))?;
+        if is_trusted_chrome(Path::new(&executable_path)) {
+            snapshot.push((
+                process_id,
+                get_string(&object, windows::core::w!("CommandLine"))?,
+            ));
+        }
     }
     Ok(snapshot)
 }
 
-fn wait_until_next_poll(stop: &AtomicBool) {
-    let slices = POLL_INTERVAL.as_millis() / 100;
-    for _ in 0..slices {
-        if stop.load(Ordering::Acquire) {
-            return;
-        }
-        thread::sleep(Duration::from_millis(100));
+fn inspect_process(services: &IWbemServices, process_id: u32) -> FcpResult<Option<String>> {
+    let language = BSTR::from("WQL");
+    let query = BSTR::from(format!(
+        "SELECT ExecutablePath, CommandLine FROM Win32_Process WHERE ProcessId = {process_id}"
+    ));
+    let objects = unsafe {
+        services.ExecQuery(
+            &language,
+            &query,
+            WBEM_FLAG_FORWARD_ONLY | WBEM_FLAG_RETURN_IMMEDIATELY,
+            None,
+        )?
+    };
+    let Some(object) = next_object(&objects, 2_000)? else {
+        return Ok(None);
+    };
+    let executable_path = get_string(&object, windows::core::w!("ExecutablePath"))?;
+    if !is_trusted_chrome(Path::new(&executable_path)) {
+        return Ok(None);
     }
+    Ok(Some(get_string(&object, windows::core::w!("CommandLine"))?))
+}
+
+fn is_trusted_chrome(path: &Path) -> bool {
+    let is_chrome = path
+        .file_name()
+        .and_then(|value| value.to_str())
+        .is_some_and(|value| value.eq_ignore_ascii_case("chrome.exe"));
+    is_chrome && is_known_chrome_install_path(path) && verify_authenticode(path)
+}
+
+fn is_known_chrome_install_path(path: &Path) -> bool {
+    let Ok(candidate) = path.canonicalize() else {
+        return false;
+    };
+    ["ProgramFiles", "ProgramFiles(x86)", "LOCALAPPDATA"]
+        .into_iter()
+        .filter_map(std::env::var_os)
+        .map(|root| {
+            Path::new(&root)
+                .join("Google")
+                .join("Chrome")
+                .join("Application")
+        })
+        .filter_map(|root| root.canonicalize().ok())
+        .any(|root| candidate.starts_with(root))
+}
+
+fn verify_authenticode(path: &Path) -> bool {
+    let wide_path: Vec<u16> = path
+        .as_os_str()
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect();
+    let mut file_info = WINTRUST_FILE_INFO {
+        cbStruct: size_of::<WINTRUST_FILE_INFO>() as u32,
+        pcwszFilePath: PCWSTR(wide_path.as_ptr()),
+        hFile: HANDLE::default(),
+        pgKnownSubject: std::ptr::null_mut(),
+    };
+    let mut trust_data = WINTRUST_DATA {
+        cbStruct: size_of::<WINTRUST_DATA>() as u32,
+        dwUIChoice: WTD_UI_NONE,
+        fdwRevocationChecks: WTD_REVOKE_NONE,
+        dwUnionChoice: WTD_CHOICE_FILE,
+        Anonymous: WINTRUST_DATA_0 {
+            pFile: &mut file_info,
+        },
+        dwStateAction: WTD_STATEACTION_VERIFY,
+        dwProvFlags: WTD_CACHE_ONLY_URL_RETRIEVAL,
+        ..Default::default()
+    };
+    let mut action = WINTRUST_ACTION_GENERIC_VERIFY_V2;
+    let status = unsafe {
+        WinVerifyTrust(
+            HWND::default(),
+            &mut action,
+            &mut trust_data as *mut _ as *mut c_void,
+        )
+    };
+    trust_data.dwStateAction = WTD_STATEACTION_CLOSE;
+    unsafe {
+        let _ = WinVerifyTrust(
+            HWND::default(),
+            &mut action,
+            &mut trust_data as *mut _ as *mut c_void,
+        );
+    }
+    status == 0
 }
 
 fn connect_failure_signal(error: &FcpError) -> MonitorSignal {
@@ -367,7 +493,7 @@ mod tests {
         assert!(
             snapshot
                 .iter()
-                .any(|(_, command_line)| command_line.is_ok())
+                .any(|(_, command_line)| !command_line.is_empty())
         );
     }
 
@@ -377,8 +503,10 @@ mod tests {
         let _apartment = ComApartment::initialize().unwrap();
         let services = connect_wmi().unwrap();
         let snapshot = poll_processes(&services).unwrap();
-        assert!(snapshot.into_iter().any(|(_, command_line)| {
-            command_line.is_ok_and(|value| !detect_remote_debugging(&value).is_empty())
-        }));
+        assert!(
+            snapshot
+                .into_iter()
+                .any(|(_, command_line)| !detect_remote_debugging(&command_line).is_empty())
+        );
     }
 }

@@ -16,6 +16,7 @@ use crate::{FcpError, FcpResult};
 const AUDIT_SCHEMA_VERSION: u8 = 2;
 const AUDIT_KEY_BYTES: usize = 32;
 const ZERO_MAC: [u8; 32] = [0; 32];
+const AUDIT_RETENTION_DAYS: u64 = 90;
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -54,6 +55,15 @@ struct AuditAnchor {
     mac: String,
 }
 
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct AuditCheckpoint {
+    schema_version: u8,
+    sequence: u64,
+    mac: String,
+    archived_through_day: u64,
+}
+
 struct AuditState {
     key: Zeroizing<[u8; AUDIT_KEY_BYTES]>,
     sequence: u64,
@@ -63,15 +73,83 @@ struct AuditState {
 pub struct AuditLogger {
     directory: PathBuf,
     state: Mutex<AuditState>,
+    recovered_on_open: bool,
 }
 
 impl AuditLogger {
+    /// Verifies the retained HMAC chain before producing a portable, redacted JSONL export.
+    /// Expired segments are represented by the protected checkpoint and are intentionally not
+    /// exported; the export contains only the configured retention window.
+    pub fn export_verified(directory: &Path, destination: &Path) -> FcpResult<()> {
+        let logger = Self::open_strict(directory)?;
+        if let Some(parent) = destination.parent() {
+            fs::create_dir_all(parent)?;
+            let audit_root = fs::canonicalize(directory)?;
+            let export_parent = fs::canonicalize(parent)?;
+            let existing_target = destination.exists().then(|| fs::canonicalize(destination));
+            if export_parent.starts_with(&audit_root)
+                || existing_target
+                    .is_some_and(|value| value.is_ok_and(|target| target.starts_with(&audit_root)))
+            {
+                return Err(FcpError::Format(
+                    "audit export destination must be outside the live audit directory".into(),
+                ));
+            }
+        } else {
+            return Err(FcpError::Format(
+                "audit export destination has no parent".into(),
+            ));
+        }
+        let mut output = Vec::new();
+        for path in chain_files(&logger.directory)? {
+            output.extend_from_slice(&fs::read(path)?);
+        }
+        atomic_file::write_verified(destination, &output, |candidate| {
+            if candidate != output {
+                return Err(FcpError::Format(
+                    "audit export write verification failed".into(),
+                ));
+            }
+            Ok(())
+        })
+    }
+
     pub fn open(directory: impl Into<PathBuf>) -> FcpResult<Self> {
         let directory = directory.into();
+        match Self::open_strict(&directory) {
+            Ok(logger) => Ok(logger),
+            Err(original) => {
+                if !directory.exists() || fs::read_dir(&directory)?.next().is_none() {
+                    return Err(original);
+                }
+                let parent = directory
+                    .parent()
+                    .ok_or_else(|| FcpError::Format("audit directory has no parent".into()))?;
+                let name = directory
+                    .file_name()
+                    .and_then(|value| value.to_str())
+                    .unwrap_or("audit");
+                let quarantine = parent.join(format!("{name}-quarantine-{}", Uuid::new_v4()));
+                fs::rename(&directory, &quarantine)?;
+                let mut logger = Self::open_strict(&directory)?;
+                logger.recovered_on_open = true;
+                logger.record_system(
+                    "audit_recovery",
+                    "high_alert",
+                    Some("integrity_failure_quarantined"),
+                )?;
+                Ok(logger)
+            }
+        }
+    }
+
+    fn open_strict(directory: &Path) -> FcpResult<Self> {
+        let directory = directory.to_path_buf();
         fs::create_dir_all(&directory)?;
         let key = load_or_create_key(&directory)?;
         let anchor = load_anchor(&directory)?;
-        let verified = verify_chain(&directory, &key, anchor.as_ref())?;
+        let checkpoint = load_checkpoint(&directory)?;
+        let verified = verify_chain(&directory, &key, anchor.as_ref(), checkpoint.as_ref())?;
         let logger = Self {
             directory,
             state: Mutex::new(AuditState {
@@ -79,13 +157,19 @@ impl AuditLogger {
                 sequence: verified.sequence,
                 mac: verified.mac,
             }),
+            recovered_on_open: false,
         };
         if anchor.as_ref().is_none_or(|value| {
             value.sequence != verified.sequence || value.mac != encode_hex(&verified.mac)
         }) {
             logger.persist_anchor(verified.sequence, &verified.mac)?;
         }
+        logger.compact_expired_segments()?;
         Ok(logger)
+    }
+
+    pub fn recovered_on_open(&self) -> bool {
+        self.recovered_on_open
     }
 
     /// Audit entries intentionally accept no cookie object, name, value, domain, command line, or
@@ -180,6 +264,36 @@ impl AuditLogger {
         let plaintext = Zeroizing::new(serde_json::to_vec(&anchor)?);
         persist_dpapi_file(&anchor_path(&self.directory), &plaintext)
     }
+
+    fn compact_expired_segments(&self) -> FcpResult<()> {
+        let current_day = unix_ms()? / 86_400_000;
+        let cutoff = current_day.saturating_sub(AUDIT_RETENTION_DAYS);
+        let expired = chain_files(&self.directory)?
+            .into_iter()
+            .filter(|path| audit_day(path).is_some_and(|day| day < cutoff))
+            .collect::<Vec<_>>();
+        let Some(last) = expired.last() else {
+            return Ok(());
+        };
+        let bytes = fs::read(last)?;
+        let tail = bytes
+            .split(|byte| *byte == b'\n')
+            .rfind(|line| !line.is_empty())
+            .ok_or_else(|| FcpError::Format("expired audit segment is empty".into()))?;
+        let entry: AuditEntry = serde_json::from_slice(tail)?;
+        let checkpoint = AuditCheckpoint {
+            schema_version: AUDIT_SCHEMA_VERSION,
+            sequence: entry.sequence,
+            mac: entry.mac,
+            archived_through_day: audit_day(last)
+                .ok_or_else(|| FcpError::Format("audit day is malformed".into()))?,
+        };
+        persist_checkpoint(&self.directory, &checkpoint)?;
+        for path in expired {
+            fs::remove_file(path)?;
+        }
+        Ok(())
+    }
 }
 
 fn load_or_create_key(directory: &Path) -> FcpResult<Zeroizing<[u8; AUDIT_KEY_BYTES]>> {
@@ -192,7 +306,10 @@ fn load_or_create_key(directory: &Path) -> FcpResult<Zeroizing<[u8; AUDIT_KEY_BY
             .map_err(|_| FcpError::Format("audit HMAC key has invalid length".into()))?;
         return Ok(Zeroizing::new(key));
     }
-    if anchor_path(directory).exists() || !chain_files(directory)?.is_empty() {
+    if anchor_path(directory).exists()
+        || checkpoint_path(directory).exists()
+        || !chain_files(directory)?.is_empty()
+    {
         return Err(FcpError::Format(
             "audit HMAC key is missing while authenticated audit material exists".into(),
         ));
@@ -201,6 +318,24 @@ fn load_or_create_key(directory: &Path) -> FcpResult<Zeroizing<[u8; AUDIT_KEY_BY
     fill_random(key.as_mut())?;
     persist_dpapi_file(&path, key.as_ref())?;
     Ok(key)
+}
+
+fn load_checkpoint(directory: &Path) -> FcpResult<Option<AuditCheckpoint>> {
+    let path = checkpoint_path(directory);
+    if !path.exists() {
+        return Ok(None);
+    }
+    let plaintext = Zeroizing::new(dpapi::unprotect(&fs::read(path)?)?);
+    let checkpoint: AuditCheckpoint = serde_json::from_slice(&plaintext)?;
+    if checkpoint.schema_version != AUDIT_SCHEMA_VERSION || decode_mac(&checkpoint.mac).is_err() {
+        return Err(FcpError::Format("audit checkpoint is malformed".into()));
+    }
+    Ok(Some(checkpoint))
+}
+
+fn persist_checkpoint(directory: &Path, checkpoint: &AuditCheckpoint) -> FcpResult<()> {
+    let plaintext = Zeroizing::new(serde_json::to_vec(checkpoint)?);
+    persist_dpapi_file(&checkpoint_path(directory), &plaintext)
 }
 
 fn load_anchor(directory: &Path) -> FcpResult<Option<AuditAnchor>> {
@@ -225,11 +360,12 @@ fn verify_chain(
     directory: &Path,
     key: &[u8; AUDIT_KEY_BYTES],
     anchor: Option<&AuditAnchor>,
+    checkpoint: Option<&AuditCheckpoint>,
 ) -> FcpResult<VerifiedTail> {
-    let mut expected_sequence = 1u64;
-    let mut previous_mac = ZERO_MAC;
+    let mut expected_sequence = checkpoint.map_or(1, |value| value.sequence.saturating_add(1));
+    let mut previous_mac = checkpoint.map_or(Ok(ZERO_MAC), |value| decode_mac(&value.mac))?;
     let mut anchor_matched =
-        anchor.is_none_or(|value| value.sequence == 0 && value.mac == encode_hex(&ZERO_MAC));
+        anchor.is_none_or(|value| value.sequence <= checkpoint.map_or(0, |item| item.sequence));
     for path in chain_files(directory)? {
         let bytes = fs::read(&path)?;
         if !bytes.is_empty() && !bytes.ends_with(b"\n") {
@@ -375,6 +511,18 @@ fn anchor_path(directory: &Path) -> PathBuf {
     directory.join("audit-anchor.dpapi")
 }
 
+fn checkpoint_path(directory: &Path) -> PathBuf {
+    directory.join("audit-checkpoint.dpapi")
+}
+
+fn audit_day(path: &Path) -> Option<u64> {
+    path.file_name()
+        .and_then(|value| value.to_str())
+        .and_then(|name| name.strip_prefix("audit-v2-day-"))
+        .and_then(|name| name.strip_suffix(".jsonl"))
+        .and_then(|day| day.parse().ok())
+}
+
 fn encode_hex(bytes: &[u8]) -> String {
     bytes.iter().map(|value| format!("{value:02x}")).collect()
 }
@@ -457,10 +605,10 @@ mod tests {
         let position = tampered.iter().position(|byte| *byte == b's').unwrap();
         tampered[position] = b'x';
         fs::write(&path, tampered).unwrap();
-        assert!(AuditLogger::open(&root).is_err());
+        assert!(AuditLogger::open_strict(&root).is_err());
 
         fs::write(&path, &original[..original.len() - 1]).unwrap();
-        assert!(AuditLogger::open(&root).is_err());
+        assert!(AuditLogger::open_strict(&root).is_err());
         fs::write(&path, &original).unwrap();
 
         let mut lines: Vec<&[u8]> = original
@@ -473,7 +621,7 @@ mod tests {
             .flat_map(|line| line.iter().copied().chain([b'\n']))
             .collect::<Vec<_>>();
         fs::write(&path, reordered).unwrap();
-        assert!(AuditLogger::open(&root).is_err());
+        assert!(AuditLogger::open_strict(&root).is_err());
         fs::remove_dir_all(root).unwrap();
     }
 
@@ -492,7 +640,60 @@ mod tests {
         let bytes = fs::read(&path).unwrap();
         let first_end = bytes.iter().position(|byte| *byte == b'\n').unwrap() + 1;
         fs::write(path, &bytes[..first_end]).unwrap();
-        assert!(AuditLogger::open(&root).is_err());
+        assert!(AuditLogger::open_strict(&root).is_err());
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn corruption_is_quarantined_and_a_new_chain_records_recovery() {
+        let root = root("recovery");
+        let logger = AuditLogger::open(&root).unwrap();
+        logger
+            .record_system("monitor", "observed", Some("one"))
+            .unwrap();
+        drop(logger);
+        let path = chain_files(&root).unwrap().remove(0);
+        fs::write(path, b"truncated").unwrap();
+
+        let recovered = AuditLogger::open(&root).unwrap();
+        assert!(recovered.recovered_on_open());
+        assert_eq!(chain_files(&root).unwrap().len(), 1);
+        let parent = root.parent().unwrap();
+        let prefix = format!(
+            "{}-quarantine-",
+            root.file_name().unwrap().to_string_lossy()
+        );
+        assert!(
+            fs::read_dir(parent)
+                .unwrap()
+                .filter_map(Result::ok)
+                .any(|entry| entry.file_name().to_string_lossy().starts_with(&prefix))
+        );
+        drop(recovered);
+        fs::remove_dir_all(&root).unwrap();
+        for entry in fs::read_dir(parent).unwrap().filter_map(Result::ok) {
+            if entry.file_name().to_string_lossy().starts_with(&prefix) {
+                fs::remove_dir_all(entry.path()).unwrap();
+            }
+        }
+    }
+
+    #[test]
+    fn verified_export_contains_only_redacted_audit_entries() {
+        let root = root("export");
+        let export = root.with_extension("jsonl");
+        let logger = AuditLogger::open(&root).unwrap();
+        logger
+            .record_system("monitor", "observed", Some("remote_debugging_port"))
+            .unwrap();
+        drop(logger);
+
+        AuditLogger::export_verified(&root, &export).unwrap();
+        let text = fs::read_to_string(&export).unwrap();
+        assert!(text.contains("remote_debugging_port"));
+        assert!(!text.contains("cookie_value"));
+
+        fs::remove_dir_all(root).unwrap();
+        fs::remove_file(export).unwrap();
     }
 }

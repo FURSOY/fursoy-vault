@@ -3,3 +3,4 @@
 /native-host/target/
 /extension/node_modules/
 /extension/dist/
+/extension/target/

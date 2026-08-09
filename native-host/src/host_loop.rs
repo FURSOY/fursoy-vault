@@ -1,14 +1,23 @@
 use std::io::{Read, Write};
 
-use uuid::Uuid;
-
 use crate::dispatcher::NativeHostApp;
+use crate::dispatcher::PRODUCT_EXTENSION_ID;
 use crate::instance_lock::InstanceLock;
 use crate::paths::DataPaths;
 use crate::protocol::envelope::{Envelope, PROTOCOL_VERSION};
 use crate::protocol::framing::{read_envelope, write_envelope};
-use crate::protocol::messages::{Message, Nonce32};
+use crate::protocol::messages::{Message, Nonce32, OperationError};
 use crate::{FcpError, FcpResult};
+
+pub fn validate_caller_origin(args: &[String]) -> FcpResult<()> {
+    let expected = format!("chrome-extension://{PRODUCT_EXTENSION_ID}/");
+    match args.first() {
+        Some(origin) if origin == &expected => Ok(()),
+        _ => Err(FcpError::Protocol(
+            "native host caller origin is not authorized".into(),
+        )),
+    }
+}
 
 /// Runs one Chrome Native Messaging connection. Chrome owns the process lifetime; all diagnostic
 /// text goes to stderr because stdout is exclusively the length-prefixed protocol stream.
@@ -37,13 +46,18 @@ fn run_connection_with_app(
         let nonce = *connection_nonce.get_or_insert(envelope.conn_nonce);
         incoming_sequence = envelope.seq;
 
+        let request_id = envelope.id;
         let output = match app.handle(envelope.message) {
             Ok(messages) => messages,
             Err(error) => {
                 // Never serialize the underlying error: it may contain OS/provider detail. A
                 // stable fail-closed denial is sufficient for the extension and safe to audit.
                 eprintln!("native host rejected message: {}", error_category(&error));
-                vec![app.deny_for_error(&error)]
+                vec![Message::OperationError(OperationError {
+                    request_id,
+                    account_group_id: app.error_group_id(),
+                    code: error_category(&error).into(),
+                })]
             }
         };
 
@@ -57,7 +71,7 @@ fn run_connection_with_app(
                     v: PROTOCOL_VERSION,
                     conn_nonce: nonce,
                     seq: outgoing_sequence,
-                    id: Uuid::new_v4(),
+                    id: request_id,
                     message,
                 },
             )?;
@@ -91,6 +105,7 @@ fn error_category(error: &FcpError) -> &'static str {
 mod tests {
     use super::*;
     use crate::protocol::messages::Handshake;
+    use uuid::Uuid;
 
     #[test]
     fn first_frame_requires_sequence_one_handshake() {
@@ -102,6 +117,14 @@ mod tests {
             message: Message::Handshake(Handshake {
                 protocol_version: PROTOCOL_VERSION,
                 extension_id: "test".into(),
+                extension_version: "0.3.1".into(),
+                min_host_version: "0.3.1".into(),
+                capabilities: vec![
+                    "chunked_cookies".into(),
+                    "request_correlation".into(),
+                    "config_v3".into(),
+                    "audit_recovery".into(),
+                ],
                 cached_config_digest: None,
             }),
         };
@@ -109,5 +132,17 @@ mod tests {
         let mut replay = envelope;
         replay.seq = 2;
         assert!(validate_first_envelope(&replay).is_err());
+    }
+
+    #[test]
+    fn caller_origin_is_exactly_the_registered_extension() {
+        let expected = format!("chrome-extension://{PRODUCT_EXTENSION_ID}/");
+        assert!(validate_caller_origin(&[expected]).is_ok());
+        assert!(validate_caller_origin(&[]).is_err());
+        assert!(validate_caller_origin(&["chrome-extension://evil/".into()]).is_err());
+        assert!(
+            validate_caller_origin(&[format!("chrome-extension://{PRODUCT_EXTENSION_ID}")])
+                .is_err()
+        );
     }
 }

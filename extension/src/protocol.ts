@@ -1,5 +1,21 @@
 export const HOST_NAME = "com.fursoy.vault";
-export const PROTOCOL_VERSION = 3;
+export const PROTOCOL_VERSION = 5;
+export const EXTENSION_VERSION = "0.3.1";
+export const MIN_HOST_VERSION = "0.3.1";
+export const REQUIRED_CAPABILITIES = ["chunked_cookies", "request_correlation", "config_v3", "audit_recovery"] as const;
+
+export function compareSemanticVersions(left: string, right: string): number {
+  const parse = (value: string): number[] => {
+    if (!/^\d+\.\d+\.\d+$/.test(value)) throw new Error("invalid semantic version");
+    return value.split(".").map((part) => Number(part));
+  };
+  const [a, b] = [parse(left), parse(right)];
+  for (let index = 0; index < 3; index += 1) {
+    const difference = a[index]! - b[index]!;
+    if (difference !== 0) return difference;
+  }
+  return 0;
+}
 
 export type PolicyLevel = "critical" | "balanced" | "convenient" | "monitor";
 
@@ -8,7 +24,6 @@ export interface AccountGroup {
   display_name: string;
   scope: string;
   policy_level: PolicyLevel;
-  eviction_triggers: string[];
   store_policy: "normal_profile";
 }
 
@@ -45,7 +60,7 @@ export function validateConfig(config: AccountGroupsConfig): void {
   // Zero groups is valid pre-launch (2026-08-08, ADR-024): a fresh install starts empty and the
   // user adds their first group through onboarding — mirrors the host-side relaxation in
   // native-host/src/config.rs.
-  if (config.version !== 2 || config.compatibility_version !== 2 || !Array.isArray(config.groups) || config.groups.length > 32) {
+  if (config.version !== 3 || config.compatibility_version !== 3 || !Array.isArray(config.groups) || config.groups.length > 32) {
     throw new Error("unsupported account-group config");
   }
   const groupIds = new Set<string>();
@@ -67,9 +82,17 @@ export function validateConfig(config: AccountGroupsConfig): void {
 function isValidScope(scope: string): boolean {
   if (scope === "" || scope.length > 253 || scope.startsWith(".") || scope.endsWith(".")) return false;
   if (!/^[a-z0-9.-]+$/.test(scope) || scope.includes("..")) return false;
-  // A single label is not a registrable domain. Without this, internal page hostnames such as
-  // `newtab` (from chrome://newtab/) would validate as a protectable scope.
-  return scope.includes(".") || scope === "localhost";
+  if (scope === "localhost") return true;
+  const parsed = parseDomain(scope, { allowPrivateDomains: true });
+  if (parsed.isIp) return isValidIpv4(scope);
+  // A protection scope is exactly one registrable domain. Bare public/private suffixes (co.uk,
+  // github.io) and arbitrary subdomains are rejected so one group can never span unrelated sites.
+  return parsed.domain === scope && (parsed.isIcann === true || parsed.isPrivate === true);
+}
+
+function isValidIpv4(scope: string): boolean {
+  const parts = scope.split(".");
+  return parts.length === 4 && parts.every((part) => /^(0|[1-9]\d{0,2})$/.test(part) && Number(part) <= 255);
 }
 
 export interface CookieRecord {
@@ -79,7 +102,7 @@ export interface CookieRecord {
   store_id: string; value: string;
 }
 
-export interface WireMessage { type: string; payload: Record<string, unknown> }
+export interface WireMessage { type: string; payload: Record<string, unknown>; requestId?: string }
 export interface Envelope extends WireMessage {
   v: number; conn_nonce: string; seq: number; id: string;
 }
@@ -175,29 +198,36 @@ export const FIELD_SEPARATOR = String.fromCharCode(0);
 export function cookieIdentity(cookie: Pick<chrome.cookies.Cookie, "name" | "domain" | "path" | "storeId" | "partitionKey"> | Pick<CookieRecord, "name" | "domain" | "path" | "store_id" | "partition_key">): string {
   const storeId = "storeId" in cookie ? cookie.storeId : cookie.store_id;
   const topLevelSite = "storeId" in cookie ? cookie.partitionKey?.topLevelSite ?? "" : cookie.partition_key?.top_level_site ?? "";
-  return [cookie.name, normalizeCookieDomain(cookie.domain), cookie.path, storeId, topLevelSite].join(FIELD_SEPARATOR);
+  const hasCrossSiteAncestor = "storeId" in cookie ? cookie.partitionKey?.hasCrossSiteAncestor : cookie.partition_key?.has_cross_site_ancestor;
+  return [cookie.name, normalizeCookieDomain(cookie.domain), cookie.path, storeId, normalizeTopLevelSite(topLevelSite), hasCrossSiteAncestor === true ? "1" : hasCrossSiteAncestor === false ? "0" : ""].join(FIELD_SEPARATOR);
+}
+
+export function cookieRoundTripMatches(expected: CookieRecord, actual: chrome.cookies.Cookie): boolean {
+  if (cookieIdentity(expected) !== cookieIdentity(actual)) return false;
+  if (expected.value !== actual.value || expected.host_only !== actual.hostOnly || expected.http_only !== actual.httpOnly) return false;
+  if (expected.secure !== actual.secure || expected.session !== actual.session || expected.same_site !== actual.sameSite) return false;
+  if (!expected.session) {
+    if (typeof expected.expiration_date !== "number" || typeof actual.expirationDate !== "number") return false;
+    // Chrome may normalize a persistent expiry to whole seconds. This tolerance accepts only that
+    // representation change, not a materially different lifetime.
+    if (Math.abs(expected.expiration_date - actual.expirationDate) > 1) return false;
+  }
+  return true;
 }
 
 function normalizeCookieDomain(domain: string): string { return domain.replace(/^\./, "").toLowerCase(); }
+function normalizeTopLevelSite(site: string): string {
+  if (site === "") return "";
+  try { return new URL(site).origin.toLowerCase(); } catch { return site.toLowerCase().replace(/\/$/, ""); }
+}
 function normalizeScope(scope: string): string { return scope.replace(/^\./, "").toLowerCase(); }
 function isUuid(value: string): boolean { return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value); }
-
-// Registrable-domain guess for a hostname. A full Public Suffix List is deliberately not
-// bundled; the popup shows this guess in an editable field so the user corrects the cases a
-// heuristic cannot know (ADR-020 slice 2).
-const TWO_LABEL_SUFFIXES = new Set([
-  "co.uk", "org.uk", "ac.uk", "gov.uk", "com.tr", "net.tr", "org.tr", "edu.tr", "gov.tr",
-  "com.au", "net.au", "org.au", "co.nz", "co.jp", "co.kr", "com.br", "com.mx", "co.in",
-  "com.cn", "com.sg", "co.za",
-]);
 
 export function guessScope(hostname: string): string {
   const host = hostname.trim().replace(/\.$/, "").toLowerCase();
   if (host === "" || host === "localhost") return host;
-  // A bare IP address has no registrable domain; protect it exactly as given.
-  if (/^\d{1,3}(\.\d{1,3}){3}$/.test(host) || host.includes(":")) return host;
-  const labels = host.split(".");
-  if (labels.length <= 2) return host;
-  const lastTwo = labels.slice(-2).join(".");
-  return TWO_LABEL_SUFFIXES.has(lastTwo) ? labels.slice(-3).join(".") : lastTwo;
+  const parsed = parseDomain(host, { allowPrivateDomains: true });
+  if (parsed.isIp) return host;
+  return parsed.domain ?? "";
 }
+import { parse as parseDomain } from "tldts";

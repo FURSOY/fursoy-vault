@@ -23,8 +23,12 @@ if ($LASTEXITCODE -ne 0) { throw "cargo build failed" }
 $sourceExe = Join-Path $repoRoot "native-host\target\$profile\fursoy-vault-host.exe"
 $installRoot = Join-Path $dataRoot "native-host"
 New-Item -ItemType Directory -Force -Path $installRoot | Out-Null
-$installedExe = Join-Path $installRoot "fursoy-vault-host.exe"
-Copy-Item -LiteralPath $sourceExe -Destination $installedExe -Force
+$version = (& cargo metadata --manifest-path (Join-Path $repoRoot "native-host\Cargo.toml") --no-deps --format-version 1 | ConvertFrom-Json).packages[0].version
+$deployment = "$version-$([DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds())"
+$deploymentRoot = Join-Path $installRoot "versions\$deployment"
+New-Item -ItemType Directory -Force -Path $deploymentRoot | Out-Null
+$installedExe = Join-Path $deploymentRoot "fursoy-vault-host.exe"
+Copy-Item -LiteralPath $sourceExe -Destination $installedExe
 $configRoot = Join-Path $dataRoot "config"
 New-Item -ItemType Directory -Force -Path $configRoot | Out-Null
 $installedConfig = Join-Path $configRoot "account-groups.json"
@@ -45,8 +49,20 @@ $manifest = [ordered]@{
   allowed_origins = @("chrome-extension://ikodegbaomnahbjiokfogpedaoifhbde/")
 }
 $manifestJson = $manifest | ConvertTo-Json -Depth 4
-[System.IO.File]::WriteAllText($manifestPath, $manifestJson, [System.Text.UTF8Encoding]::new($false))
+$manifestTemp = "$manifestPath.new"
+$manifestBackup = "$manifestPath.rollback"
+[System.IO.File]::WriteAllText($manifestTemp, $manifestJson, [System.Text.UTF8Encoding]::new($false))
 $registryPath = "HKCU:\Software\Google\Chrome\NativeMessagingHosts\com.fursoy.vault"
-New-Item -Path $registryPath -Force | Out-Null
-Set-Item -Path $registryPath -Value $manifestPath
+try {
+  if (Test-Path -LiteralPath $manifestPath) { Copy-Item -LiteralPath $manifestPath -Destination $manifestBackup -Force }
+  Move-Item -LiteralPath $manifestTemp -Destination $manifestPath -Force
+  New-Item -Path $registryPath -Force | Out-Null
+  Set-Item -Path $registryPath -Value $manifestPath
+  if (Test-Path -LiteralPath $manifestBackup) { Remove-Item -LiteralPath $manifestBackup -Force }
+} catch {
+  if (Test-Path -LiteralPath $manifestBackup) { Move-Item -LiteralPath $manifestBackup -Destination $manifestPath -Force }
+  elseif (Test-Path -LiteralPath $manifestPath) { Remove-Item -LiteralPath $manifestPath -Force }
+  if (Test-Path -LiteralPath $deploymentRoot) { Remove-Item -LiteralPath $deploymentRoot -Recurse -Force }
+  throw
+}
 Write-Host "Registered com.fursoy.vault for extension ikodegbaomnahbjiokfogpedaoifhbde"

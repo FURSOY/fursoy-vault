@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 
 use uuid::Uuid;
 
@@ -6,9 +6,7 @@ use sha2::{Digest, Sha256};
 
 use crate::atomic_file::write_verified;
 use crate::audit::{AuditLogger, unix_ms};
-use crate::config::{
-    AccountGroup, AccountGroupsConfig, EvictionTrigger, LoadedConfig, PolicyLevel, StorePolicy,
-};
+use crate::config::{AccountGroup, AccountGroupsConfig, LoadedConfig, PolicyLevel, StorePolicy};
 use crate::crypto::hello::HelloAuthorizer;
 use crate::lease::metadata::{LeaseMetadata, LeaseMetadataStore};
 use crate::lease::store::FileCapabilityLedgerStore;
@@ -16,13 +14,12 @@ use crate::monitor::MonitorEngine;
 use crate::paths::DataPaths;
 use crate::protocol::envelope::PROTOCOL_VERSION;
 use crate::protocol::messages::{
-    AuthCacheClear, ConfigRejected, ConfigUpdated, CookieDisposition, CookiesInject,
-    CookiesSnapshot, EvictConfirmed, EvictPhase, EvictRequest, EvictResult, GroupAdd, GroupRemove,
-    GroupSetPolicy, GroupState, Handshake, HandshakeAck, HandshakeGroupState, InjectResult,
-    LeaseDeny, LeaseGrant, LeasePurpose, LeaseRequest, Message, SessionInvalidate,
-    SessionInvalidated, SessionInvalidationReason,
+    AuthCacheClear, ConfigRejected, ConfigUpdated, CookieDisposition, CookieRecord,
+    CookiesInjectChunk, CookiesSnapshotChunk, EvictConfirmed, EvictPhase, EvictRequest,
+    EvictResult, GroupAdd, GroupRemove, GroupSetPolicy, GroupState, Handshake, HandshakeAck,
+    HandshakeGroupState, InjectResult, LeaseDeny, LeaseGrant, LeasePurpose, LeaseRequest, Message,
+    SessionInvalidate, SessionInvalidated, SessionInvalidationReason,
 };
-#[cfg(debug_assertions)]
 use crate::protocol::messages::{MonitorEvent, MonitorSeverity, MonitorSignal, MonitorSource};
 use crate::transaction::VaultTransactions;
 use crate::vault::store::VaultStore;
@@ -30,6 +27,13 @@ use crate::{FcpError, FcpResult, WIKIPEDIA_ACCOUNT_GROUP_ID};
 
 pub const NATIVE_HOST_NAME: &str = "com.fursoy.vault";
 pub const PRODUCT_EXTENSION_ID: &str = "ikodegbaomnahbjiokfogpedaoifhbde";
+const MIN_EXTENSION_VERSION: &str = "0.3.1";
+const PROTOCOL_CAPABILITIES: &[&str] = &[
+    "chunked_cookies",
+    "request_correlation",
+    "config_v3",
+    "audit_recovery",
+];
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum PendingKind {
@@ -44,7 +48,15 @@ struct PendingOperation {
     lease_id: Option<Uuid>,
     confirmed: bool,
     snapshot_cookie_count: Option<u32>,
+    snapshot_chunk_count: Option<u32>,
+    snapshot_next_chunk: u32,
+    snapshot_cookies: Vec<CookieRecord>,
+    snapshot_bytes: usize,
 }
+
+const COOKIE_CHUNK_TARGET_BYTES: usize = 400 * 1024;
+const MAX_SNAPSHOT_BYTES: usize = 32 * 1024 * 1024;
+const MAX_SNAPSHOT_COOKIES: u32 = 100_000;
 
 struct GroupRuntime {
     id: Uuid,
@@ -90,6 +102,14 @@ impl NativeHostApp {
     pub fn open(paths: &DataPaths) -> FcpResult<Self> {
         let loaded = LoadedConfig::load(&paths.account_groups_config)?;
         paths.migrate_phase5_group(WIKIPEDIA_ACCOUNT_GROUP_ID)?;
+        let configured = loaded
+            .config
+            .groups
+            .iter()
+            .filter(|group| group.policy_level != PolicyLevel::Monitor)
+            .map(|group| group.id)
+            .collect::<HashSet<_>>();
+        VaultStore::new(&paths.vault_groups).recover_staged_deletions(&configured)?;
         let mut groups = BTreeMap::new();
         for definition in &loaded.config.groups {
             groups.insert(definition.id, build_group_runtime(paths, definition)?);
@@ -110,6 +130,17 @@ impl NativeHostApp {
             })?;
         }
         let audit = AuditLogger::open(&paths.audit_directory)?;
+        if audit.recovered_on_open() {
+            monitor.enqueue_host_event(MonitorEvent {
+                event_id: Uuid::new_v4(),
+                observed_at_unix_ms: unix_ms()?,
+                source: MonitorSource::NativeHost,
+                signal: MonitorSignal::AuditIntegrityRecovered,
+                severity: MonitorSeverity::High,
+                account_group_id: None,
+                occurrence_count: 1,
+            })?;
+        }
         Ok(Self {
             groups,
             audit,
@@ -137,6 +168,7 @@ impl NativeHostApp {
                 "handshake cannot be repeated on one connection".into(),
             ));
         }
+        self.last_message_group = None;
         match message {
             Message::MonitorEvent(event) => {
                 if event
@@ -158,7 +190,7 @@ impl NativeHostApp {
             Message::GroupAdd(request) => return self.handle_group_add(request),
             Message::GroupRemove(request) => return self.handle_group_remove(request),
             Message::GroupSetPolicy(request) => return self.handle_group_set_policy(request),
-            Message::ConfigUpdated(_) | Message::ConfigRejected(_) => {
+            Message::ConfigUpdated(_) | Message::ConfigRejected(_) | Message::OperationError(_) => {
                 return Err(FcpError::Protocol(
                     "config result direction is host-to-extension only".into(),
                 ));
@@ -187,6 +219,10 @@ impl NativeHostApp {
         })
     }
 
+    pub fn error_group_id(&self) -> Option<Uuid> {
+        self.last_message_group
+    }
+
     fn handle_handshake(&mut self, handshake: Handshake) -> FcpResult<Vec<Message>> {
         if handshake.protocol_version != PROTOCOL_VERSION {
             return Err(FcpError::Protocol(
@@ -195,6 +231,28 @@ impl NativeHostApp {
         }
         if handshake.extension_id != PRODUCT_EXTENSION_ID {
             return Err(FcpError::Protocol("unexpected extension id".into()));
+        }
+        if compare_versions(&handshake.extension_version, MIN_EXTENSION_VERSION)
+            .is_none_or(|ordering| ordering.is_lt())
+        {
+            return Err(FcpError::Protocol(
+                "extension version is below host minimum".into(),
+            ));
+        }
+        if compare_versions(env!("CARGO_PKG_VERSION"), &handshake.min_host_version)
+            .is_none_or(|ordering| ordering.is_lt())
+        {
+            return Err(FcpError::Protocol(
+                "host version is below extension minimum".into(),
+            ));
+        }
+        if !PROTOCOL_CAPABILITIES.iter().all(|required| {
+            handshake
+                .capabilities
+                .iter()
+                .any(|offered| offered == required)
+        }) {
+            return Err(FcpError::Protocol("extension capability mismatch".into()));
         }
         // Q24: the host is the single source of truth for the config, so a stale cached digest
         // on the extension side is not an error — the authoritative config rides along in the ack.
@@ -210,6 +268,11 @@ impl NativeHostApp {
             config: self.config.clone(),
             groups: states,
             host_version: env!("CARGO_PKG_VERSION").to_string(),
+            min_extension_version: MIN_EXTENSION_VERSION.into(),
+            capabilities: PROTOCOL_CAPABILITIES
+                .iter()
+                .map(|value| (*value).to_string())
+                .collect(),
         })])
     }
 
@@ -247,13 +310,6 @@ impl NativeHostApp {
             display_name,
             scope,
             policy_level: request.policy_level,
-            eviction_triggers: vec![
-                EvictionTrigger::LastTabClosed,
-                EvictionTrigger::Idle,
-                EvictionTrigger::Lock,
-                EvictionTrigger::Expiry,
-                EvictionTrigger::Manual,
-            ],
             store_policy: StorePolicy::NormalProfile,
         });
         // Validation is the same routine that guards the on-disk config, so a runtime addition
@@ -277,7 +333,7 @@ impl NativeHostApp {
     }
 
     fn handle_group_remove(&mut self, request: GroupRemove) -> FcpResult<Vec<Message>> {
-        let Some(runtime) = self.groups.get_mut(&request.account_group_id) else {
+        let Some(runtime) = self.groups.get(&request.account_group_id) else {
             return Ok(vec![Message::ConfigRejected(ConfigRejected {
                 reason: "unknown_group".into(),
             })]);
@@ -287,15 +343,28 @@ impl NativeHostApp {
                 reason: "operation_pending".into(),
             })]);
         }
-        // Dropping protection must not leave the vault behind: discard it under the same
-        // fail-closed path used for invalidation before the group stops being tracked.
-        runtime.transactions.invalidate()?;
+        // Stage rather than delete: a config write failure must leave the configured group and its
+        // only encrypted session copy intact. Startup recovery resolves either crash window from
+        // whether the group is still present in the authoritative config.
+        runtime.transactions.stage_invalidation()?;
         let mut candidate = self.config.clone();
         candidate
             .groups
             .retain(|group| group.id != request.account_group_id);
         candidate.validate()?;
-        self.commit_config(candidate)?;
+        if let Err(error) = self.commit_config(candidate) {
+            self.groups
+                .get(&request.account_group_id)
+                .ok_or_else(|| FcpError::Protocol("group disappeared during removal".into()))?
+                .transactions
+                .rollback_staged_invalidation()?;
+            return Err(error);
+        }
+        self.groups
+            .get(&request.account_group_id)
+            .ok_or_else(|| FcpError::Protocol("group disappeared during removal".into()))?
+            .transactions
+            .commit_staged_invalidation()?;
         self.groups.remove(&request.account_group_id);
         self.audit.record(
             request.account_group_id,
@@ -321,6 +390,28 @@ impl NativeHostApp {
             }
             Some(_) => {}
         }
+        let entering_monitor = request.policy_level == PolicyLevel::Monitor
+            && self
+                .groups
+                .get(&request.account_group_id)
+                .is_some_and(|runtime| runtime.policy != PolicyLevel::Monitor);
+        if entering_monitor
+            && self
+                .groups
+                .get(&request.account_group_id)
+                .is_some_and(|runtime| runtime.lease.state == GroupState::Sealed)
+        {
+            return Ok(vec![Message::ConfigRejected(ConfigRejected {
+                reason: "monitor_transition_requires_unlocked_session".into(),
+            })]);
+        }
+        if entering_monitor {
+            self.groups
+                .get(&request.account_group_id)
+                .expect("validated group")
+                .transactions
+                .stage_invalidation()?;
+        }
         let mut candidate = self.config.clone();
         let Some(definition) = candidate
             .groups
@@ -333,12 +424,32 @@ impl NativeHostApp {
         };
         definition.policy_level = request.policy_level;
         candidate.validate()?;
-        self.commit_config(candidate)?;
+        if let Err(error) = self.commit_config(candidate) {
+            if entering_monitor {
+                self.groups
+                    .get(&request.account_group_id)
+                    .expect("validated group")
+                    .transactions
+                    .rollback_staged_invalidation()?;
+            }
+            return Err(error);
+        }
         // The live runtime carries its own copy of the policy, so it is updated in step with the
         // persisted config; otherwise lease durations would keep following the old level.
         if let Some(runtime) = self.groups.get_mut(&request.account_group_id) {
             runtime.policy = request.policy_level;
             runtime.hello_cache_expires_at = None;
+            if entering_monitor {
+                runtime.transactions.commit_staged_invalidation()?;
+                runtime.lease.state = GroupState::Uninitialized;
+                runtime.lease.lease_id = None;
+                runtime.lease.granted_at_unix_ms = None;
+                runtime.lease.expires_at_unix_ms = None;
+                runtime.lease.pending_operation_id = None;
+                runtime.lease.vault_sequence = 0;
+                runtime.lease.advance_transition()?;
+                runtime.lease_store.persist(&runtime.lease)?;
+            }
         }
         self.audit.record(
             request.account_group_id,
@@ -383,6 +494,18 @@ fn config_digest_of(bytes: &[u8]) -> String {
     encoded
 }
 
+fn compare_versions(left: &str, right: &str) -> Option<std::cmp::Ordering> {
+    let parts = |value: &str| -> Option<[u64; 3]> {
+        let parsed = value
+            .split('.')
+            .map(str::parse::<u64>)
+            .collect::<Result<Vec<_>, _>>()
+            .ok()?;
+        parsed.try_into().ok()
+    };
+    Some(parts(left)?.cmp(&parts(right)?))
+}
+
 fn config_rejection_code(error: &FcpError) -> &'static str {
     match error {
         FcpError::Format(message) if message.contains("overlap") => "scope_overlaps_existing",
@@ -407,7 +530,7 @@ impl GroupRuntime {
             Message::EvictRequest(request) => {
                 self.handle_evict_begin(request, audit, hello_authorizer)
             }
-            Message::CookiesSnapshot(snapshot) => self.handle_snapshot(snapshot, audit),
+            Message::CookiesSnapshotChunk(snapshot) => self.handle_snapshot_chunk(snapshot, audit),
             Message::EvictResult(result) => self.handle_evict_result(result, audit),
             Message::SessionInvalidate(request) => self.handle_session_invalidate(request, audit),
             Message::AuthCacheClear(request) => {
@@ -467,6 +590,10 @@ impl GroupRuntime {
             lease_id: Some(lease_id),
             confirmed: false,
             snapshot_cookie_count: None,
+            snapshot_chunk_count: None,
+            snapshot_next_chunk: 0,
+            snapshot_cookies: Vec::new(),
+            snapshot_bytes: 0,
         });
         audit.record(self.id, "enrollment", "started", Some(operation_id), None)?;
         Ok(vec![
@@ -500,22 +627,45 @@ impl GroupRuntime {
         if hello_authorizer.is_none() {
             *hello_authorizer = Some(HelloAuthorizer::open_or_create()?);
         }
-        let authorizer = hello_authorizer.as_ref().ok_or_else(|| {
-            FcpError::Capability("Windows Hello authorizer was not initialized".into())
-        })?;
-        let use_cached = cache_duration > 0
+        let mut use_cached = cache_duration > 0
             && self
                 .hello_cache_expires_at
                 .is_some_and(|expiry| expiry > now)
-            && authorizer.has_cached_handle(self.id);
-        let authorization = self.transactions.authorize_inject(authorizer, use_cached)?;
+            && hello_authorizer
+                .as_ref()
+                .is_some_and(|value| value.has_cached_handle(self.id));
+        let authorization = match self.transactions.authorize_inject(
+            hello_authorizer.as_ref().ok_or_else(|| {
+                FcpError::Capability("Windows Hello authorizer was not initialized".into())
+            })?,
+            use_cached,
+        ) {
+            Ok(value) => value,
+            Err(error) if HelloAuthorizer::is_missing_credential_error(&error) => {
+                // Windows can remove a platform credential independently (Hello reset, account
+                // recovery, TPM maintenance). Re-enroll only for the provider's not-found code;
+                // user cancellation and verification failures remain hard failures.
+                *hello_authorizer = Some(HelloAuthorizer::recreate()?);
+                use_cached = false;
+                self.transactions.authorize_inject(
+                    hello_authorizer
+                        .as_ref()
+                        .expect("recreated Hello authorizer"),
+                    false,
+                )?
+            }
+            Err(error) => return Err(error),
+        };
         let capability_sequence = authorization.monotonic_sequence();
         let payload = self.transactions.read_for_inject(authorization)?;
         if cache_duration > 0 {
             self.hello_cache_expires_at = now.checked_add(cache_duration);
         } else {
             self.hello_cache_expires_at = None;
-            authorizer.clear_cached_handle(self.id);
+            hello_authorizer
+                .as_ref()
+                .expect("Hello authorizer exists")
+                .clear_cached_handle(self.id);
         }
         let expiry = now
             .checked_add(duration_ms)
@@ -540,19 +690,29 @@ impl GroupRuntime {
                 "hello_fresh"
             }),
         )?;
-        Ok(vec![
-            Message::LeaseGrant(LeaseGrant {
+        let cookie_count = u32::try_from(payload.cookies.len())
+            .map_err(|_| FcpError::Protocol("inject cookie count exceeds u32".into()))?;
+        let chunks = chunk_cookie_records(payload.cookies)?;
+        let chunk_count = u32::try_from(chunks.len())
+            .map_err(|_| FcpError::Protocol("inject chunk count exceeds u32".into()))?;
+        let mut messages = vec![Message::LeaseGrant(LeaseGrant {
+            account_group_id: self.id,
+            lease_id,
+            expiry_unix_ms: expiry,
+            capability_sequence: Some(capability_sequence),
+        })];
+        for (chunk_index, cookies) in chunks.into_iter().enumerate() {
+            messages.push(Message::CookiesInjectChunk(CookiesInjectChunk {
                 account_group_id: self.id,
                 lease_id,
-                expiry_unix_ms: expiry,
-                capability_sequence: Some(capability_sequence),
-            }),
-            Message::CookiesInject(CookiesInject {
-                account_group_id: self.id,
-                lease_id,
-                cookies: payload.cookies,
-            }),
-        ])
+                chunk_index: u32::try_from(chunk_index)
+                    .map_err(|_| FcpError::Protocol("inject chunk index exceeds u32".into()))?,
+                chunk_count,
+                cookie_count,
+                cookies,
+            }));
+        }
+        Ok(messages)
     }
 
     fn handle_inject_result(
@@ -713,6 +873,10 @@ impl GroupRuntime {
             lease_id: request.lease_id,
             confirmed: false,
             snapshot_cookie_count: None,
+            snapshot_chunk_count: None,
+            snapshot_next_chunk: 0,
+            snapshot_cookies: Vec::new(),
+            snapshot_bytes: 0,
         });
         audit.record(
             self.id,
@@ -734,38 +898,97 @@ impl GroupRuntime {
         })])
     }
 
-    fn handle_snapshot(
+    fn handle_snapshot_chunk(
         &mut self,
-        snapshot: CookiesSnapshot,
+        snapshot: CookiesSnapshotChunk,
         audit: &AuditLogger,
     ) -> FcpResult<Vec<Message>> {
-        let mut pending = self.pending.take().ok_or_else(|| {
-            FcpError::Protocol("snapshot received without pending eviction".into())
+        let pending = self.pending.as_mut().ok_or_else(|| {
+            FcpError::Protocol("snapshot chunk received without pending eviction".into())
         })?;
         if pending.operation_id != snapshot.operation_id || pending.lease_id != snapshot.lease_id {
-            self.pending = Some(pending);
             return Err(FcpError::Protocol(
                 "snapshot operation binding mismatch".into(),
             ));
         }
         if pending.confirmed {
-            self.pending = Some(pending);
             return Err(FcpError::Protocol("duplicate snapshot received".into()));
         }
-        if pending.kind == PendingKind::Enrollment && snapshot.cookies.is_empty() {
+        if snapshot.chunk_count == 0 || snapshot.chunk_count > 65_536 {
+            return Err(FcpError::Protocol(
+                "snapshot chunk count is out of range".into(),
+            ));
+        }
+        if snapshot.cookie_count > MAX_SNAPSHOT_COOKIES {
+            return Err(FcpError::Protocol(
+                "snapshot cookie count is out of range".into(),
+            ));
+        }
+        if snapshot.chunk_index != pending.snapshot_next_chunk {
+            return Err(FcpError::Protocol(
+                "snapshot chunk is missing or out of order".into(),
+            ));
+        }
+        if pending
+            .snapshot_chunk_count
+            .is_some_and(|value| value != snapshot.chunk_count)
+        {
+            return Err(FcpError::Protocol("snapshot chunk total changed".into()));
+        }
+        if snapshot.chunk_index + 1 < snapshot.chunk_count && snapshot.cookies.is_empty() {
+            return Err(FcpError::Protocol(
+                "non-final snapshot chunk is empty".into(),
+            ));
+        }
+        let chunk_bytes = serde_json::to_vec(&snapshot.cookies)?.len();
+        let aggregate_bytes = pending
+            .snapshot_bytes
+            .checked_add(chunk_bytes)
+            .ok_or_else(|| FcpError::Protocol("snapshot byte count overflow".into()))?;
+        if aggregate_bytes > MAX_SNAPSHOT_BYTES {
+            return Err(FcpError::Protocol(
+                "snapshot exceeds aggregate byte limit".into(),
+            ));
+        }
+        let aggregate_count = pending
+            .snapshot_cookies
+            .len()
+            .checked_add(snapshot.cookies.len())
+            .ok_or_else(|| FcpError::Protocol("snapshot cookie count overflow".into()))?;
+        if aggregate_count > snapshot.cookie_count as usize {
+            return Err(FcpError::Protocol(
+                "snapshot contains more cookies than declared".into(),
+            ));
+        }
+        pending.snapshot_chunk_count = Some(snapshot.chunk_count);
+        pending.snapshot_next_chunk += 1;
+        pending.snapshot_bytes = aggregate_bytes;
+        pending.snapshot_cookies.extend(snapshot.cookies);
+        if pending.snapshot_next_chunk < snapshot.chunk_count {
+            return Ok(Vec::new());
+        }
+        if aggregate_count != snapshot.cookie_count as usize {
+            return Err(FcpError::Protocol(
+                "snapshot cookie total does not match declaration".into(),
+            ));
+        }
+
+        let mut pending = self.pending.take().expect("pending snapshot was validated");
+        let cookies = std::mem::take(&mut pending.snapshot_cookies);
+        if pending.kind == PendingKind::Enrollment && cookies.is_empty() {
             self.pending = Some(pending);
             return Err(FcpError::Protocol(
                 "enrollment snapshot must contain at least one cookie".into(),
             ));
         }
-        let snapshot_cookie_count = u32::try_from(snapshot.cookies.len())
+        let snapshot_cookie_count = u32::try_from(cookies.len())
             .map_err(|_| FcpError::Protocol("snapshot cookie count exceeds u32".into()))?;
-        let vault_sequence = if snapshot.cookies.is_empty() {
+        let vault_sequence = if cookies.is_empty() {
             self.lease.vault_sequence
         } else if self.transactions.vault_exists() {
-            self.transactions.update_after_snapshot(snapshot.cookies)?
+            self.transactions.update_after_snapshot(cookies)?
         } else {
-            self.transactions.enroll(snapshot.cookies)?
+            self.transactions.enroll(cookies)?
         };
         pending.confirmed = true;
         pending.snapshot_cookie_count = Some(snapshot_cookie_count);
@@ -879,13 +1102,39 @@ fn message_group_id(message: &Message) -> Option<Uuid> {
         Message::LeaseRequest(value) => Some(value.account_group_id),
         Message::InjectResult(value) => Some(value.account_group_id),
         Message::EvictRequest(value) => Some(value.account_group_id),
-        Message::CookiesSnapshot(value) => Some(value.account_group_id),
+        Message::CookiesSnapshotChunk(value) => Some(value.account_group_id),
         Message::EvictResult(value) => Some(value.account_group_id),
         Message::SessionInvalidate(value) => Some(value.account_group_id),
         Message::AuthCacheClear(value) => Some(value.account_group_id),
         Message::MonitorEvent(value) => value.account_group_id,
         _ => None,
     }
+}
+
+fn chunk_cookie_records(cookies: Vec<CookieRecord>) -> FcpResult<Vec<Vec<CookieRecord>>> {
+    if cookies.is_empty() {
+        return Ok(vec![Vec::new()]);
+    }
+
+    let mut chunks = Vec::new();
+    let mut current = Vec::new();
+    let mut current_bytes = 2usize; // JSON array brackets.
+    for cookie in cookies {
+        let cookie_bytes = serde_json::to_vec(&cookie)?.len() + usize::from(!current.is_empty());
+        if cookie_bytes > COOKIE_CHUNK_TARGET_BYTES {
+            return Err(FcpError::Protocol(
+                "one cookie exceeds the chunk byte limit".into(),
+            ));
+        }
+        if !current.is_empty() && current_bytes + cookie_bytes > COOKIE_CHUNK_TARGET_BYTES {
+            chunks.push(std::mem::take(&mut current));
+            current_bytes = 2;
+        }
+        current_bytes += cookie_bytes;
+        current.push(cookie);
+    }
+    chunks.push(current);
+    Ok(chunks)
 }
 
 fn inject_failure_code(value: &str) -> &'static str {
@@ -979,6 +1228,12 @@ mod tests {
         app.handle(Message::Handshake(Handshake {
             protocol_version: PROTOCOL_VERSION,
             extension_id: PRODUCT_EXTENSION_ID.into(),
+            extension_version: MIN_EXTENSION_VERSION.into(),
+            min_host_version: env!("CARGO_PKG_VERSION").into(),
+            capabilities: PROTOCOL_CAPABILITIES
+                .iter()
+                .map(|value| (*value).into())
+                .collect(),
             cached_config_digest: None,
         }))
         .unwrap();
@@ -1113,6 +1368,41 @@ mod tests {
     }
 
     #[test]
+    fn monitor_transition_resets_unprotected_runtime_and_rejects_sealed_session() {
+        let root = std::env::temp_dir().join(format!("fcp-monitor-policy-{}", Uuid::new_v4()));
+        let paths = test_paths(&root);
+        let mut app = handshaken(&paths);
+        let target = *app.groups.keys().next().unwrap();
+
+        let output = app
+            .handle(Message::GroupSetPolicy(GroupSetPolicy {
+                account_group_id: target,
+                policy_level: PolicyLevel::Monitor,
+            }))
+            .unwrap();
+        assert!(matches!(output[0], Message::ConfigUpdated(_)));
+        assert_eq!(app.groups[&target].policy, PolicyLevel::Monitor);
+        assert_eq!(app.groups[&target].lease.state, GroupState::Uninitialized);
+
+        app.groups.get_mut(&target).unwrap().policy = PolicyLevel::Balanced;
+        app.groups.get_mut(&target).unwrap().lease.state = GroupState::Sealed;
+        let rejected = app
+            .handle(Message::GroupSetPolicy(GroupSetPolicy {
+                account_group_id: target,
+                policy_level: PolicyLevel::Monitor,
+            }))
+            .unwrap();
+        match &rejected[0] {
+            Message::ConfigRejected(value) => {
+                assert_eq!(value.reason, "monitor_transition_requires_unlocked_session")
+            }
+            other => panic!("expected config.rejected, got {other:?}"),
+        }
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn removing_the_last_group_leaves_zero_groups_configured() {
         // Zero groups is a valid state pre-launch (2026-08-08): a fresh install starts empty and
         // the user adds their first group through onboarding, so removal must not be blocked at
@@ -1147,6 +1437,12 @@ mod tests {
             .handle(Message::Handshake(Handshake {
                 protocol_version: PROTOCOL_VERSION,
                 extension_id: PRODUCT_EXTENSION_ID.into(),
+                extension_version: MIN_EXTENSION_VERSION.into(),
+                min_host_version: env!("CARGO_PKG_VERSION").into(),
+                capabilities: PROTOCOL_CAPABILITIES
+                    .iter()
+                    .map(|value| (*value).into())
+                    .collect(),
                 cached_config_digest: Some(app.config_digest.clone()),
             }))
             .unwrap();
@@ -1161,6 +1457,46 @@ mod tests {
     }
 
     #[test]
+    fn handshake_rejects_incompatible_versions_and_capabilities() {
+        let cases = [
+            ("0.3.0", env!("CARGO_PKG_VERSION"), true),
+            (MIN_EXTENSION_VERSION, "99.0.0", true),
+            (MIN_EXTENSION_VERSION, env!("CARGO_PKG_VERSION"), false),
+            ("not-a-version", env!("CARGO_PKG_VERSION"), true),
+        ];
+        for (index, (extension_version, min_host_version, include_capabilities)) in
+            cases.into_iter().enumerate()
+        {
+            let root = std::env::temp_dir().join(format!(
+                "fcp-incompatible-handshake-{index}-{}",
+                Uuid::new_v4()
+            ));
+            let paths = test_paths(&root);
+            let mut app = NativeHostApp::open(&paths).unwrap();
+            let capabilities = if include_capabilities {
+                PROTOCOL_CAPABILITIES
+                    .iter()
+                    .map(|value| (*value).into())
+                    .collect()
+            } else {
+                Vec::new()
+            };
+            assert!(
+                app.handle(Message::Handshake(Handshake {
+                    protocol_version: PROTOCOL_VERSION,
+                    extension_id: PRODUCT_EXTENSION_ID.into(),
+                    extension_version: extension_version.into(),
+                    min_host_version: min_host_version.into(),
+                    capabilities,
+                    cached_config_digest: None,
+                }))
+                .is_err()
+            );
+            fs::remove_dir_all(root).unwrap();
+        }
+    }
+
+    #[test]
     fn stale_extension_cache_is_answered_with_the_authoritative_config() {
         let root = std::env::temp_dir().join(format!("fcp-config-refresh-{}", Uuid::new_v4()));
         let paths = test_paths(&root);
@@ -1169,6 +1505,12 @@ mod tests {
             .handle(Message::Handshake(Handshake {
                 protocol_version: PROTOCOL_VERSION,
                 extension_id: PRODUCT_EXTENSION_ID.into(),
+                extension_version: MIN_EXTENSION_VERSION.into(),
+                min_host_version: env!("CARGO_PKG_VERSION").into(),
+                capabilities: PROTOCOL_CAPABILITIES
+                    .iter()
+                    .map(|value| (*value).into())
+                    .collect(),
                 cached_config_digest: Some("00".repeat(32)),
             }))
             .unwrap();
@@ -1191,6 +1533,12 @@ mod tests {
             .handle(Message::Handshake(Handshake {
                 protocol_version: PROTOCOL_VERSION,
                 extension_id: PRODUCT_EXTENSION_ID.into(),
+                extension_version: MIN_EXTENSION_VERSION.into(),
+                min_host_version: env!("CARGO_PKG_VERSION").into(),
+                capabilities: PROTOCOL_CAPABILITIES
+                    .iter()
+                    .map(|value| (*value).into())
+                    .collect(),
                 cached_config_digest: None,
             }))
             .unwrap();
@@ -1218,6 +1566,12 @@ mod tests {
         app.handle(Message::Handshake(Handshake {
             protocol_version: PROTOCOL_VERSION,
             extension_id: PRODUCT_EXTENSION_ID.into(),
+            extension_version: MIN_EXTENSION_VERSION.into(),
+            min_host_version: env!("CARGO_PKG_VERSION").into(),
+            capabilities: PROTOCOL_CAPABILITIES
+                .iter()
+                .map(|value| (*value).into())
+                .collect(),
             cached_config_digest: Some(app.config_digest.clone()),
         }))
         .unwrap();
@@ -1279,6 +1633,12 @@ mod tests {
         app.handle(Message::Handshake(Handshake {
             protocol_version: PROTOCOL_VERSION,
             extension_id: PRODUCT_EXTENSION_ID.into(),
+            extension_version: MIN_EXTENSION_VERSION.into(),
+            min_host_version: env!("CARGO_PKG_VERSION").into(),
+            capabilities: PROTOCOL_CAPABILITIES
+                .iter()
+                .map(|value| (*value).into())
+                .collect(),
             cached_config_digest: Some(app.config_digest.clone()),
         }))
         .unwrap();

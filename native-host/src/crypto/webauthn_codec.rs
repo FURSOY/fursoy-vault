@@ -30,19 +30,21 @@ pub fn parse_attested_credential(auth_data: &[u8]) -> FcpResult<(Vec<u8>, [u8; 3
     pos = pos
         .checked_add(16) // aaguid, unused
         .ok_or_else(|| FcpError::Capability("authenticatorData offset overflow".into()))?;
-    let cred_id_len_bytes = auth_data
-        .get(pos..pos + 2)
-        .ok_or_else(|| FcpError::Capability("authenticatorData truncated before credIdLen".into()))?;
+    let cred_id_len_bytes = auth_data.get(pos..pos + 2).ok_or_else(|| {
+        FcpError::Capability("authenticatorData truncated before credIdLen".into())
+    })?;
     let cred_id_len = u16::from_be_bytes([cred_id_len_bytes[0], cred_id_len_bytes[1]]) as usize;
     pos += 2;
     let credential_id = auth_data
         .get(pos..pos + cred_id_len)
-        .ok_or_else(|| FcpError::Capability("authenticatorData truncated before credentialId".into()))?
+        .ok_or_else(|| {
+            FcpError::Capability("authenticatorData truncated before credentialId".into())
+        })?
         .to_vec();
     pos += cred_id_len;
-    let cose_key = auth_data
-        .get(pos..)
-        .ok_or_else(|| FcpError::Capability("authenticatorData truncated before credentialPublicKey".into()))?;
+    let cose_key = auth_data.get(pos..).ok_or_else(|| {
+        FcpError::Capability("authenticatorData truncated before credentialPublicKey".into())
+    })?;
     let (x, y) = parse_cose_ec2_public_key(cose_key)?;
     Ok((credential_id, x, y))
 }
@@ -120,7 +122,11 @@ impl<'a> CborReader<'a> {
             25 => u16::from_be_bytes(self.take(2)?.try_into().unwrap()) as u64,
             26 => u32::from_be_bytes(self.take(4)?.try_into().unwrap()) as u64,
             27 => u64::from_be_bytes(self.take(8)?.try_into().unwrap()),
-            _ => return Err(FcpError::Capability("unsupported CBOR length encoding".into())),
+            _ => {
+                return Err(FcpError::Capability(
+                    "unsupported CBOR length encoding".into(),
+                ));
+            }
         };
         Ok((major, argument))
     }
@@ -138,7 +144,8 @@ impl<'a> CborReader<'a> {
     fn read_int(&mut self) -> FcpResult<i64> {
         let (major, argument) = self.read_header()?;
         match major {
-            0 => i64::try_from(argument).map_err(|_| FcpError::Capability("CBOR uint too large".into())),
+            0 => i64::try_from(argument)
+                .map_err(|_| FcpError::Capability("CBOR uint too large".into())),
             1 => {
                 let value = i64::try_from(argument)
                     .map_err(|_| FcpError::Capability("CBOR negint too large".into()))?;
@@ -264,7 +271,7 @@ pub fn hex_encode(bytes: &[u8]) -> String {
 
 pub fn hex_decode(text: &str) -> FcpResult<Vec<u8>> {
     let text = text.as_bytes();
-    if text.len() % 2 != 0 {
+    if !text.len().is_multiple_of(2) {
         return Err(FcpError::Capability("hex string has odd length".into()));
     }
     let mut out = Vec::with_capacity(text.len() / 2);

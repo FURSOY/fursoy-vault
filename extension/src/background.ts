@@ -1,6 +1,6 @@
 import {
-  HOST_NAME, PROTOCOL_VERSION, categorizeCookieSetFailure, cookieBelongsToGroup,
-  cookieIdentity, cookieRecord, cookieSetDetails, cookieUrl, groupForCookie, groupForUrl,
+  EXTENSION_VERSION, HOST_NAME, MIN_HOST_VERSION, PROTOCOL_VERSION, REQUIRED_CAPABILITIES, categorizeCookieSetFailure, cookieBelongsToGroup, compareSemanticVersions,
+  cookieIdentity, cookieRecord, cookieRoundTripMatches, cookieSetDetails, cookieUrl, groupForCookie, groupForUrl,
   guessScope, navigationPatterns, policyParameters, validateConfig,
   type AccountGroup, type AccountGroupsConfig, type CookieRecord, type CookieSetFailureCategory,
   type Envelope, type LoadedConfig, type PolicyLevel, type WireMessage,
@@ -9,6 +9,7 @@ import {
   addToBoundedOutbox, makeMonitorEvent, notificationDecision, notificationText,
   validateMonitorEvent, type MonitorEvent, type MonitorSignal, type NotificationDecisionState,
 } from "./monitor.js";
+import { decideStartup, stateAfterHostError } from "./state-machine.js";
 
 type GroupState = "uninitialized" | "sealed" | "unlocking" | "leased" | "evicting" | "degraded";
 type LeasePurpose = "inject" | "enroll";
@@ -74,6 +75,7 @@ const ALERT_LOG_KEY = "fcp-alert-log-v1";
 const ALERT_LOG_LIMIT = 100;
 const PENDING_ADD_KEY = "fcp-pending-add-v1";
 const PENDING_ADD_TTL_MS = 120_000;
+const COOKIE_CHUNK_TARGET_BYTES = 400 * 1024;
 const UPDATE_CHECK_ALARM = "fcp-update-check";
 const UPDATE_CACHE_KEY = "fcp-update-check-v1";
 const GITHUB_RELEASES_API = "https://api.github.com/repos/FURSOY/fursoy-vault/releases/latest";
@@ -84,6 +86,17 @@ const GITHUB_RELEASES_PAGE = "https://github.com/FURSOY/fursoy-vault/releases/la
 let loadedConfig: LoadedConfig | undefined;
 let configWaiters: Array<(value: LoadedConfig) => void> = [];
 let hostVersion: string | undefined;
+interface PendingInjectChunks {
+  leaseId: string;
+  chunkCount: number;
+  cookieCount: number;
+  nextChunk: number;
+  cookies: CookieRecord[];
+}
+// Intentionally memory-only: a native port keeps the worker alive during transfer, while a
+// restart abandons the lease and lets handshake reconciliation fail closed. Cookie values never
+// enter extension storage merely to support chunk assembly.
+const pendingInjectChunks = new Map<string, PendingInjectChunks>();
 
 function awaitConfig(): Promise<LoadedConfig> {
   if (loadedConfig !== undefined) return Promise.resolve(loadedConfig);
@@ -130,7 +143,7 @@ chrome.alarms.create(MONITOR_POLL_ALARM, { periodInMinutes: 0.5 });
 chrome.alarms.create(UPDATE_CHECK_ALARM, { periodInMinutes: 720 });
 setInterval(() => enqueue(pollNativeMonitor), 15_000);
 
-chrome.permissions.onAdded.addListener(() => enqueue(flushPendingAdd));
+chrome.permissions.onAdded.addListener(() => enqueue(async () => { await flushPendingAdd(); }));
 
 chrome.webNavigation.onBeforeNavigate.addListener((details) => enqueue(async () => {
   if (details.frameId !== 0) return;
@@ -165,6 +178,7 @@ interface PendingAdd {
   displayName: string;
   policyLevel: PolicyLevel;
   stagedAtUnixMs: number;
+  requestId?: string;
 }
 
 function isPendingAdd(value: unknown): value is PendingAdd {
@@ -173,29 +187,24 @@ function isPendingAdd(value: unknown): value is PendingAdd {
     typeof pending.policyLevel === "string" && typeof pending.stagedAtUnixMs === "number";
 }
 
-async function flushPendingAdd(): Promise<void> {
+type ConfigOperation = { type: "group.add" | "group.remove" | "group.set_policy"; status: "pending" | "success" | "error"; scope?: string; error?: string; updatedAt: number };
+const configOperations = new Map<string, ConfigOperation>();
+
+async function flushPendingAdd(): Promise<string | undefined> {
   const stored = await getLocal(PENDING_ADD_KEY);
-  if (!isPendingAdd(stored)) return;
+  if (!isPendingAdd(stored)) return undefined;
   if (Date.now() - stored.stagedAtUnixMs > PENDING_ADD_TTL_MS) {
     await setLocal(PENDING_ADD_KEY, undefined);
-    return;
+    return undefined;
   }
   // Keep the intent if the host is not up yet; the handshake retries this.
-  if (!client?.connected) { void connect(); return; }
+  if (!client?.connected) { void connect(); return undefined; }
   const group = loadedConfig?.config.groups.find((item) => item.scope === stored.scope);
-  if (group !== undefined) { await setLocal(PENDING_ADD_KEY, undefined); return; }
-  send("group.add", { scope: stored.scope, display_name: stored.displayName, policy_level: stored.policyLevel });
-  await setLocal(PENDING_ADD_KEY, undefined);
-}
-
-function compareVersions(a: string, b: string): number {
-  const partsOf = (version: string): number[] => version.split(".").map((part) => Number.parseInt(part, 10) || 0);
-  const [pa, pb] = [partsOf(a), partsOf(b)];
-  for (let i = 0; i < Math.max(pa.length, pb.length); i += 1) {
-    const diff = (pa[i] ?? 0) - (pb[i] ?? 0);
-    if (diff !== 0) return diff;
-  }
-  return 0;
+  if (group !== undefined) { await setLocal(PENDING_ADD_KEY, undefined); return stored.requestId; }
+  if (stored.requestId !== undefined && configOperations.get(stored.requestId)?.status === "pending") return stored.requestId;
+  const requestId = startConfigOperation("group.add", { scope: stored.scope, display_name: stored.displayName, policy_level: stored.policyLevel });
+  await setLocal(PENDING_ADD_KEY, { ...stored, requestId });
+  return requestId;
 }
 
 // Check-only, never auto-apply: this is a security-sensitive native binary, and silently
@@ -210,7 +219,7 @@ async function checkForUpdate(): Promise<void> {
     const payload = await response.json() as { tag_name?: unknown };
     if (typeof payload.tag_name !== "string") return;
     const latest = payload.tag_name.replace(/^v/, "");
-    await setLocal(UPDATE_CACHE_KEY, compareVersions(latest, hostVersion) > 0 ? latest : undefined);
+    await setLocal(UPDATE_CACHE_KEY, compareSemanticVersions(latest, hostVersion) > 0 ? latest : undefined);
   } catch { /* offline or GitHub unreachable; the next scheduled check tries again */ }
 }
 
@@ -220,6 +229,7 @@ type PopupMessage =
   | { type: "popup.cancelProtect" }
   | { type: "popup.log" }
   | { type: "popup.clearLog" }
+  | { type: "popup.operation"; requestId: string }
   | { type: "popup.protect"; scope: string; displayName: string; policyLevel: PolicyLevel }
   | { type: "popup.unprotect"; groupId: string }
   | { type: "popup.setPolicy"; groupId: string; policyLevel: PolicyLevel };
@@ -261,6 +271,12 @@ async function handlePopupMessage(message: PopupMessage): Promise<Record<string,
     await setLocal(ALERT_LOG_KEY, []);
     return { ok: true };
   }
+  if (message.type === "popup.operation") {
+    const operation = configOperations.get(message.requestId);
+    return operation === undefined ? { ok: false, error: "operation_state_lost" } : {
+      ok: operation.status === "success", pending: operation.status === "pending", error: operation.error,
+    };
+  }
   if (message.type === "popup.stageProtect") {
     await setLocal(PENDING_ADD_KEY, {
       scope: message.scope, displayName: message.displayName,
@@ -274,15 +290,15 @@ async function handlePopupMessage(message: PopupMessage): Promise<Record<string,
   }
   if (!client?.connected) { void connect(); return { ok: false, error: "native_host_not_connected" }; }
   if (message.type === "popup.protect") {
-    await flushPendingAdd();
-    return { ok: true };
+    const requestId = await flushPendingAdd();
+    return requestId === undefined ? { ok: false, error: "native_host_not_connected" } : { ok: true, pending: true, requestId };
   }
   if (message.type === "popup.setPolicy") {
-    send("group.set_policy", { account_group_id: message.groupId, policy_level: message.policyLevel });
-    return { ok: true };
+    const requestId = startConfigOperation("group.set_policy", { account_group_id: message.groupId, policy_level: message.policyLevel });
+    return { ok: true, pending: true, requestId };
   }
-  send("group.remove", { account_group_id: message.groupId });
-  return { ok: true };
+  const requestId = startConfigOperation("group.remove", { account_group_id: message.groupId });
+  return { ok: true, pending: true, requestId };
 }
 
 async function popupGroupSummaries(loaded: LoadedConfig): Promise<Array<Record<string, unknown>>> {
@@ -302,7 +318,7 @@ async function popupGroupSummaries(loaded: LoadedConfig): Promise<Array<Record<s
 function isPopupMessage(value: unknown): value is PopupMessage {
   const type = typeof value === "object" && value !== null ? (value as { type?: unknown }).type : undefined;
   return type === "popup.state" || type === "popup.protect" || type === "popup.unprotect" ||
-    type === "popup.log" || type === "popup.clearLog" || type === "popup.stageProtect" ||
+    type === "popup.log" || type === "popup.clearLog" || type === "popup.operation" || type === "popup.stageProtect" ||
     type === "popup.cancelProtect" || type === "popup.setPolicy";
 }
 
@@ -491,11 +507,54 @@ async function handleHostMessage(message: WireMessage): Promise<void> {
     // needless reconciliation round for groups that did not change.
     if (!Array.isArray(message.payload.groups)) throw new Error("config.updated groups must be an array");
     await applyHostGroupStates(await awaitConfig(), message.payload.groups as HandshakeGroupState[]);
+    if (message.requestId !== undefined) {
+      const operation = configOperations.get(message.requestId);
+      if (operation !== undefined) {
+        configOperations.set(message.requestId, { ...operation, status: "success", updatedAt: Date.now() });
+        if (operation.type === "group.add") {
+          const pending = await getLocal(PENDING_ADD_KEY);
+          if (isPendingAdd(pending) && pending.requestId === message.requestId) await setLocal(PENDING_ADD_KEY, undefined);
+        } else if (operation.type === "group.remove" && operation.scope !== undefined) {
+          await removeUnusedScopePermission(operation.scope);
+        }
+      }
+    }
     lastConfigError = undefined;
     return;
   }
   if (message.type === "config.rejected") {
-    lastConfigError = requiredString(message.payload, "reason");
+    const reason = requiredString(message.payload, "reason");
+    lastConfigError = reason;
+    if (message.requestId !== undefined) {
+      const operation = configOperations.get(message.requestId);
+      if (operation !== undefined) configOperations.set(message.requestId, { ...operation, status: "error", error: reason, updatedAt: Date.now() });
+      const pending = await getLocal(PENDING_ADD_KEY);
+      if (isPendingAdd(pending) && pending.requestId === message.requestId) await setLocal(PENDING_ADD_KEY, undefined);
+    }
+    return;
+  }
+  if (message.type === "operation.error") {
+    const requestId = requiredString(message.payload, "request_id");
+    const code = requiredString(message.payload, "code");
+    if (message.requestId !== requestId) throw new Error("operation error correlation mismatch");
+    const operation = configOperations.get(requestId);
+    if (operation !== undefined) configOperations.set(requestId, { ...operation, status: "error", error: code, updatedAt: Date.now() });
+    const groupId = optionalString(message.payload, "account_group_id");
+    const loaded = loadedConfig;
+    const group = groupId === undefined ? undefined : loaded?.config.groups.find((item) => item.id === groupId);
+    if (loaded !== undefined && group !== undefined) {
+      const root = await loadState(loaded);
+      const state = requiredGroupState(root, group.id);
+      const pendingLease = state.pendingLeaseRequest;
+      state.pendingLeaseRequest = undefined;
+      state.evictionRequestPending = false;
+      const recovery = stateAfterHostError(state.groupState, pendingLease);
+      state.groupState = recovery.state;
+      state.reconciliation = recovery.reconciliation;
+      state.lastEvent = `host_error:${code}`;
+      await saveState(root);
+    }
+    lastConfigError = code;
     return;
   }
   if (message.type === "monitor.alert") {
@@ -535,19 +594,19 @@ async function handleHostMessage(message: WireMessage): Promise<void> {
       if (deniedEviction) await queueMonitorEvent("reconciliation_failed", group.id);
       break;
     }
-    case "cookies.inject": await injectCookies(loaded, group, message.payload, root, state); break;
+    case "cookies.inject.chunk": await receiveInjectChunk(loaded, group, message.payload, root, state); break;
     case "evict.request":
       if (requiredString(message.payload, "phase") !== "snapshot_required") throw new Error("unsupported eviction phase");
       state.groupState = "evicting";
       state.evictionRequestPending = true;
       state.lastEvent = `snapshot_required:${requiredString(message.payload, "reason")}`;
       await saveState(root);
-      send("cookies.snapshot", {
-        account_group_id: group.id,
-        lease_id: optionalString(message.payload, "lease_id"),
-        operation_id: requiredString(message.payload, "operation_id"),
-        cookies: (await getCookies(group)).map(cookieRecord),
-      });
+      sendCookieSnapshotChunks(
+        group.id,
+        optionalString(message.payload, "lease_id"),
+        requiredString(message.payload, "operation_id"),
+        (await getCookies(group)).map(cookieRecord),
+      );
       break;
     case "evict.confirmed": await finishEviction(loaded, group, message.payload, root, state); break;
     case "session.invalidated":
@@ -578,6 +637,12 @@ async function applyHostGroupStates(loaded: LoadedConfig, summaries: HandshakeGr
 async function handleHandshakeAck(payload: Record<string, unknown>): Promise<void> {
   if (requiredNumber(payload, "protocol_version") !== PROTOCOL_VERSION) throw new Error("host protocol mismatch");
   hostVersion = requiredString(payload, "host_version");
+  if (compareSemanticVersions(hostVersion, MIN_HOST_VERSION) < 0) throw new Error("native host version is too old");
+  if (compareSemanticVersions(EXTENSION_VERSION, requiredString(payload, "min_extension_version")) < 0) throw new Error("extension version is too old for native host");
+  const hostCapabilities = payload.capabilities;
+  if (!Array.isArray(hostCapabilities) || !REQUIRED_CAPABILITIES.every((capability) => hostCapabilities.includes(capability))) {
+    throw new Error("native host capability mismatch");
+  }
   void checkForUpdate();
   await adoptConfig(payload.config as AccountGroupsConfig, requiredString(payload, "config_digest"));
   const loaded = await awaitConfig();
@@ -604,18 +669,42 @@ async function handleHandshakeAck(payload: Record<string, unknown>): Promise<voi
       state.invalidationPending = false;
       state.invalidationReason = undefined;
     }
-    if (pendingInvalidation !== undefined && state.groupState !== "uninitialized") {
+    const startup = decideStartup({
+      state: state.groupState,
+      cookieCount: cookies.length,
+      relevantTabCount: state.relevantTabs.length,
+      leaseExpiry: summary.lease_expiry_unix_ms,
+      reconciliationRequired: summary.reconciliation_required,
+      pendingInvalidation: pendingInvalidation !== undefined,
+      now: Date.now(),
+    });
+    if (startup.action === "invalidate" && pendingInvalidation !== undefined) {
       actions.push(() => requestSessionInvalidation(loaded, group, pendingInvalidation));
-    } else if (state.groupState === "leased" && (cookies.length === 0 || state.relevantTabs.length === 0)) {
-      const reason = cookies.length === 0 ? "startup_reconciliation" : "last_tab_closed";
-      actions.push(() => requestEviction(loaded, group, reason, state.leaseId));
-    } else if (state.groupState === "leased" && typeof summary.lease_expiry_unix_ms === "number") {
-      if (summary.lease_expiry_unix_ms <= Date.now()) actions.push(() => requestEviction(loaded, group, "expiry", state.leaseId));
-      else chrome.alarms.create(alarmName("expiry", group.id), { when: summary.lease_expiry_unix_ms });
-    } else if (state.groupState === "sealed" && cookies.length > 0 && state.relevantTabs.length === 0) {
-      actions.push(() => removeAllCookies(group));
-    } else if (summary.reconciliation_required) {
-      actions.push(() => requestEviction(loaded, group, "startup_reconciliation", state.leaseId));
+    } else if (startup.action === "evict") {
+      actions.push(() => requestEviction(loaded, group, startup.reason, state.leaseId));
+    } else if (startup.action === "schedule_expiry") {
+      chrome.alarms.create(alarmName("expiry", group.id), { when: startup.when });
+    } else if (startup.action === "clean_sealed") {
+      // A cookie event can race the first handshake/service-worker wake and be observed before a
+      // config is available. `sealed` is a stronger invariant than tab presence: the browser store
+      // must be empty even when a protected tab is already open. Clean first; the open tab is sent
+      // through the ordinary unlock gate by the reconciliation/navigation flow afterwards.
+      actions.push(async () => {
+        await removeAllCookies(group);
+        const remaining = (await getCookies(group)).length;
+        if (remaining !== 0) {
+          const latestRoot = await loadState(loaded);
+          const latestState = requiredGroupState(latestRoot, group.id);
+          latestState.groupState = "degraded";
+          latestState.reconciliation = true;
+          latestState.lastEvent = "sealed_startup_cleanup_failed";
+          await saveState(latestRoot);
+          await queueMonitorEvent("reconciliation_failed", group.id);
+        } else if (state.relevantTabs.length > 0) {
+          const tabId = state.relevantTabs[0];
+          if (tabId !== undefined) await offerUnlockOnTab(loaded, group, tabId);
+        }
+      });
     }
   }
   await saveState(root);
@@ -665,15 +754,16 @@ async function injectCookies(loaded: LoadedConfig, group: AccountGroup, payload:
     let missing: CookieRecord[] = [];
     for (let attempt = 0; attempt < 3 && !roundtripMatched; attempt += 1) {
       if (attempt > 0) await new Promise((resolve) => setTimeout(resolve, 100));
-      const actualIdentities = new Set((await getCookies(group)).map(cookieIdentity));
-      missing = expectedRecords.filter((record) => !actualIdentities.has(cookieIdentity(record)));
+      const actualByIdentity = new Map((await getCookies(group)).map((cookie) => [cookieIdentity(cookie), cookie]));
+      missing = expectedRecords.filter((record) => {
+        const actual = actualByIdentity.get(cookieIdentity(record));
+        return actual === undefined || !cookieRoundTripMatches(record, actual);
+      });
       roundtripMatched = missing.length === 0;
     }
     if (!roundtripMatched) {
       health = "cookie_roundtrip_failed";
-      for (const record of missing) {
-        console.error(`FCP roundtrip missing cookie group=${group.scope} name=${record.name} domain=${record.domain} path=${record.path}`);
-      }
+      console.error(`FCP cookie roundtrip mismatch count=${missing.length}`);
     } else {
       // ADR-020: a verified round-trip is the whole success condition. No site-specific health
       // check runs, so the extension never has to decide whether a restored session is "real".
@@ -715,6 +805,70 @@ async function injectCookies(loaded: LoadedConfig, group: AccountGroup, payload:
   await saveState(root);
   send("inject.result", { account_group_id: group.id, lease_id: leaseId, success, health_check: health });
   if (!success) setTimeout(() => enqueue(() => requestEviction(loaded, group, "startup_reconciliation", leaseId)), 100);
+}
+
+async function receiveInjectChunk(loaded: LoadedConfig, group: AccountGroup, payload: Record<string, unknown>, root: RuntimeState, state: GroupRuntimeState): Promise<void> {
+  const leaseId = requiredString(payload, "lease_id");
+  const chunkIndex = requiredInteger(payload, "chunk_index");
+  const chunkCount = requiredInteger(payload, "chunk_count");
+  const cookieCount = requiredInteger(payload, "cookie_count");
+  if (chunkCount < 1 || chunkCount > 65_536 || cookieCount < 0 || cookieCount > 100_000) throw new Error("inject chunk metadata is out of range");
+  if (!Array.isArray(payload.cookies)) throw new Error("cookies.inject.chunk cookies must be an array");
+  let pending = pendingInjectChunks.get(group.id);
+  if (pending === undefined) {
+    if (chunkIndex !== 0) throw new Error("first inject chunk is missing");
+    pending = { leaseId, chunkCount, cookieCount, nextChunk: 0, cookies: [] };
+    pendingInjectChunks.set(group.id, pending);
+  }
+  if (pending.leaseId !== leaseId || pending.chunkCount !== chunkCount || pending.cookieCount !== cookieCount || pending.nextChunk !== chunkIndex) {
+    pendingInjectChunks.delete(group.id);
+    throw new Error("inject chunk binding or order mismatch");
+  }
+  const records = payload.cookies as CookieRecord[];
+  if (chunkIndex + 1 < chunkCount && records.length === 0) throw new Error("non-final inject chunk is empty");
+  if (pending.cookies.length + records.length > cookieCount) throw new Error("inject cookie total exceeds declaration");
+  pending.cookies.push(...records);
+  pending.nextChunk += 1;
+  if (pending.nextChunk < chunkCount) return;
+  pendingInjectChunks.delete(group.id);
+  if (pending.cookies.length !== cookieCount) throw new Error("inject cookie total does not match declaration");
+  await injectCookies(loaded, group, { lease_id: leaseId, cookies: pending.cookies }, root, state);
+}
+
+function sendCookieSnapshotChunks(groupId: string, leaseId: string | undefined, operationId: string, cookies: CookieRecord[]): void {
+  const chunks = chunkCookieRecords(cookies);
+  for (let chunkIndex = 0; chunkIndex < chunks.length; chunkIndex += 1) {
+    send("cookies.snapshot.chunk", {
+      account_group_id: groupId,
+      lease_id: leaseId,
+      operation_id: operationId,
+      chunk_index: chunkIndex,
+      chunk_count: chunks.length,
+      cookie_count: cookies.length,
+      cookies: chunks[chunkIndex],
+    });
+  }
+}
+
+export function chunkCookieRecords(cookies: CookieRecord[]): CookieRecord[][] {
+  if (cookies.length === 0) return [[]];
+  const encoder = new TextEncoder();
+  const chunks: CookieRecord[][] = [];
+  let current: CookieRecord[] = [];
+  let currentBytes = 2;
+  for (const cookie of cookies) {
+    const bytes = encoder.encode(JSON.stringify(cookie)).byteLength + (current.length === 0 ? 0 : 1);
+    if (bytes > COOKIE_CHUNK_TARGET_BYTES) throw new Error("one cookie exceeds the chunk byte limit");
+    if (current.length > 0 && currentBytes + bytes > COOKIE_CHUNK_TARGET_BYTES) {
+      chunks.push(current);
+      current = [];
+      currentBytes = 2;
+    }
+    current.push(cookie);
+    currentBytes += bytes;
+  }
+  chunks.push(current);
+  return chunks;
 }
 
 async function finishEviction(loaded: LoadedConfig, group: AccountGroup, payload: Record<string, unknown>, root: RuntimeState, state: GroupRuntimeState): Promise<void> {
@@ -910,15 +1064,30 @@ class NativeClient {
     const port = chrome.runtime.connectNative(HOST_NAME);
     this.port = port;
     port.onMessage.addListener((raw) => enqueue(() => this.receive(raw)));
-    port.onDisconnect.addListener(() => { this.port = undefined; enqueue(this.onDisconnect); });
-    this.send("handshake", { protocol_version: PROTOCOL_VERSION, extension_id: chrome.runtime.id, cached_config_digest: this.cachedConfigDigest ?? null });
+    port.onDisconnect.addListener(() => {
+      // Chrome reports native-host startup/protocol failures through runtime.lastError. Merely
+      // reading it acknowledges the error and prevents an "Unchecked runtime.lastError" console
+      // flood; state recovery remains centralized in onDisconnect and exposes no provider text.
+      void chrome.runtime.lastError?.message;
+      this.port = undefined;
+      enqueue(this.onDisconnect);
+    });
+    this.send("handshake", {
+      protocol_version: PROTOCOL_VERSION,
+      extension_id: chrome.runtime.id,
+      extension_version: EXTENSION_VERSION,
+      min_host_version: MIN_HOST_VERSION,
+      capabilities: [...REQUIRED_CAPABILITIES],
+      cached_config_digest: this.cachedConfigDigest ?? null,
+    });
   }
-  send(type: string, payload: Record<string, unknown>): void {
+  send(type: string, payload: Record<string, unknown>): string {
     const port = this.port;
     if (port === undefined) throw new Error("native host is not connected");
     this.outgoing += 1;
+    const requestId = crypto.randomUUID();
     try {
-      port.postMessage({ v: PROTOCOL_VERSION, conn_nonce: this.nonce, seq: this.outgoing, id: crypto.randomUUID(), type, payload });
+      port.postMessage({ v: PROTOCOL_VERSION, conn_nonce: this.nonce, seq: this.outgoing, id: requestId, type, payload });
     } catch (error: unknown) {
       // The port can die between the connected check and this write (a service-worker restart
       // after a permission grant does exactly that). Drop it here so the reconnect path runs
@@ -926,18 +1095,42 @@ class NativeClient {
       this.port = undefined;
       throw error instanceof Error ? error : new Error("native host write failed");
     }
+    return requestId;
   }
   private async receive(raw: unknown): Promise<void> {
     if (!isEnvelope(raw)) throw new Error("malformed native envelope");
     if (raw.v !== PROTOCOL_VERSION || raw.conn_nonce !== this.nonce || raw.seq !== this.incoming + 1) throw new Error("native nonce/sequence validation failed");
     this.incoming = raw.seq;
-    await this.onMessage({ type: raw.type, payload: raw.payload });
+    await this.onMessage({ type: raw.type, payload: raw.payload, requestId: raw.id });
   }
 }
 
-function send(type: string, payload: Record<string, unknown>): void {
+function send(type: string, payload: Record<string, unknown>): string {
   if (!client?.connected) throw new Error("native host is not connected");
-  client.send(type, payload);
+  return client.send(type, payload);
+}
+
+function startConfigOperation(type: "group.add" | "group.remove" | "group.set_policy", payload: Record<string, unknown>): string {
+  const groupId = typeof payload.account_group_id === "string" ? payload.account_group_id : undefined;
+  const scope = type === "group.remove" && groupId !== undefined
+    ? loadedConfig?.config.groups.find((group) => group.id === groupId)?.scope
+    : undefined;
+  const requestId = send(type, payload);
+  configOperations.set(requestId, { type, scope, status: "pending", updatedAt: Date.now() });
+  return requestId;
+}
+
+async function removeUnusedScopePermission(scope: string): Promise<void> {
+  const origins = [`*://${scope}/*`, `*://*.${scope}/*`];
+  const stillRequired = loadedConfig?.config.groups.some((group) =>
+    navigationPatterns(group).some((pattern) => origins.includes(pattern))) === true;
+  if (stillRequired) return;
+  await new Promise<void>((resolve) => {
+    chrome.permissions.remove({ origins }, () => {
+      void chrome.runtime.lastError?.message;
+      resolve();
+    });
+  });
 }
 
 async function queueMonitorEvent(signal: MonitorSignal, groupId?: string, flush = true): Promise<void> {
@@ -1122,7 +1315,7 @@ function hasScopePermission(group: AccountGroup): Promise<boolean> {
 
 async function relevantTabIds(group: AccountGroup): Promise<number[]> {
   const tabs = await callbackPromise<chrome.tabs.Tab[]>((done) => chrome.tabs.query({ url: navigationPatterns(group) }, done));
-  return tabs.flatMap((tab) => tab.id !== undefined && groupForUrl({ version: 2, compatibility_version: 2, groups: [group] }, tab.url) !== undefined ? [tab.id] : []);
+  return tabs.flatMap((tab) => tab.id !== undefined && groupForUrl({ version: 3, compatibility_version: 3, groups: [group] }, tab.url) !== undefined ? [tab.id] : []);
 }
 
 
@@ -1141,8 +1334,11 @@ async function loadState(loaded: LoadedConfig): Promise<RuntimeState> {
   return root;
 }
 
-function saveState(state: RuntimeState): Promise<void> { return callbackPromise<void>((done) => chrome.storage.session.set({ [STATE_KEY]: state }, () => done())); }
-function storageGet(key: string): Promise<Record<string, unknown>> { return callbackPromise((done) => chrome.storage.session.get(key, done)); }
+// Critical transition intent must survive an MV3 worker stop, browser restart, permission grant,
+// and extension reload. This state contains no cookie values; secrets remain only in the native
+// vault or the browser cookie store, so durable local storage is safe for the controller metadata.
+function saveState(state: RuntimeState): Promise<void> { return callbackPromise<void>((done) => chrome.storage.local.set({ [STATE_KEY]: state }, () => done())); }
+function storageGet(key: string): Promise<Record<string, unknown>> { return callbackPromise((done) => chrome.storage.local.get(key, done)); }
 async function getLocal(key: string): Promise<unknown> { return (await callbackPromise<Record<string, unknown>>((done) => chrome.storage.local.get(key, done)))[key]; }
 function setLocal(key: string, value: unknown): Promise<void> { return callbackPromise<void>((done) => chrome.storage.local.set({ [key]: value }, () => done())); }
 function createNotification(id: string, options: chrome.notifications.NotificationOptions): Promise<string> { return callbackPromise((done) => chrome.notifications.create(id, options, done)); }
@@ -1168,6 +1364,7 @@ function isEnvelope(value: unknown): value is Envelope { const item = value as P
 function requiredString(value: Record<string, unknown>, key: string): string { const item = value[key]; if (typeof item !== "string") throw new Error(`${key} must be string`); return item; }
 function optionalString(value: Record<string, unknown>, key: string): string | undefined { const item = value[key]; if (item === null || item === undefined) return undefined; if (typeof item !== "string") throw new Error(`${key} must be string or null`); return item; }
 function requiredNumber(value: Record<string, unknown>, key: string): number { const item = value[key]; if (typeof item !== "number" || !Number.isFinite(item)) throw new Error(`${key} must be number`); return item; }
+function requiredInteger(value: Record<string, unknown>, key: string): number { const item = requiredNumber(value, key); if (!Number.isSafeInteger(item) || item < 0) throw new Error(`${key} must be a non-negative integer`); return item; }
 function callbackPromise<T>(invoke: (done: (value: T) => void) => void): Promise<T> { return new Promise((resolve, reject) => invoke((value) => { const error = chrome.runtime.lastError; error === undefined ? resolve(value) : reject(new Error(error.message ?? "Chrome API failed")); })); }
 function delay(milliseconds: number): Promise<void> { return new Promise((resolve) => setTimeout(resolve, milliseconds)); }
 function unique(values: number[]): number[] { return [...new Set(values)]; }

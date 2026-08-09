@@ -42,4 +42,5 @@ export const tr: Record<string, string> = {
   "policy.critical": "Kritik — 5 dk kira · 1 dk boşta · anında tahliye",
   "policy.balanced": "Dengeli — 10 dk kira · 5 dk boşta · 2 dk bekleme",
   "policy.convenient": "Kullanışlı — 30 dk kira · 15 dk boşta · 5 dk bekleme",
+  "policy.monitor": "Yalnız izle — cookie kasalama yok",
 };

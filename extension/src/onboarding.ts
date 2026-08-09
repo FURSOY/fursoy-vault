@@ -1,7 +1,7 @@
 import { translate, type Locale } from "./i18n.js";
 import { currentLocale } from "./locale.js";
 
-type PolicyLevel = "critical" | "balanced" | "convenient";
+type PolicyLevel = "critical" | "balanced" | "convenient" | "monitor";
 
 // GitHub always redirects this exact URL to the latest release's same-named asset — see the
 // matching comment in native-host/install/package-release.ps1, which is what must keep producing
@@ -76,6 +76,16 @@ function send(message: Record<string, unknown>): Promise<Record<string, unknown>
   });
 }
 
+async function awaitConfigAck(response: Record<string, unknown> | undefined): Promise<Record<string, unknown> | undefined> {
+  if (response?.pending !== true || typeof response.requestId !== "string") return response;
+  for (let attempt = 0; attempt < 50; attempt += 1) {
+    await new Promise((resolve) => { setTimeout(resolve, 100); });
+    const status = await send({ type: "popup.operation", requestId: response.requestId });
+    if (status?.pending !== true) return status;
+  }
+  return { ok: false, error: "operation_timeout" };
+}
+
 function requestScopePermission(scope: string): Promise<boolean> {
   return new Promise((resolve) => {
     chrome.permissions.request({ origins: [`*://${scope}/*`, `*://*.${scope}/*`] }, (granted) => {
@@ -132,7 +142,7 @@ async function addFirstSite(): Promise<void> {
       await send({ type: "popup.cancelProtect" });
       return showAddsiteError("onboarding.addsite.error.permission");
     }
-    const response = await send({ type: "popup.protect" });
+    const response = await awaitConfigAck(await send({ type: "popup.protect" }));
     if (response?.ok !== true) return showAddsiteError("onboarding.addsite.error.generic");
     showStep(stepDone);
   } catch { showAddsiteError("onboarding.addsite.error.generic"); }

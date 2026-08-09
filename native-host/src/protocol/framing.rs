@@ -60,6 +60,14 @@ mod tests {
             message: Message::Handshake(Handshake {
                 protocol_version: PROTOCOL_VERSION,
                 extension_id: "test".into(),
+                extension_version: "0.3.1".into(),
+                min_host_version: "0.3.1".into(),
+                capabilities: vec![
+                    "chunked_cookies".into(),
+                    "request_correlation".into(),
+                    "config_v3".into(),
+                    "audit_recovery".into(),
+                ],
                 cached_config_digest: None,
             }),
         };
