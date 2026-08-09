@@ -5,7 +5,12 @@ use windows::Win32::Security::Cryptography::{
 
 use crate::{FcpError, FcpResult};
 
-const AUDIT_ENTROPY: &[u8] = b"FURSOY.CookieProtector.Audit.v2";
+// Renamed pre-launch (2026-08-08, ADR-023) while it is still free to do so: this is DPAPI
+// entropy, not a display string. Changing it changes the derived key, making every existing
+// DPAPI-protected audit blob (audit-key.dpapi, audit-anchor.dpapi) undecryptable on next start —
+// deliberately accepted now because no real user data exists yet; do not rename again after
+// launch without a real migration plan.
+const AUDIT_ENTROPY: &[u8] = b"FURSOY.Vault.Audit.v2";
 
 pub fn protect(plaintext: &[u8]) -> FcpResult<Vec<u8>> {
     transform(plaintext, true)

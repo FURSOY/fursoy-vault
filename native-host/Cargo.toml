@@ -9,8 +9,8 @@ name = "fursoy_native_host"
 path = "src/lib.rs"
 
 [[bin]]
-name = "fcp-host"
-path = "src/bin/fcp-host.rs"
+name = "fursoy-vault-host"
+path = "src/bin/fursoy-vault-host.rs"
 
 [dependencies]
 aes-gcm = "0.10.3"

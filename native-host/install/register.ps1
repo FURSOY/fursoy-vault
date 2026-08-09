@@ -20,10 +20,10 @@ if (Test-Path -LiteralPath $legacyRegistryPath) {
 $profile = if ($Configuration -eq "Release") { "release" } else { "debug" }
 & cargo build --manifest-path (Join-Path $repoRoot "native-host\Cargo.toml") $(if ($Configuration -eq "Release") { "--release" })
 if ($LASTEXITCODE -ne 0) { throw "cargo build failed" }
-$sourceExe = Join-Path $repoRoot "native-host\target\$profile\fcp-host.exe"
+$sourceExe = Join-Path $repoRoot "native-host\target\$profile\fursoy-vault-host.exe"
 $installRoot = Join-Path $dataRoot "native-host"
 New-Item -ItemType Directory -Force -Path $installRoot | Out-Null
-$installedExe = Join-Path $installRoot "fcp-host.exe"
+$installedExe = Join-Path $installRoot "fursoy-vault-host.exe"
 Copy-Item -LiteralPath $sourceExe -Destination $installedExe -Force
 $configRoot = Join-Path $dataRoot "config"
 New-Item -ItemType Directory -Force -Path $configRoot | Out-Null

@@ -20,7 +20,7 @@ Implemented:
   switches without retaining the command line, port or profile path;
 - failure isolation: a group-level operation error does not mutate another group's runtime.
 
-The installer seeds `%LOCALAPPDATA%\FursoyCookieProtector\config\account-groups.json` only when it
+The installer seeds `%LOCALAPPDATA%\FursoyVault\config\account-groups.json` only when it
 does not already exist; once sites can be added at runtime (ADR-020) that file is user data and a
 reinstall must not overwrite it. The executable still carries a bundled config as a first-run
 fallback.

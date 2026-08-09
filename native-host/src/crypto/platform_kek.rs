@@ -16,8 +16,14 @@ use zeroize::Zeroize;
 use crate::crypto::aead::{DEK_BYTES, SecretDek};
 use crate::{FcpError, FcpResult};
 
-const KEK_NAME: PCWSTR = w!("FURSOY.CookieProtector.KEK.v1");
-pub const KEK_KEY_ID: [u8; 16] = *b"FCP-KEK-v1\0\0\0\0\0\0";
+// Renamed pre-launch (2026-08-08, ADR-023) while it is still free to do so: KEK_NAME is the
+// actual TPM/Platform Crypto Provider key name Windows uses to locate the persisted key, and
+// KEK_KEY_ID is stored alongside every wrapped DEK to identify which key wrapped it. Changing
+// either orphans any existing TPM-backed key and permanently undecrypts every already-vaulted
+// session — deliberately accepted now because no real user data exists yet; do not rename again
+// after launch without a real migration plan.
+const KEK_NAME: PCWSTR = w!("FURSOY.Vault.KEK.v1");
+pub const KEK_KEY_ID: [u8; 16] = *b"VAULT-KEK-v1\0\0\0\0";
 pub const RSA_BITS: u32 = 2048;
 pub const WRAPPED_DEK_BYTES: usize = 256;
 const NTE_BAD_KEYSET: u32 = 0x8009_0016;
