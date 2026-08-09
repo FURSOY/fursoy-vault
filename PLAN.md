@@ -3431,3 +3431,108 @@ bir saldırı yüzeyi açardı. Kullanıcı ilk kurulumla aynı şekilde, kendi 
 - Sürüm karşılaştırması basit bir nokta-ayrılmış sayısal karşılaştırma (`compareVersions`) —
   ön-sürüm etiketleri (`-beta`, `-rc1` gibi) doğru sıralanmaz. v1 için yeterli, yalnızca
   `X.Y.Z` etiketleri kullanılacaksa sorun değil.
+
+**Ek (aynı gün): kurulum paketi.** ADR-025'te "sıradaki iş" olarak bırakılan kısım — `cargo`/Rust
+gerektirmeyen, gerçek bir kullanıcının indirip çalıştırabileceği bir paket:
+
+- `native-host/install/release/` — kullanıcıya giden şablon: `install.ps1` (register.ps1'in
+  cargo-build adımı olmadan sürümü — yanına konan `fursoy-vault-host.exe`'yi kopyalar, manifest/
+  registry'yi yazar), `install.bat` (çift tıkla çalışsın diye `-ExecutionPolicy Bypass` sarmalayıcı),
+  `uninstall.ps1`/`uninstall.bat`, `README.txt` (Türkçe, SmartScreen uyarısının neden çıktığını ve
+  imza olmadığını dürüstçe açıklıyor).
+- `native-host/install/package-release.ps1` — bakımcının (benim/kullanıcının) çalıştırdığı, kaynak
+  koddan `cargo build --release` yapıp yukarıdaki şablonla birlikte
+  `fursoy-vault-<sürüm>-windows.zip`'i üreten yardımcı betik. Uçtan uca test edildi (repo içinde
+  çalıştığı için sandbox yönlendirmesi sorunu yok — bkz. `feedback-sandbox-redirects-localappdata`):
+  zip doğru 6 dosyayı içeriyor, `cargo metadata`'dan sürüm okuyor.
+- **Henüz yapılmadı, bilerek:** gerçek bir GitHub Release yayınlamak. Kullanıcı sürüm numarasının
+  gerçek yayında `1.0.0`'a çekilmesini istiyor (şu an `0.3.1`); bu yüzden paket üretme mekanizması
+  hazır ama ilk gerçek Release, sürüm numarası kesinleştiğinde atılacak.
+
+---
+
+### ADR-026 — Onboarding sihirbazı ve i18n çalışma zamanının ilk gerçek kullanımı
+
+**Durum:** Kabul edildi ve uygulandı (2026-08-09).
+
+**Bağlam:** Kurulum önce (ADR-025 eki), companion app dağıtım paketi ondan sonra hazırlandı;
+sırada onboarding'in kendisi kaldı. Kullanıcı üç açık soruyu netleştirdi: (1) companion kurulum
+adımı onboarding'e dahil edilecek, (2) aktif sekmeden alan adı otomatik doldurulmayacak (kullanıcı
+kendi yazacak), (3) metinler i18n motoruna bağlanacak — onboarding, motorun ilk gerçek kullanım
+yeri oluyor.
+
+**Uygulama detayları:**
+
+- **`extension/src/locale.ts`** (yeni) — `i18n.ts`'in saf kalmasını sağlayan, `chrome.storage`/
+  `chrome.i18n`'e dokunan ince katman. `currentLocale()`: kayıtlı bir tercih varsa onu döner;
+  yoksa `chrome.i18n.getUILanguage()`'i `resolveLocale()`'dan geçirip bir kereye mahsus tespit
+  edip kaydeder. Dil değiştirme ekranı (ayarlar sayfasında) bu turda **yapılmadı** — yalnızca
+  ilk-çalıştırma tespiti var.
+- **`locales/tr.ts` ve `locales/en.ts`** ilk kez gerçek anahtarlarla dolduruldu (yalnızca
+  onboarding'e ait anahtarlar) — popup/options/unlock hâlâ hardcoded Türkçe, ayrı bir iş olarak
+  duruyor (ADR-022'nin kapsamı aynen geçerli).
+- **`extension/onboarding.html`/`onboarding.css`/`src/onboarding.ts`** (yeni) — dört adımlı,
+  tek sayfalık akış: (1) anlatım, (2) companion uygulama kurulumu (indirme linki + "bağlantıyı
+  kontrol et" düğmesi, bağlandığında otomatik ilerler, atlanabilir), (3) ilk site ekleme (boş
+  alan adı kutusu — kullanıcı kendi yazar; `popup.ts`'teki `scopeOverlapsExisting` ön kontrolü
+  ve aynı stageProtect/izin-iste/protect akışı burada da tekrar kullanıldı, atlanabilir),
+  (4) bitiş. `chrome.runtime.onInstalled` (`reason === "install"`) tetikliyor, yeni sekmede açılıyor.
+- Onboarding, `popup.state`/`popup.stageProtect`/`popup.protect` mesajlarını **aynen** popup/
+  options gibi kullanıyor — `background.ts`'in mesaj yönlendirmesi gönderen sayfaya değil mesaj
+  tipine göre çalıştığı için hiçbir yeni background kodu gerekmedi.
+- Koruma düzeyi açıklama metinleri (`policy.critical` vb.) şu anki gerçek idle değerlerini
+  (1/5/15 dk) yansıtıyor — henüz uygulanmamış olan idle/policy yeniden tasarımı (5/15/60 dk,
+  arkaplan-sekmesi tetikleyicisi) koda dökülünce bu metinler de güncellenmeli.
+- `chrome.d.ts`'e (elle tutulan, minimal ambient tip dosyası) `runtime.onInstalled`, `tabs.create`,
+  `i18n.getUILanguage` eklendi — daha önce hiç kullanılmıyorlardı.
+
+**Kabul edilen sınırlar:**
+
+- Ayarlar sayfasında dil değiştirme arayüzü yok — yalnızca ilk-çalıştırma otomatik tespiti var.
+- Companion kurulum adımı henüz gerçek bir GitHub Release'e bağlı değil (yukarıdaki paket henüz
+  yayınlanmadı) — indirme linki şu an boş/404 dönebilir, ilk Release atılınca çalışır hale gelir.
+- Idle/policy yeniden tasarımı henüz koda dökülmedi; onboarding'in policy açıklamaları bunu
+  yansıtmıyor, ayrı bir iş olarak sırada.
+
+**Ek (aynı gün, canlı hata ayıklamayla): onboarding'in kendisi gerçek, ciddi bir sıralama
+kilitlenmesi ortaya çıkardı.** Onboarding sayfası kurulumda otomatik açılınca (`chrome.tabs.create`),
+tarayıcının kendi `chrome.tabs.onUpdated` olayı (sekme yükleniyor/tamamlandı) **ilk el sıkışma
+tamamlanmadan önce** ateşleniyordu. Bu dinleyici `await awaitConfig()` çağırıyordu — bu promise
+yalnızca bir config hiç "adopt" edilmemişse (önbellek yok, henüz başarılı bir handshake yok)
+**asla çözülmeyen** bir promise. Sonuç: bu görev `enqueue()` sırasına ilk giren oldu ve sonsuza
+kadar takıldı; el sıkışma cevabını işleyip config'i adopte edecek görev de **aynı sıraya, onun
+arkasına** girdiği için hiç çalışamadı — döngüsel bir kilitlenme. Tek bir semptomu vardı: her şey
+sessizce, hatasız takılı kalıyordu (extension, popup, onboarding — hepsi aynı paylaşılan sıraya
+bağımlı). Ölçülerek bulundu: Rust tarafına adım adım teşhis logu eklenip (`native-host/src/diag.rs`,
+artık kaldırıldı) host'un el sıkışma cevabını **başarıyla yazdığı** kanıtlandı; sonra extension
+tarafına da adım adım log eklenip (`enqueue()`'nin kendisine kadar), tam olarak hangi görevin
+("task 1") başlayıp hiç bitmediği görüldü.
+
+Aynı desenin (`await awaitConfig()`'in ilk el sıkışmadan önce ateşlenebilecek bir olay
+dinleyicisinde kullanılması) beş ayrı yerde daha olduğu bulundu ve hepsi düzeltildi:
+`chrome.webNavigation.onBeforeNavigate`, `chrome.tabs.onUpdated`, `chrome.tabs.onRemoved`,
+`chrome.idle.onStateChanged`, `chrome.alarms.onAlarm` (grup alarmları), `chrome.cookies.onChanged`,
+ve `NativeClient`'in `onDisconnect` kapanışı (bu sonuncusu zaten kısmen ADR-025'te düzeltilmişti,
+tam tutarlılık için tamamlandı). Hepsi aynı düzeltmeyi aldı: `await awaitConfig()` yerine
+doğrudan modül değişkeni `loadedConfig` okunuyor, `undefined` ise görev sessizce çıkıyor (config
+henüz yoksa yapacak bir şey de yok, sonraki gerçek olay zaten yeniden dener) — bloklamıyor.
+`handleHandshakeAck`, `config.updated` işleyicisi ve `monitor.alert` gibi **yalnızca host'tan bir
+mesaj geldikten sonra** çalışabilen yerler dokunulmadı çünkü protokol zaten el sıkışmayı ilk
+mesaj olarak zorunlu kılıyor (`host_loop.rs::validate_first_envelope`), o yollarda config her
+zaman zaten adapte edilmiş oluyor.
+
+**Bu muhtemelen daha önce hiç fark edilmemişti çünkü:** önceki tüm testler önbellekte zaten bir
+config varken (`chrome.storage.local` boş değilken) yapılıyordu — o zaman `awaitConfig()` her
+zaman anında çözülüyordu. Bunu ortaya çıkaran şey, tam olarak bugünkü iki değişikliğin kesişimi
+oldu: (1) sıfır-grup mimarisi + tohum config'in boşaltılması (ADR-024) gerçek bir "hiç config
+yok" başlangıç durumu yarattı, (2) onboarding'in kendisi kurulumda otomatik bir sekme açıp
+`tabs.onUpdated`'ı bu durumda ilk kez gerçekten tetikledi. `background.ts::enqueue()`'nin gerçek
+hatayı loglamayan eski hâli (bugün başında düzeltildi) bu kilitlenmeyi aylarca görünmez
+bırakabilirdi.
+
+**Ek: "İndir" düğmesi artık Release sayfasına değil, doğrudan dosyaya gidiyor.** GitHub'ın
+`releases/latest/download/<dosya-adı>` deseni, o isimdeki asset her zaman en son Release'de bulunduğu
+sürece kalıcı, sürümden bağımsız bir indirme linki sağlıyor. `package-release.ps1` artık zip dosyasını
+sürüm numarasız (`fursoy-vault-windows.zip`) üretiyor — Release'in kendi etiketi (`vX.Y.Z`) yine
+normal şekilde sürümlü kalıyor, yalnızca asset dosya adı sabit. Bu ismi her Release'de aynı tutmak
+gerekiyor, yoksa onboarding'in indirme linki kırılır.
