@@ -130,7 +130,10 @@ impl AccountGroupsConfig {
                 "unsupported account-group config version".into(),
             ));
         }
-        if self.groups.is_empty() || self.groups.len() > MAX_GROUPS {
+        // Zero groups is a valid, expected state pre-launch (2026-08-08): a fresh install starts
+        // with none configured and the user adds their first one through onboarding, which
+        // requires the host to start successfully before any group exists.
+        if self.groups.len() > MAX_GROUPS {
             return Err(FcpError::Format(
                 "account-group count is outside bounds".into(),
             ));
@@ -214,12 +217,12 @@ mod tests {
     use super::*;
 
     #[test]
-    fn bundled_config_is_valid_and_has_two_isolated_groups() {
+    fn bundled_config_is_valid_and_starts_empty() {
+        // A real install ships with no pre-seeded sites — Wikipedia/localhost were dev-only
+        // testing scopes, removed pre-launch (2026-08-08). Users add their own via the extension.
         let config: AccountGroupsConfig = serde_json::from_slice(BUNDLED_CONFIG).unwrap();
         config.validate().unwrap();
-        assert_eq!(config.groups.len(), 2);
-        assert_ne!(config.groups[0].id, config.groups[1].id);
-        assert_ne!(config.groups[0].scope, config.groups[1].scope);
+        assert_eq!(config.groups.len(), 0);
     }
 
     fn group(scope: &str) -> AccountGroup {

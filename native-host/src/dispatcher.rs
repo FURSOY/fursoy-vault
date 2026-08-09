@@ -292,11 +292,6 @@ impl NativeHostApp {
         candidate
             .groups
             .retain(|group| group.id != request.account_group_id);
-        if candidate.groups.is_empty() {
-            return Ok(vec![Message::ConfigRejected(ConfigRejected {
-                reason: "last_group_cannot_be_removed".into(),
-            })]);
-        }
         candidate.validate()?;
         self.commit_config(candidate)?;
         self.groups.remove(&request.account_group_id);
@@ -930,7 +925,40 @@ mod tests {
         Handshake, MonitorEvent, MonitorSeverity, MonitorSignal, MonitorSource,
     };
 
+    // Two-group fixture, self-contained in the test module: most dispatcher tests want a
+    // deterministic starting point (a scope-overlap test in particular needs a real parent
+    // domain already registered). This used to ride on the bundled production default, but that
+    // now ships empty for a real fresh install (2026-08-08), so tests seed their own copy here
+    // instead of depending on production config content.
     fn test_paths(root: &std::path::Path) -> DataPaths {
+        let account_groups_config = root.join("config/account-groups.json");
+        fs::create_dir_all(account_groups_config.parent().unwrap()).unwrap();
+        fs::write(
+            &account_groups_config,
+            r#"{
+  "version": 2,
+  "compatibility_version": 2,
+  "groups": [
+    {
+      "id": "7a144677-3f5c-4a86-a767-16fd3ca315b8",
+      "display_name": "Test Group A",
+      "scope": "wikipedia.org",
+      "policy_level": "balanced",
+      "eviction_triggers": ["last_tab_closed", "idle", "lock", "expiry", "manual"],
+      "store_policy": "normal_profile"
+    },
+    {
+      "id": "c2b71d84-6d3f-45d4-a184-994083ba7659",
+      "display_name": "Test Group B",
+      "scope": "localhost",
+      "policy_level": "critical",
+      "eviction_triggers": ["last_tab_closed", "idle", "lock", "expiry", "manual"],
+      "store_policy": "normal_profile"
+    }
+  ]
+}"#,
+        )
+        .unwrap();
         DataPaths {
             root: root.to_path_buf(),
             vault_groups: root.join("vault/groups"),
@@ -938,7 +966,7 @@ mod tests {
             capability_ledgers: root.join("leases/capabilities"),
             legacy_lease_metadata: root.join("leases/mvp-group.json"),
             legacy_capability_ledger: root.join("leases/capability-ledger.json"),
-            account_groups_config: root.join("config/account-groups.json"),
+            account_groups_config,
             audit_directory: root.join("audit"),
             hello_credential: root.join("hello-credential.json"),
         }
@@ -1083,7 +1111,10 @@ mod tests {
     }
 
     #[test]
-    fn removing_the_last_group_is_refused() {
+    fn removing_the_last_group_leaves_zero_groups_configured() {
+        // Zero groups is a valid state pre-launch (2026-08-08): a fresh install starts empty and
+        // the user adds their first group through onboarding, so removal must not be blocked at
+        // one remaining group either.
         let root = std::env::temp_dir().join(format!("fcp-group-last-{}", Uuid::new_v4()));
         let paths = test_paths(&root);
         let mut app = handshaken(&paths);
@@ -1098,12 +1129,10 @@ mod tests {
             }))
             .unwrap();
         match &output[0] {
-            Message::ConfigRejected(rejected) => {
-                assert_eq!(rejected.reason, "last_group_cannot_be_removed");
-            }
-            other => panic!("expected config.rejected, got {other:?}"),
+            Message::ConfigUpdated(_) => {}
+            other => panic!("expected config.updated, got {other:?}"),
         }
-        assert_eq!(app.groups.len(), 1);
+        assert_eq!(app.groups.len(), 0);
         fs::remove_dir_all(root).unwrap();
     }
 

@@ -1,22 +1,5 @@
 {
   "version": 2,
   "compatibility_version": 2,
-  "groups": [
-    {
-      "id": "7a144677-3f5c-4a86-a767-16fd3ca315b8",
-      "display_name": "Wikipedia",
-      "scope": "wikipedia.org",
-      "policy_level": "balanced",
-      "eviction_triggers": ["last_tab_closed", "idle", "lock", "expiry", "manual"],
-      "store_policy": "normal_profile"
-    },
-    {
-      "id": "c2b71d84-6d3f-45d4-a184-994083ba7659",
-      "display_name": "Controlled Session App",
-      "scope": "localhost",
-      "policy_level": "critical",
-      "eviction_triggers": ["last_tab_closed", "idle", "lock", "expiry", "manual"],
-      "store_policy": "normal_profile"
-    }
-  ]
+  "groups": []
 }

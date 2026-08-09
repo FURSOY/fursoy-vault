@@ -42,7 +42,10 @@ export function policyParameters(level: PolicyLevel): PolicyParameters {
 // Q24: the host owns the config. The extension ships none of its own and validates whatever it
 // is handed, so a malformed or tampered config stops the extension rather than being trusted.
 export function validateConfig(config: AccountGroupsConfig): void {
-  if (config.version !== 2 || config.compatibility_version !== 2 || !Array.isArray(config.groups) || config.groups.length < 1 || config.groups.length > 32) {
+  // Zero groups is valid pre-launch (2026-08-08, ADR-024): a fresh install starts empty and the
+  // user adds their first group through onboarding — mirrors the host-side relaxation in
+  // native-host/src/config.rs.
+  if (config.version !== 2 || config.compatibility_version !== 2 || !Array.isArray(config.groups) || config.groups.length > 32) {
     throw new Error("unsupported account-group config");
   }
   const groupIds = new Set<string>();
