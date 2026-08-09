@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="tr">
+  <head>
+    <meta charset="utf-8" />
+    <link rel="stylesheet" href="theme.css" />
+    <link rel="stylesheet" href="onboarding.css" />
+    <title>FURSOY Vault</title>
+  </head>
+  <body>
+    <main>
+      <h1>FURSOY Vault</h1>
+
+      <section id="step-welcome">
+        <h2 id="welcome-title"></h2>
+        <p id="welcome-body"></p>
+        <button id="welcome-next" type="button" class="primary"></button>
+      </section>
+
+      <section id="step-install" hidden>
+        <h2 id="install-title"></h2>
+        <p id="install-body"></p>
+        <a id="install-download" class="primary button-link" href="#" download rel="noopener"></a>
+        <button id="install-check" type="button"></button>
+        <p id="install-status" class="hint" hidden></p>
+        <button id="install-skip" type="button" class="link-button"></button>
+      </section>
+
+      <section id="step-addsite" hidden>
+        <h2 id="addsite-title"></h2>
+        <p id="addsite-body"></p>
+        <form id="addsite-form" autocomplete="off">
+          <label id="addsite-scope-label" for="addsite-scope"></label>
+          <input id="addsite-scope" type="text" spellcheck="false" autocomplete="off" />
+          <label id="addsite-policy-label" for="addsite-policy"></label>
+          <select id="addsite-policy">
+            <option value="critical" data-key="policy.critical"></option>
+            <option value="balanced" selected data-key="policy.balanced"></option>
+            <option value="convenient" data-key="policy.convenient"></option>
+          </select>
+          <p id="addsite-error" class="warning" hidden></p>
+          <button id="addsite-submit" type="submit" class="primary"></button>
+        </form>
+        <button id="addsite-skip" type="button" class="link-button"></button>
+      </section>
+
+      <section id="step-done" hidden>
+        <h2 id="done-title"></h2>
+        <p id="done-body"></p>
+        <button id="done-finish" type="button" class="primary"></button>
+      </section>
+    </main>
+    <script type="module" src="dist/onboarding.js"></script>
+  </body>
+</html>

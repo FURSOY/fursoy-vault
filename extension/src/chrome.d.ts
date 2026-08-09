@@ -12,15 +12,21 @@ declare namespace chrome {
     const onMessage: { addListener(callback: (message: unknown, sender: MessageSender, respond: (value: unknown) => void) => boolean | void): void };
     const onStartup: { addListener(callback: () => void): void };
     function openOptionsPage(callback?: () => void): void;
+    interface InstalledDetails { reason: "install" | "update" | "chrome_update" | "shared_module_update" }
+    const onInstalled: { addListener(callback: (details: InstalledDetails) => void): void };
   }
   namespace tabs {
     interface Tab { id?: number; url?: string; status?: "loading" | "complete"; active?: boolean }
     function query(query: { url?: string[]; active?: boolean; currentWindow?: boolean }, callback: (tabs: Tab[]) => void): void;
     function get(tabId: number, callback: (tab: Tab) => void): void;
     function update(tabId: number, properties: { url: string }, callback: (tab: Tab) => void): void;
+    function create(properties: { url: string }, callback?: (tab: Tab) => void): void;
     function sendMessage(tabId: number, message: unknown, callback: (response: unknown) => void): void;
     const onRemoved: { addListener(callback: (tabId: number) => void): void };
     const onUpdated: { addListener(callback: (tabId: number, change: { status?: string; url?: string }, tab: Tab) => void): void };
+  }
+  namespace i18n {
+    function getUILanguage(): string;
   }
   namespace webNavigation {
     interface NavigationDetails { tabId: number; frameId: number; url: string }

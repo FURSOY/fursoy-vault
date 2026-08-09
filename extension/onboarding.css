@@ -1,0 +1,107 @@
+body {
+  display: flex;
+  justify-content: center;
+  margin: 0;
+  min-height: 100vh;
+  padding: 3rem 1.5rem;
+}
+
+main {
+  max-width: 30rem;
+  width: 100%;
+}
+
+h1 {
+  font-size: 1.1rem;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+  margin: 0 0 2rem;
+  text-align: center;
+}
+
+h2 {
+  font-size: 1.3rem;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+  margin: 0 0 0.75rem;
+}
+
+p {
+  color: var(--ink-muted);
+  font-size: 0.92rem;
+  line-height: 1.55;
+  margin: 0 0 1.25rem;
+}
+
+label {
+  color: var(--ink-muted);
+  display: block;
+  font-size: 0.8rem;
+  margin: 0 0 0.3rem;
+}
+
+input,
+select {
+  background: var(--surface-high);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  box-sizing: border-box;
+  color: var(--ink);
+  font: inherit;
+  margin: 0 0 1rem;
+  padding: 0.55rem 0.65rem;
+  width: 100%;
+}
+
+button,
+.button-link {
+  background: var(--surface-high);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  box-sizing: border-box;
+  color: var(--ink);
+  cursor: pointer;
+  display: block;
+  font: inherit;
+  padding: 0.65rem;
+  text-align: center;
+  text-decoration: none;
+  width: 100%;
+}
+
+button:disabled {
+  cursor: wait;
+  opacity: 0.6;
+}
+
+.primary {
+  background: var(--accent);
+  border: 0;
+  color: var(--accent-ink);
+  font-weight: 600;
+  margin-top: 0.5rem;
+}
+
+.link-button {
+  background: transparent;
+  border: 0;
+  color: var(--ink-muted);
+  font-size: 0.85rem;
+  margin-top: 0.75rem;
+  padding: 0.4rem;
+}
+
+.hint {
+  font-size: 0.82rem;
+  margin: 0.75rem 0 0;
+}
+
+.warning {
+  background: var(--warning-soft);
+  border-left: 3px solid var(--warning);
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+  color: var(--ink);
+  font-size: 0.85rem;
+  margin: 0 0 1rem;
+  padding: 0.6rem 0.7rem;
+}
