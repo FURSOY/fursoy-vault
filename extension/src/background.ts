@@ -1112,7 +1112,7 @@ function requiredNumber(value: Record<string, unknown>, key: string): number { c
 function callbackPromise<T>(invoke: (done: (value: T) => void) => void): Promise<T> { return new Promise((resolve, reject) => invoke((value) => { const error = chrome.runtime.lastError; error === undefined ? resolve(value) : reject(new Error(error.message ?? "Chrome API failed")); })); }
 function delay(milliseconds: number): Promise<void> { return new Promise((resolve) => setTimeout(resolve, milliseconds)); }
 function unique(values: number[]): number[] { return [...new Set(values)]; }
-function enqueue(task: () => Promise<void>): void { queue = queue.then(task, task).catch(() => console.error("FCP fail-closed controller error")); }
+function enqueue(task: () => Promise<void>): void { queue = queue.then(task, task).catch((error: unknown) => console.error("FCP fail-closed controller error", error)); }
 
 chrome.runtime.onStartup.addListener(() => { void connect(); });
 void connect();

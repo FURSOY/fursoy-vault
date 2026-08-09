@@ -87,6 +87,7 @@ async function addSite(): Promise<void> {
   if (!scope.includes(".") && scope !== "localhost") {
     return showError("Geçerli bir alan adı gir (ör. ornek.com).");
   }
+  if (scopeOverlapsExisting(scope)) return showError(describeError("scope_overlaps_existing"));
   addButton.disabled = true;
   try {
     // Requesting inside the submit handler keeps the user-gesture context Chrome requires.
@@ -129,6 +130,16 @@ async function clearLog(): Promise<void> {
 // Every config mutation is answered asynchronously by the host, so the UI polls until the
 // change it asked for is actually visible rather than reading state once and trusting it.
 let latestGroups: GroupSummary[] = [];
+
+// Mirrors the host/protocol overlap check so a duplicate/nested scope is rejected instantly, from
+// the data already on screen, instead of walking through a permission prompt and a host round-trip
+// only to be told the same thing seconds later.
+function scopeOverlapsExisting(scope: string): boolean {
+  return latestGroups.some((group) => {
+    const existing = group.scope.toLowerCase();
+    return scope === existing || scope.endsWith(`.${existing}`) || existing.endsWith(`.${scope}`);
+  });
+}
 
 async function refreshUntil(satisfied: () => boolean): Promise<void> {
   for (let attempt = 0; attempt < 15; attempt += 1) {
@@ -250,7 +261,6 @@ function describeError(code: string | undefined): string {
     case "scope_overlaps_existing": return "Bu alan adı zaten korunan bir siteyle çakışıyor.";
     case "scope_invalid": return "Alan adı geçersiz.";
     case "group_limit_reached": return "Korunan site sınırına ulaşıldı.";
-    case "last_group_cannot_be_removed": return "Son korunan site kaldırılamaz.";
     case "operation_pending": return "Bu site üzerinde bir işlem sürüyor; birazdan tekrar deneyin.";
     case "native_host_not_connected": return "Native host bağlı değil.";
     case "unknown_group": return "Bu site zaten korunmuyor.";
