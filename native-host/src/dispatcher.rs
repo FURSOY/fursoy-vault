@@ -208,6 +208,7 @@ impl NativeHostApp {
             config_digest: self.config_digest.clone(),
             config: self.config.clone(),
             groups: states,
+            host_version: env!("CARGO_PKG_VERSION").to_string(),
         })])
     }
 

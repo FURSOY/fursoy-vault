@@ -158,6 +158,10 @@ pub struct HandshakeAck {
     /// it validates and caches whatever the host sends here (ADR-020 slice 2, Q24).
     pub config: AccountGroupsConfig,
     pub groups: Vec<HandshakeGroupState>,
+    /// Cargo.toml's package version (e.g. "0.3.1") — lets the extension check it against the
+    /// latest GitHub release and surface an update notice. The host never fetches anything
+    /// itself; it only reports what it is.
+    pub host_version: String,
 }
 
 /// Extension → host: protect a new scope. The host assigns the UUID and persists the config;

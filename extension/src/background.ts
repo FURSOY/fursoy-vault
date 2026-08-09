@@ -74,11 +74,16 @@ const ALERT_LOG_KEY = "fcp-alert-log-v1";
 const ALERT_LOG_LIMIT = 100;
 const PENDING_ADD_KEY = "fcp-pending-add-v1";
 const PENDING_ADD_TTL_MS = 120_000;
+const UPDATE_CHECK_ALARM = "fcp-update-check";
+const UPDATE_CACHE_KEY = "fcp-update-check-v1";
+const GITHUB_RELEASES_API = "https://api.github.com/repos/FURSOY/fursoy-vault/releases/latest";
+const GITHUB_RELEASES_PAGE = "https://github.com/FURSOY/fursoy-vault/releases/latest";
 
 // Q24: the host is the config's single source of truth. The cache exists only so the extension
 // can still evict fail-closed while the host is unreachable; the handshake always overwrites it.
 let loadedConfig: LoadedConfig | undefined;
 let configWaiters: Array<(value: LoadedConfig) => void> = [];
+let hostVersion: string | undefined;
 
 function awaitConfig(): Promise<LoadedConfig> {
   if (loadedConfig !== undefined) return Promise.resolve(loadedConfig);
@@ -122,6 +127,7 @@ class RedactedCookieSetFailure extends Error {
 
 chrome.idle.setDetectionInterval(IDLE_BASE_SECONDS);
 chrome.alarms.create(MONITOR_POLL_ALARM, { periodInMinutes: 0.5 });
+chrome.alarms.create(UPDATE_CHECK_ALARM, { periodInMinutes: 720 });
 setInterval(() => enqueue(pollNativeMonitor), 15_000);
 
 chrome.permissions.onAdded.addListener(() => enqueue(flushPendingAdd));
@@ -179,6 +185,32 @@ async function flushPendingAdd(): Promise<void> {
   await setLocal(PENDING_ADD_KEY, undefined);
 }
 
+function compareVersions(a: string, b: string): number {
+  const partsOf = (version: string): number[] => version.split(".").map((part) => Number.parseInt(part, 10) || 0);
+  const [pa, pb] = [partsOf(a), partsOf(b)];
+  for (let i = 0; i < Math.max(pa.length, pb.length); i += 1) {
+    const diff = (pa[i] ?? 0) - (pb[i] ?? 0);
+    if (diff !== 0) return diff;
+  }
+  return 0;
+}
+
+// Check-only, never auto-apply: this is a security-sensitive native binary, and silently
+// downloading/replacing it without real code-signing verification in place would be exactly the
+// kind of attack surface this product exists to reduce. The user always downloads and runs the
+// installer themselves, same as first install.
+async function checkForUpdate(): Promise<void> {
+  if (hostVersion === undefined) return;
+  try {
+    const response = await fetch(GITHUB_RELEASES_API, { headers: { Accept: "application/vnd.github+json" } });
+    if (!response.ok) return;
+    const payload = await response.json() as { tag_name?: unknown };
+    if (typeof payload.tag_name !== "string") return;
+    const latest = payload.tag_name.replace(/^v/, "");
+    await setLocal(UPDATE_CACHE_KEY, compareVersions(latest, hostVersion) > 0 ? latest : undefined);
+  } catch { /* offline or GitHub unreachable; the next scheduled check tries again */ }
+}
+
 type PopupMessage =
   | { type: "popup.state"; url?: string }
   | { type: "popup.stageProtect"; scope: string; displayName: string; policyLevel: PolicyLevel }
@@ -210,9 +242,11 @@ async function handlePopupMessage(message: PopupMessage): Promise<Record<string,
       await setLocal(LAST_ALERT_KEY, undefined);
       await setBadge("", "#b3261e");
     }
+    const updateAvailable = await getLocal(UPDATE_CACHE_KEY);
     return {
       ok: true, connected: client?.connected === true, host,
       suggestedScope: guessScope(host), groups, error, alert,
+      updateAvailable: typeof updateAvailable === "string" ? updateAvailable : undefined,
     };
   }
   if (message.type === "popup.log") {
@@ -341,6 +375,10 @@ chrome.idle.onStateChanged.addListener((idleState) => enqueue(async () => {
 chrome.alarms.onAlarm.addListener((alarm) => enqueue(async () => {
   if (alarm.name === MONITOR_POLL_ALARM) {
     await pollNativeMonitor();
+    return;
+  }
+  if (alarm.name === UPDATE_CHECK_ALARM) {
+    void checkForUpdate();
     return;
   }
   const parsed = parseAlarmName(alarm.name);
@@ -520,6 +558,8 @@ async function applyHostGroupStates(loaded: LoadedConfig, summaries: HandshakeGr
 
 async function handleHandshakeAck(payload: Record<string, unknown>): Promise<void> {
   if (requiredNumber(payload, "protocol_version") !== PROTOCOL_VERSION) throw new Error("host protocol mismatch");
+  hostVersion = requiredString(payload, "host_version");
+  void checkForUpdate();
   await adoptConfig(payload.config as AccountGroupsConfig, requiredString(payload, "config_digest"));
   const loaded = await awaitConfig();
   if (!Array.isArray(payload.groups)) throw new Error("handshake groups must be an array");

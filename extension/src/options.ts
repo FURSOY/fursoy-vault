@@ -25,7 +25,10 @@ interface PopupState {
   groups?: GroupSummary[];
   error?: string;
   log?: StoredAlert[];
+  updateAvailable?: string;
 }
+
+const RELEASES_PAGE_URL = "https://github.com/FURSOY/fursoy-vault/releases/latest";
 
 const STATE_LABELS: Record<string, string> = {
   uninitialized: "kasa boş",
@@ -63,6 +66,9 @@ const SIGNAL_LABELS: Record<string, string> = {
 };
 
 const connectionWarning = required<HTMLElement>("connection");
+const updateNotice = required<HTMLElement>("update-notice");
+const updateVersion = required<HTMLElement>("update-version");
+const updateLink = required<HTMLAnchorElement>("update-link");
 const errorText = required<HTMLElement>("error");
 const groupRows = required<HTMLTableSectionElement>("groups");
 const groupsTable = required<HTMLTableElement>("groups-table");
@@ -158,6 +164,13 @@ function policyOf(groupId: string): string | undefined {
 async function refresh(): Promise<void> {
   const state = await send({ type: "popup.state" }) ?? {};
   connectionWarning.hidden = state.connected === true;
+  if (state.updateAvailable !== undefined) {
+    updateVersion.textContent = state.updateAvailable;
+    updateLink.href = RELEASES_PAGE_URL;
+    updateNotice.hidden = false;
+  } else {
+    updateNotice.hidden = true;
+  }
   if (state.error !== undefined) showError(describeError(state.error)); else errorText.hidden = true;
 
   const groups = state.groups ?? [];

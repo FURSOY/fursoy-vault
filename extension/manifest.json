@@ -14,6 +14,9 @@
     "webNavigation",
     "notifications"
   ],
+  "host_permissions": [
+    "https://api.github.com/*"
+  ],
   "background": {
     "service_worker": "dist/background.js",
     "type": "module"
