@@ -2,58 +2,101 @@
 <html lang="tr">
   <head>
     <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
     <link rel="stylesheet" href="theme.css" />
     <link rel="stylesheet" href="popup.css" />
     <title>FURSOY Vault</title>
   </head>
   <body>
+    <header class="popup-header">
+      <div class="brand">
+        <img class="brand-mark" src="assets/deneme.png" alt="">
+        <span class="brand-copy">
+          <span class="brand-name">FURSOY Vault</span>
+          <span class="brand-kicker">Session security</span>
+        </span>
+      </div>
+      <button id="open-options" class="icon-button" type="button" aria-label="Yönetim ekranını aç" title="Yönetim ekranı">
+        <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M4 7h10M18 7h2M4 17h2M10 17h10M14 4v6M7 14v6" /></svg>
+      </button>
+    </header>
+
     <div class="popup-scroll">
-      <h1>FURSOY Vault</h1>
+      <div class="message-stack" aria-live="polite">
+        <p id="connection" class="notice" data-i18n="common.connectionWarning" hidden>Companion uygulama bağlı değil. Koruma değişiklikleri geçici olarak kullanılamıyor.</p>
+        <p id="error" class="notice notice-danger" role="alert" hidden></p>
+        <p id="alert" class="notice notice-danger" role="status" hidden></p>
+      </div>
 
-      <section id="current" hidden>
-        <h2>Bu site</h2>
-        <p id="current-host" class="host"></p>
+      <main>
+        <section id="current" class="current-site panel" hidden>
+          <div class="section-heading current-heading">
+            <div>
+              <span class="eyebrow" data-i18n="popup.activeTabEyebrow">Aktif sekme</span>
+              <h1 id="current-host" class="host"></h1>
+            </div>
+            <span class="live-indicator" aria-label="Etkin sekme"><i></i> Live</span>
+          </div>
 
-        <div id="current-protected" hidden>
-          <p class="ok">Bu site zaten korunuyor.</p>
-          <label for="current-policy">Koruma düzeyini değiştir</label>
-          <select id="current-policy">
-            <option value="critical">Kritik — 5 dk kira · 1 dk boşta</option>
-            <option value="balanced">Dengeli — 10 dk kira · 5 dk boşta</option>
-            <option value="convenient">Kullanışlı — 30 dk kira · 15 dk boşta</option>
-            <option value="monitor">Yalnız izle — cookie kasalama yok</option>
-          </select>
-          <button id="unprotect-current" type="button">Bu siteyi korumadan çıkar</button>
-        </div>
+          <div id="current-protected" hidden>
+            <div class="protection-state">
+              <span class="state-icon" aria-hidden="true"></span>
+              <div>
+                <strong id="current-state-title" data-i18n="popup.protectionActiveTitle">Koruma etkin</strong>
+                <p id="current-state-body" data-i18n="popup.protectionActiveBody">Oturum bu cihazdaki güvenli kasaya bağlı.</p>
+              </div>
+            </div>
+            <label class="field-label" for="current-policy" data-i18n="popup.policyLabel">Koruma profili</label>
+            <select id="current-policy">
+              <option value="critical" data-i18n="popup.policyOption.critical">Kritik · en kısa açık kalma süresi</option>
+              <option value="balanced" data-i18n="popup.policyOption.balanced">Dengeli · güvenlik ve akış dengesi</option>
+              <option value="convenient" data-i18n="popup.policyOption.convenient">Rahat · daha uzun oturum süresi</option>
+              <option value="monitor" data-i18n="popup.policyOption.monitor">Yalnız izle · cookie kasalama yok</option>
+            </select>
+            <button id="unprotect-current" class="danger-button full-button" type="button" data-i18n="popup.unprotectButton">Korumayı kaldır</button>
+          </div>
 
-        <div id="current-unprotected" hidden>
-          <label for="scope">Korunacak alan adı</label>
-          <input id="scope" type="text" spellcheck="false" autocomplete="off" />
-          <p class="hint">
-            Bu alan adının ve alt alan adlarının <strong>tüm çerezleri</strong> korunur. Yanlışsa düzeltebilirsin.
-          </p>
-          <label for="policy">Koruma düzeyi</label>
-          <select id="policy">
-            <option value="critical">Kritik — 5 dk kira · 1 dk boşta</option>
-            <option value="balanced" selected>Dengeli — 10 dk kira · 5 dk boşta</option>
-            <option value="convenient">Kullanışlı — 30 dk kira · 15 dk boşta</option>
-            <option value="monitor">Yalnız izle — cookie kasalama yok</option>
-          </select>
-          <button id="protect" type="button" class="primary">Bu siteyi korumaya al</button>
-        </div>
-      </section>
+          <div id="current-unprotected" hidden>
+            <p class="intro-copy" data-i18n="popup.introCopy">Bu oturumu kullanmadığında cookie’leri cihazındaki şifreli kasada tut.</p>
+            <label class="field-label" for="scope" data-i18n="popup.scopeFieldLabel">Korunacak alan adı</label>
+            <input id="scope" type="text" spellcheck="false" autocomplete="off" />
+            <p class="field-help" data-i18n="popup.scopeFieldHelp">Alan adı ve tüm alt alan adlarındaki cookie’ler kapsanır.</p>
+            <label class="field-label policy-label" for="policy" data-i18n="popup.policyLabel">Koruma profili</label>
+            <select id="policy">
+              <option value="critical" data-i18n="popup.policyOption.critical">Kritik · en kısa açık kalma süresi</option>
+              <option value="balanced" selected data-i18n="popup.policyOption.balanced">Dengeli · güvenlik ve akış dengesi</option>
+              <option value="convenient" data-i18n="popup.policyOption.convenient">Rahat · daha uzun oturum süresi</option>
+              <option value="monitor" data-i18n="popup.policyOption.monitor">Yalnız izle · cookie kasalama yok</option>
+            </select>
+            <button id="protect" type="button" class="primary full-button">
+              <span class="button-lock" aria-hidden="true"></span>
+              <span data-i18n="popup.protectButton">Bu siteyi koru</span>
+            </button>
+          </div>
+        </section>
 
-      <p id="connection" class="warning" hidden>Native host bağlı değil. Koruma değişiklikleri yapılamaz.</p>
-      <p id="error" class="warning" hidden></p>
-      <p id="alert" class="alert" hidden></p>
-
-      <section>
-        <h2>Korunan siteler</h2>
-        <ul id="groups" class="groups"></ul>
-        <p id="groups-empty" class="hint" hidden>Henüz korunan site yok.</p>
-      </section>
+        <section class="sites-section">
+          <div class="section-heading list-heading">
+            <div>
+              <span class="eyebrow" data-i18n="popup.sitesEyebrow">Kasa kapsamı</span>
+              <h2 data-i18n="popup.sitesTitle">Korunan siteler</h2>
+            </div>
+            <span id="groups-count" class="count-badge">0</span>
+          </div>
+          <ul id="groups" class="groups"></ul>
+          <div id="groups-empty" class="empty-state" hidden>
+            <span class="empty-mark" aria-hidden="true"></span>
+            <strong data-i18n="popup.emptyTitle">Kasa henüz boş</strong>
+            <p data-i18n="popup.emptyBody">Aktif sekmedeki bir siteyi koruyarak başlayabilirsin.</p>
+          </div>
+        </section>
+      </main>
     </div>
-    <button id="open-options" type="button">Yönetim ekranını aç</button>
+
+    <footer class="popup-footer">
+      <span class="footer-status"><i></i> <span data-i18n="popup.footerStatus">Yerel ve şifreli</span></span>
+      <span>Windows Hello</span>
+    </footer>
     <script type="module" src="dist/popup.js"></script>
   </body>
 </html>

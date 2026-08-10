@@ -8,7 +8,12 @@ downloaded files, passwords, other browsers or a compromised Windows account.
 
 The product has four policies: Critical, Balanced and Convenient actively vault cookies; Monitor
 only records best-effort signals and never mutates browser state. Monitoring is detection, not an
-EDR or process blocker. Incognito and multi-profile attribution are currently unsupported.
+EDR or process blocker. Each regular Chrome profile receives an isolated vault namespace;
+incognito and browsers other than Chrome are currently unsupported.
+
+If extension storage is removed, a fresh empty Chrome profile can reconnect a previous local
+vault from the management screen. Recovery atomically transfers the vault to a new profile
+identity, so two browser profiles never resume sharing one namespace.
 
 ## Build and verify
 

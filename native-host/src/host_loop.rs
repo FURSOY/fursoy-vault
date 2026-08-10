@@ -22,14 +22,22 @@ pub fn validate_caller_origin(args: &[String]) -> FcpResult<()> {
 /// Runs one Chrome Native Messaging connection. Chrome owns the process lifetime; all diagnostic
 /// text goes to stderr because stdout is exclusively the length-prefixed protocol stream.
 pub fn run_connection(reader: &mut impl Read, writer: &mut impl Write) -> FcpResult<()> {
-    let paths = DataPaths::discover()?;
+    let first = read_envelope(reader)?
+        .ok_or_else(|| FcpError::Protocol("native connection closed before handshake".into()))?;
+    validate_first_envelope(&first)?;
+    let profile_id = match &first.message {
+        Message::Handshake(handshake) => handshake.profile_id,
+        _ => unreachable!("validated first envelope is a handshake"),
+    };
+    let paths = DataPaths::discover_profile(profile_id)?;
     // Taken before anything is opened: a concurrent instance must not reach the audit chain.
     let _lock = InstanceLock::acquire(&paths.root)?;
     let mut app = NativeHostApp::open(&paths)?;
-    run_connection_with_app(reader, writer, &mut app)
+    run_connection_with_app(first, reader, writer, &mut app)
 }
 
 fn run_connection_with_app(
+    first: Envelope,
     reader: &mut impl Read,
     writer: &mut impl Write,
     app: &mut NativeHostApp,
@@ -38,7 +46,15 @@ fn run_connection_with_app(
     let mut incoming_sequence = 0u64;
     let mut outgoing_sequence = 0u64;
 
-    while let Some(envelope) = read_envelope(reader)? {
+    let mut next = Some(first);
+    loop {
+        let envelope = match next.take() {
+            Some(envelope) => envelope,
+            None => match read_envelope(reader)? {
+                Some(envelope) => envelope,
+                None => break,
+            },
+        };
         match connection_nonce {
             Some(expected_nonce) => envelope.validate(&expected_nonce, incoming_sequence)?,
             None => validate_first_envelope(&envelope)?,
@@ -117,13 +133,16 @@ mod tests {
             message: Message::Handshake(Handshake {
                 protocol_version: PROTOCOL_VERSION,
                 extension_id: "test".into(),
-                extension_version: "0.3.1".into(),
-                min_host_version: "0.3.1".into(),
+                profile_id: Uuid::new_v4(),
+                extension_version: "0.4.1".into(),
+                min_host_version: "0.4.1".into(),
                 capabilities: vec![
                     "chunked_cookies".into(),
                     "request_correlation".into(),
                     "config_v3".into(),
                     "audit_recovery".into(),
+                    "profile_namespace".into(),
+                    "profile_recovery".into(),
                 ],
                 cached_config_digest: None,
             }),

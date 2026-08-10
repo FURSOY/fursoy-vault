@@ -3,10 +3,23 @@ use std::path::Path;
 
 fn main() {
     let args = std::env::args().skip(1).collect::<Vec<_>>();
-    if let [flag, destination] = args.as_slice()
-        && flag == "--export-audit"
-    {
-        if let Err(error) = export_audit(Path::new(destination)) {
+    let export = match args.as_slice() {
+        [flag, destination] if flag == "--export-audit" => Some((None, destination.as_str())),
+        [flag, profile_flag, profile_id, destination]
+            if flag == "--export-audit" && profile_flag == "--profile" =>
+        {
+            match profile_id.parse() {
+                Ok(profile_id) => Some((Some(profile_id), destination.as_str())),
+                Err(_) => {
+                    eprintln!("audit export failed: profile id must be a UUID");
+                    std::process::exit(1);
+                }
+            }
+        }
+        _ => None,
+    };
+    if let Some((profile_id, destination)) = export {
+        if let Err(error) = export_audit(profile_id, Path::new(destination)) {
             eprintln!("audit export failed: {error}");
             std::process::exit(1);
         }
@@ -28,8 +41,11 @@ fn main() {
     }
 }
 
-fn export_audit(destination: &Path) -> fursoy_native_host::FcpResult<()> {
-    let paths = fursoy_native_host::paths::DataPaths::discover()?;
+fn export_audit(
+    profile_id: Option<uuid::Uuid>,
+    destination: &Path,
+) -> fursoy_native_host::FcpResult<()> {
+    let paths = fursoy_native_host::paths::DataPaths::discover_for_export(profile_id)?;
     let _lock = fursoy_native_host::instance_lock::InstanceLock::acquire(&paths.root)?;
     let destination = if destination.is_absolute() {
         destination.to_path_buf()

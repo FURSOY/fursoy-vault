@@ -10,6 +10,16 @@ import {
   validateMonitorEvent, type MonitorEvent, type MonitorSignal, type NotificationDecisionState,
 } from "./monitor.js";
 import { decideStartup, stateAfterHostError } from "./state-machine.js";
+import { currentLocale } from "./locale.js";
+import type { Locale } from "./i18n.js";
+import { ConnectionReadiness } from "./connection-readiness.js";
+
+// Resolved once per service-worker lifetime; a restart re-resolves it from the same persisted
+// storage value, same as loadedConfig re-adopts its cache. Notifications sent before this resolves
+// (a narrow startup window) fall back to the default locale rather than waiting, since a toast
+// unrelated to the config handshake must not be blocked on it.
+let uiLocale: Locale = "tr";
+void currentLocale().then((resolved) => { uiLocale = resolved; });
 
 type GroupState = "uninitialized" | "sealed" | "unlocking" | "leased" | "evicting" | "degraded";
 type LeasePurpose = "inject" | "enroll";
@@ -57,6 +67,12 @@ interface HandshakeGroupState {
   lease_expiry_unix_ms?: number | null;
 }
 
+interface RecoveryProfileSummary {
+  profileId: string;
+  scopes: string[];
+  configModifiedUnixMs: number;
+}
+
 const STATE_KEY = "fcp-runtime-v2";
 const LEGACY_STATE_KEY = "fcp-mvp-runtime-v1";
 const WIKIPEDIA_GROUP_ID = "7a144677-3f5c-4a86-a767-16fd3ca315b8";
@@ -78,6 +94,7 @@ const PENDING_ADD_TTL_MS = 120_000;
 const COOKIE_CHUNK_TARGET_BYTES = 400 * 1024;
 const UPDATE_CHECK_ALARM = "fcp-update-check";
 const UPDATE_CACHE_KEY = "fcp-update-check-v1";
+const PROFILE_ID_KEY = "fcp-profile-id-v1";
 const GITHUB_RELEASES_API = "https://api.github.com/repos/FURSOY/fursoy-vault/releases/latest";
 const GITHUB_RELEASES_PAGE = "https://github.com/FURSOY/fursoy-vault/releases/latest";
 
@@ -86,6 +103,7 @@ const GITHUB_RELEASES_PAGE = "https://github.com/FURSOY/fursoy-vault/releases/la
 let loadedConfig: LoadedConfig | undefined;
 let configWaiters: Array<(value: LoadedConfig) => void> = [];
 let hostVersion: string | undefined;
+let recoveryProfiles: RecoveryProfileSummary[] = [];
 interface PendingInjectChunks {
   leaseId: string;
   chunkCount: number;
@@ -187,8 +205,10 @@ function isPendingAdd(value: unknown): value is PendingAdd {
     typeof pending.policyLevel === "string" && typeof pending.stagedAtUnixMs === "number";
 }
 
-type ConfigOperation = { type: "group.add" | "group.remove" | "group.set_policy"; status: "pending" | "success" | "error"; scope?: string; error?: string; updatedAt: number };
-const configOperations = new Map<string, ConfigOperation>();
+type OperationStatus = "pending" | "success" | "error";
+type ConfigOperation = { type: "group.add" | "group.remove" | "group.set_policy"; status: OperationStatus; scope?: string; error?: string; updatedAt: number };
+type RecoveryOperation = { type: "profile.recovery.claim"; status: OperationStatus; sourceProfileId: string; targetProfileId: string; error?: string; updatedAt: number };
+const configOperations = new Map<string, ConfigOperation | RecoveryOperation>();
 
 async function flushPendingAdd(): Promise<string | undefined> {
   const stored = await getLocal(PENDING_ADD_KEY);
@@ -198,7 +218,7 @@ async function flushPendingAdd(): Promise<string | undefined> {
     return undefined;
   }
   // Keep the intent if the host is not up yet; the handshake retries this.
-  if (!client?.connected) { void connect(); return undefined; }
+  if (!client?.ready) { void connect(); return undefined; }
   const group = loadedConfig?.config.groups.find((item) => item.scope === stored.scope);
   if (group !== undefined) { await setLocal(PENDING_ADD_KEY, undefined); return stored.requestId; }
   if (stored.requestId !== undefined && configOperations.get(stored.requestId)?.status === "pending") return stored.requestId;
@@ -232,7 +252,8 @@ type PopupMessage =
   | { type: "popup.operation"; requestId: string }
   | { type: "popup.protect"; scope: string; displayName: string; policyLevel: PolicyLevel }
   | { type: "popup.unprotect"; groupId: string }
-  | { type: "popup.setPolicy"; groupId: string; policyLevel: PolicyLevel };
+  | { type: "popup.setPolicy"; groupId: string; policyLevel: PolicyLevel }
+  | { type: "popup.recoverProfile"; profileId: string };
 
 // ADR-020: protection starts and ends with an explicit user gesture in the popup. Nothing about
 // the page's session state is inspected — whatever cookies the scope holds are what gets vaulted.
@@ -257,8 +278,9 @@ async function handlePopupMessage(message: PopupMessage): Promise<Record<string,
     }
     const updateAvailable = await getLocal(UPDATE_CACHE_KEY);
     return {
-      ok: true, connected: client?.connected === true, host,
+      ok: true, connected: client?.ready === true, host,
       suggestedScope: guessScope(host), groups, error, alert,
+      recoveryProfiles: groups.length === 0 ? recoveryProfiles : [],
       updateAvailable: typeof updateAvailable === "string" ? updateAvailable : undefined,
     };
   }
@@ -288,7 +310,8 @@ async function handlePopupMessage(message: PopupMessage): Promise<Record<string,
     await setLocal(PENDING_ADD_KEY, undefined);
     return { ok: true };
   }
-  if (!client?.connected) { void connect(); return { ok: false, error: "native_host_not_connected" }; }
+  if (message.type === "popup.recoverProfile") return recoverProfile(message.profileId);
+  if (!client?.ready) { void connect(); return { ok: false, error: "native_host_not_connected" }; }
   if (message.type === "popup.protect") {
     const requestId = await flushPendingAdd();
     return requestId === undefined ? { ok: false, error: "native_host_not_connected" } : { ok: true, pending: true, requestId };
@@ -305,11 +328,16 @@ async function popupGroupSummaries(loaded: LoadedConfig): Promise<Array<Record<s
   const root = await loadState(loaded);
   const summaries: Array<Record<string, unknown>> = [];
   for (const group of loaded.config.groups) {
+    const hasPermission = await hasScopePermission(group);
     summaries.push({
       id: group.id, scope: group.scope, displayName: group.display_name,
       policyLevel: group.policy_level, state: root.groups[group.id]?.groupState ?? "uninitialized",
-      hasPermission: await hasScopePermission(group),
-      cookieCount: (await getCookies(group)).length,
+      hasPermission,
+      // A recovered profile can legitimately have only some optional origins granted. Never call
+      // chrome.cookies for a scope Chrome has not authorized: that rejects the whole popup.state
+      // response and makes later groups appear to have vanished instead of showing "permission
+      // required".
+      cookieCount: hasPermission ? (await getCookies(group)).length : 0,
     });
   }
   return summaries;
@@ -319,7 +347,7 @@ function isPopupMessage(value: unknown): value is PopupMessage {
   const type = typeof value === "object" && value !== null ? (value as { type?: unknown }).type : undefined;
   return type === "popup.state" || type === "popup.protect" || type === "popup.unprotect" ||
     type === "popup.log" || type === "popup.clearLog" || type === "popup.operation" || type === "popup.stageProtect" ||
-    type === "popup.cancelProtect" || type === "popup.setPolicy";
+    type === "popup.cancelProtect" || type === "popup.setPolicy" || type === "popup.recoverProfile";
 }
 
 chrome.tabs.onUpdated.addListener((tabId, change, tab) => enqueue(async () => {
@@ -388,7 +416,7 @@ chrome.idle.onStateChanged.addListener((idleState) => enqueue(async () => {
   for (const group of loaded.config.groups) {
     const state = root.groups[group.id];
     if (idleState === "locked") {
-      if (client?.connected) send("auth.cache.clear", { account_group_id: group.id, reason: "locked" });
+      if (client?.ready) send("auth.cache.clear", { account_group_id: group.id, reason: "locked" });
       if (awaitsCapture(state)) await requestEviction(loaded, group, "locked", state?.leaseId);
       continue;
     }
@@ -466,7 +494,11 @@ async function connect(): Promise<void> {
 async function openNativeConnection(): Promise<void> {
   await restoreCachedConfig();
   if (client?.connected) return;
-  client = new NativeClient(loadedConfig?.digest, handleHostMessage, async () => {
+  let nextClient!: NativeClient;
+  nextClient = new NativeClient(await getOrCreateProfileId(), loadedConfig?.digest, handleHostMessage, flushPendingAdd, async () => {
+    // Profile recovery deliberately replaces the client before closing its old port. Ignore that
+    // stale disconnect so it cannot fail-close or schedule work against the newly selected vault.
+    if (client !== nextClient) return;
     // Scheduled first and unconditionally: awaitConfig() below only resolves once a config has
     // ever been adopted (cache or a successful handshake), which never happens if the very first
     // connection attempt in a profile fails before any config exists — gating the retry behind it
@@ -490,7 +522,8 @@ async function openNativeConnection(): Promise<void> {
     if (activeGroups.length === 0) await queueMonitorEvent("host_disconnect", undefined, false);
     else for (const groupId of activeGroups) await queueMonitorEvent("host_disconnect_active_lease", groupId, false);
   });
-  client.start();
+  client = nextClient;
+  nextClient.start();
 }
 
 let lastConfigError: string | undefined;
@@ -498,6 +531,26 @@ let lastConfigError: string | undefined;
 async function handleHostMessage(message: WireMessage): Promise<void> {
   if (message.type === "handshake.ack") {
     await handleHandshakeAck(message.payload);
+    return;
+  }
+  if (message.type === "profile.recovery.claimed") {
+    const requestId = message.requestId;
+    const targetProfileId = requiredString(message.payload, "target_profile_id").toLowerCase();
+    const operation = requestId === undefined ? undefined : configOperations.get(requestId);
+    if (requestId === undefined || operation?.type !== "profile.recovery.claim" || operation.targetProfileId !== targetProfileId) {
+      throw new Error("profile recovery correlation mismatch");
+    }
+    configOperations.set(requestId, { ...operation, status: "success", updatedAt: Date.now() });
+    await switchRecoveredProfile(targetProfileId);
+    return;
+  }
+  if (message.type === "profile.recovery.rejected") {
+    const requestId = message.requestId;
+    const operation = requestId === undefined ? undefined : configOperations.get(requestId);
+    if (requestId === undefined || operation?.type !== "profile.recovery.claim") throw new Error("profile recovery rejection correlation mismatch");
+    configOperations.set(requestId, {
+      ...operation, status: "error", error: requiredString(message.payload, "reason"), updatedAt: Date.now(),
+    });
     return;
   }
   if (message.type === "config.updated") {
@@ -628,8 +681,9 @@ async function applyHostGroupStates(loaded: LoadedConfig, summaries: HandshakeGr
     state.groupState = summary.group_state;
     state.leaseId = summary.lease_id ?? undefined;
     state.reconciliation = summary.reconciliation_required;
-    state.relevantTabs = await relevantTabIds(group);
-    state.lastEvent = "config_updated";
+    const hasPermission = await hasScopePermission(group);
+    state.relevantTabs = hasPermission ? await relevantTabIds(group) : [];
+    state.lastEvent = hasPermission ? "config_updated" : "permission_missing";
   }
   await saveState(root);
 }
@@ -643,6 +697,7 @@ async function handleHandshakeAck(payload: Record<string, unknown>): Promise<voi
   if (!Array.isArray(hostCapabilities) || !REQUIRED_CAPABILITIES.every((capability) => hostCapabilities.includes(capability))) {
     throw new Error("native host capability mismatch");
   }
+  recoveryProfiles = parseRecoveryProfiles(payload.recovery_profiles);
   void checkForUpdate();
   await adoptConfig(payload.config as AccountGroupsConfig, requiredString(payload, "config_digest"));
   const loaded = await awaitConfig();
@@ -656,19 +711,24 @@ async function handleHandshakeAck(payload: Record<string, unknown>): Promise<voi
     if (summary === undefined) throw new Error("handshake omitted configured group");
     const state = requiredGroupState(root, group.id);
     const pendingInvalidation = state.invalidationPending === true ? state.invalidationReason : undefined;
+    const hasPermission = await hasScopePermission(group);
     state.groupState = summary.group_state;
     state.leaseId = summary.lease_id ?? undefined;
-    state.relevantTabs = await relevantTabIds(group);
-    const cookies = await getCookies(group);
+    state.relevantTabs = hasPermission ? await relevantTabIds(group) : [];
     state.pendingLeaseRequest = undefined;
     state.evictionRequestPending = false;
     state.reconciliation = summary.reconciliation_required;
     state.injectAfterReconciliation = summary.reconciliation_required && state.relevantTabs.length > 0;
-    state.lastEvent = "handshake_ack";
+    state.lastEvent = hasPermission ? "handshake_ack" : "permission_missing";
     if (state.groupState === "uninitialized") {
       state.invalidationPending = false;
       state.invalidationReason = undefined;
     }
+    // Keep the host's authoritative group and vault state, but do not infer an empty cookie jar or
+    // run reconciliation without Chrome access. The permission-repair button can resume normal
+    // observation later; hiding/removing the group would be a data-loss illusion.
+    if (!hasPermission) continue;
+    const cookies = await getCookies(group);
     const startup = decideStartup({
       state: state.groupState,
       cookieCount: cookies.length,
@@ -708,6 +768,11 @@ async function handleHandshakeAck(payload: Record<string, unknown>): Promise<voi
     }
   }
   await saveState(root);
+  // A native port exists before the host has authenticated the handshake. Only expose it to
+  // mutation/monitoring code after every ACK field and group summary has been validated and the
+  // authoritative state has been adopted. UI messages are serialized behind this handler, so
+  // they cannot observe a half-applied handshake.
+  client?.markHandshakeReady();
   for (const action of actions) await action();
   const pending = await monitorOutbox();
   if (pending.some((event) => event.signal === "host_disconnect" || event.signal === "host_disconnect_active_lease")) {
@@ -716,6 +781,68 @@ async function handleHandshakeAck(payload: Record<string, unknown>): Promise<voi
   await flushMonitorOutbox();
   await pollNativeMonitor();
   await flushPendingAdd();
+}
+
+function parseRecoveryProfiles(value: unknown): RecoveryProfileSummary[] {
+  if (!Array.isArray(value) || value.length > 32) throw new Error("invalid recovery profile list");
+  return value.map((candidate) => {
+    if (typeof candidate !== "object" || candidate === null) throw new Error("invalid recovery profile");
+    const record = candidate as Record<string, unknown>;
+    const profileId = requiredString(record, "profile_id").toLowerCase();
+    if (!isProfileId(profileId) || !Array.isArray(record.scopes) || record.scopes.length === 0 || record.scopes.length > 32) {
+      throw new Error("invalid recovery profile metadata");
+    }
+    const scopes = record.scopes.map((scope) => {
+      if (typeof scope !== "string" || scope.length > 253) throw new Error("invalid recovery scope");
+      return scope;
+    });
+    return {
+      profileId,
+      scopes,
+      configModifiedUnixMs: requiredInteger(record, "config_modified_unix_ms"),
+    };
+  });
+}
+
+async function recoverProfile(profileId: string): Promise<Record<string, unknown>> {
+  const normalized = profileId.toLowerCase();
+  if (!client?.ready) return { ok: false, error: "native_host_not_connected" };
+  if ((loadedConfig?.config.groups.length ?? 0) !== 0) return { ok: false, error: "profile_recovery_requires_empty" };
+  if (!isProfileId(normalized) || !recoveryProfiles.some((candidate) => candidate.profileId === normalized)) {
+    return { ok: false, error: "profile_recovery_target_invalid" };
+  }
+
+  const targetProfileId = crypto.randomUUID();
+  const requestId = send("profile.recovery.claim", {
+    source_profile_id: normalized,
+    target_profile_id: targetProfileId,
+  });
+  configOperations.set(requestId, {
+    type: "profile.recovery.claim",
+    status: "pending",
+    sourceProfileId: normalized,
+    targetProfileId,
+    updatedAt: Date.now(),
+  });
+  return { ok: true, pending: true, requestId };
+}
+
+async function switchRecoveredProfile(targetProfileId: string): Promise<void> {
+  if (!isProfileId(targetProfileId)) throw new Error("invalid recovered profile id");
+  await setLocal(PROFILE_ID_KEY, targetProfileId);
+  await removeLocal([
+    CONFIG_CACHE_KEY, STATE_KEY, LEGACY_STATE_KEY, PENDING_ADD_KEY,
+    MONITOR_OUTBOX_KEY, MONITOR_RATE_KEY, LAST_ALERT_KEY, ALERT_LOG_KEY,
+  ]);
+  loadedConfig = undefined;
+  configWaiters = [];
+  hostVersion = undefined;
+  recoveryProfiles = [];
+  pendingInjectChunks.clear();
+  const previous = client;
+  client = undefined;
+  previous?.close();
+  void connect();
 }
 
 async function injectCookies(loaded: LoadedConfig, group: AccountGroup, payload: Record<string, unknown>, root: RuntimeState, state: GroupRuntimeState): Promise<void> {
@@ -997,7 +1124,7 @@ async function startUnlockOnTab(loaded: LoadedConfig, group: AccountGroup, tabId
   const root = await loadState(loaded);
   const state = requiredGroupState(root, group.id);
   if (state.groupState !== "sealed" || state.pendingLeaseRequest !== undefined || state.evictionRequestPending || state.reconciliation) return;
-  if (!client?.connected) { void connect(); return; }
+  if (!client?.ready) { void connect(); return; }
   state.navigationUnlockRequestTabId = tabId;
   state.navigationUnlockError = undefined;
   state.lastEvent = event;
@@ -1044,7 +1171,7 @@ async function handleUnlockPageMessage(loaded: LoadedConfig, type: "unlock.statu
     return { ok: true, status: "recovering" };
   }
   if (state.groupState !== "sealed" || state.pendingLeaseRequest !== undefined || state.evictionRequestPending || state.reconciliation) return { ok: false, status: "recovering", error: "group_not_ready" };
-  if (!client?.connected) { void connect(); return { ok: false, status: "error", error: "native_host_not_connected" }; }
+  if (!client?.ready) { void connect(); return { ok: false, status: "error", error: "native_host_not_connected" }; }
   state.navigationUnlockRequestTabId = tabId;
   state.navigationUnlockError = undefined;
   state.lastEvent = "navigation_unlock_user_gesture";
@@ -1055,14 +1182,27 @@ async function handleUnlockPageMessage(loaded: LoadedConfig, type: "unlock.statu
 
 class NativeClient {
   private port?: chrome.runtime.Port;
+  private readonly readiness = new ConnectionReadiness();
   private readonly nonce = randomNonce();
   private outgoing = 0;
   private incoming = 0;
-  constructor(private readonly cachedConfigDigest: string | undefined, private readonly onMessage: (message: WireMessage) => Promise<void>, private readonly onDisconnect: () => Promise<void>) {}
-  get connected(): boolean { return this.port !== undefined; }
+  constructor(
+    private readonly profileId: string,
+    private readonly cachedConfigDigest: string | undefined,
+    private readonly onMessage: (message: WireMessage) => Promise<void>,
+    private readonly onReady: () => Promise<unknown>,
+    private readonly onDisconnect: () => Promise<void>,
+  ) {}
+  get connected(): boolean { return this.readiness.connected; }
+  get ready(): boolean { return this.readiness.ready; }
+  markHandshakeReady(): void {
+    this.readiness.accepted();
+  }
+  close(): void { this.port?.disconnect(); }
   start(): void {
     const port = chrome.runtime.connectNative(HOST_NAME);
     this.port = port;
+    this.readiness.opened();
     port.onMessage.addListener((raw) => enqueue(() => this.receive(raw)));
     port.onDisconnect.addListener(() => {
       // Chrome reports native-host startup/protocol failures through runtime.lastError. Merely
@@ -1070,11 +1210,13 @@ class NativeClient {
       // flood; state recovery remains centralized in onDisconnect and exposes no provider text.
       void chrome.runtime.lastError?.message;
       this.port = undefined;
+      this.readiness.closed();
       enqueue(this.onDisconnect);
     });
     this.send("handshake", {
       protocol_version: PROTOCOL_VERSION,
       extension_id: chrome.runtime.id,
+      profile_id: this.profileId,
       extension_version: EXTENSION_VERSION,
       min_host_version: MIN_HOST_VERSION,
       capabilities: [...REQUIRED_CAPABILITIES],
@@ -1093,6 +1235,7 @@ class NativeClient {
       // after a permission grant does exactly that). Drop it here so the reconnect path runs
       // instead of repeatedly writing into a dead port.
       this.port = undefined;
+      this.readiness.closed();
       throw error instanceof Error ? error : new Error("native host write failed");
     }
     return requestId;
@@ -1102,11 +1245,27 @@ class NativeClient {
     if (raw.v !== PROTOCOL_VERSION || raw.conn_nonce !== this.nonce || raw.seq !== this.incoming + 1) throw new Error("native nonce/sequence validation failed");
     this.incoming = raw.seq;
     await this.onMessage({ type: raw.type, payload: raw.payload, requestId: raw.id });
+    if (raw.type === "handshake.ack") {
+      if (!this.ready) throw new Error("handshake ACK was not accepted");
+      await this.onReady();
+    }
   }
 }
 
+async function getOrCreateProfileId(): Promise<string> {
+  const stored = await getLocal(PROFILE_ID_KEY);
+  if (typeof stored === "string" && isProfileId(stored)) return stored.toLowerCase();
+  const created = crypto.randomUUID();
+  await setLocal(PROFILE_ID_KEY, created);
+  return created;
+}
+
+function isProfileId(value: string): boolean {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
+}
+
 function send(type: string, payload: Record<string, unknown>): string {
-  if (!client?.connected) throw new Error("native host is not connected");
+  if (!client?.ready) throw new Error("native host is not ready");
   return client.send(type, payload);
 }
 
@@ -1152,12 +1311,12 @@ async function monitorOutbox(): Promise<MonitorEvent[]> {
 }
 
 async function flushMonitorOutbox(): Promise<void> {
-  if (!client?.connected) return;
+  if (!client?.ready) return;
   for (const event of await monitorOutbox()) send("monitor.event", { ...event });
 }
 
 async function pollNativeMonitor(): Promise<void> {
-  if (!client?.connected) return;
+  if (!client?.ready) return;
   await flushMonitorOutbox();
   send("monitor.poll", { max_events: 32 });
 }
@@ -1187,7 +1346,7 @@ async function handleMonitorAlert(value: unknown): Promise<void> {
   const decision = notificationDecision(event, previous, Date.now());
   if (!decision.show) return;
   await setLocal(MONITOR_RATE_KEY, decision.next);
-  const content = notificationText(event, affectedScopes);
+  const content = notificationText(event, affectedScopes, uiLocale);
   await createNotification(`fcp-monitor-${event.event_id}`, {
     type: "basic", iconUrl: MONITOR_ICON_URL, title: content.title, message: content.message,
     priority: event.severity === "high" ? 2 : 1,
@@ -1341,6 +1500,7 @@ function saveState(state: RuntimeState): Promise<void> { return callbackPromise<
 function storageGet(key: string): Promise<Record<string, unknown>> { return callbackPromise((done) => chrome.storage.local.get(key, done)); }
 async function getLocal(key: string): Promise<unknown> { return (await callbackPromise<Record<string, unknown>>((done) => chrome.storage.local.get(key, done)))[key]; }
 function setLocal(key: string, value: unknown): Promise<void> { return callbackPromise<void>((done) => chrome.storage.local.set({ [key]: value }, () => done())); }
+function removeLocal(keys: string[]): Promise<void> { return callbackPromise<void>((done) => chrome.storage.local.remove(keys, () => done())); }
 function createNotification(id: string, options: chrome.notifications.NotificationOptions): Promise<string> { return callbackPromise((done) => chrome.notifications.create(id, options, done)); }
 async function setBadge(text: string, color: string): Promise<void> {
   await callbackPromise<void>((done) => chrome.action.setBadgeBackgroundColor({ color }, done));

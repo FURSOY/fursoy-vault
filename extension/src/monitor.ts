@@ -1,3 +1,5 @@
+import { translate, type Locale } from "./i18n.js";
+
 export type MonitorSeverity = "info" | "medium" | "high";
 export type MonitorSource = "extension" | "native_host";
 export type MonitorSignal =
@@ -105,27 +107,32 @@ export function notificationDecision(
   return { show: true, next: { ...previous, [fingerprint]: now } };
 }
 
-export function notificationText(event: MonitorEvent, activeScopes: readonly string[] = []): { title: string; message: string } {
+export function notificationText(
+  event: MonitorEvent,
+  activeScopes: readonly string[] = [],
+  locale: Locale = "tr",
+): { title: string; message: string } {
+  const t = (key: string, params?: Readonly<Record<string, string | number>>): string => translate(locale, key, params);
   switch (event.signal) {
     case "remote_debugging_port":
     case "remote_debugging_pipe": {
       // The signal itself is process-wide, not tied to a group (§9.3), so the affected sites are
       // whatever is currently leased at display time rather than something carried on the event.
-      const exposure = activeScopes.length > 0
-        ? ` Şu an açık korumalı site(ler): ${activeScopes.join(", ")}.`
-        : " Şu an açık korumalı site yok.";
-      return { title: "Yüksek riskli tarayıcı başlatması", message: `Chrome uzaktan hata ayıklama parametresiyle başlatıldı.${exposure}` };
+      const message = activeScopes.length > 0
+        ? t("monitor.remoteDebugging.messageWithScopes", { scopes: activeScopes.join(", ") })
+        : t("monitor.remoteDebugging.messageNoScopes");
+      return { title: t("monitor.remoteDebugging.title"), message };
     }
     case "host_disconnect_active_lease":
-      return { title: "Cookie koruması bağlantısı kesildi", message: "Açık bir oturum varken native host bağlantısı kayboldu; fail-closed temizlik başlatıldı." };
+      return { title: t("monitor.hostDisconnectActiveLease.title"), message: t("monitor.hostDisconnectActiveLease.message") };
     case "reconciliation_failed":
-      return { title: "Oturum uzlaştırması başarısız", message: "Korunan bir hesap grubu güvenli duruma getirilemedi." };
+      return { title: t("monitor.reconciliationFailed.title"), message: t("monitor.reconciliationFailed.message") };
     case "audit_integrity_recovered":
-      return { title: "Audit bütünlüğü bozuldu", message: "Hasarlı audit zinciri kanıt olarak karantinaya alındı ve yeni bir zincir başlatıldı." };
+      return { title: t("monitor.auditIntegrityRecovered.title"), message: t("monitor.auditIntegrityRecovered.message") };
     case "lease_outside_cookie_created":
-      return { title: "Lease dışında cookie oluştu", message: "Kilitli bir hesap grubunda cookie yeniden oluştu ve tahliye işlemi başlatıldı." };
+      return { title: t("monitor.leaseOutsideCookieCreated.title"), message: t("monitor.leaseOutsideCookieCreated.message") };
     case "monitor_queue_overflow":
-      return { title: "Monitoring kuyruğu doldu", message: "Bazı eski monitoring olayları bounded kuyruktan çıkarıldı." };
+      return { title: t("monitor.queueOverflow.title"), message: t("monitor.queueOverflow.message") };
     case "process_inspection_wmi_connect_access_denied":
     case "process_inspection_wmi_connect_failed":
     case "process_inspection_wmi_poll_access_denied":
@@ -135,7 +142,7 @@ export function notificationText(event: MonitorEvent, activeScopes: readonly str
     case "host_disconnect":
     case "reconnect_success":
     case "selector_changed":
-      return { title: "FURSOY monitoring bilgisi", message: "Redakte bir monitoring olayı audit kaydına işlendi." };
+      return { title: t("monitor.info.title"), message: t("monitor.info.message") };
   }
 }
 

@@ -3,6 +3,7 @@ import { build } from "esbuild";
 
 const entryPoints = [
   "src/background.ts",
+  "src/connection-readiness.ts",
   "src/i18n.ts",
   "src/locale.ts",
   "src/monitor.ts",

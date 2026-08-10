@@ -1,5 +1,7 @@
+import { enhanceSelects } from "./custom-select.js";
 import { translate, type Locale } from "./i18n.js";
 import { currentLocale } from "./locale.js";
+import { isValidProtectionScope, normalizeProtectionScopeInput } from "./protocol.js";
 
 type PolicyLevel = "critical" | "balanced" | "convenient" | "monitor";
 
@@ -32,7 +34,18 @@ const addsiteSkip = required<HTMLButtonElement>("addsite-skip");
 const doneFinish = required<HTMLButtonElement>("done-finish");
 
 function showStep(step: HTMLElement): void {
-  for (const section of [stepWelcome, stepInstall, stepAddsite, stepDone]) section.hidden = section !== step;
+  const steps = [stepWelcome, stepInstall, stepAddsite, stepDone];
+  const names = ["welcome", "install", "addsite", "done"];
+  const activeIndex = steps.indexOf(step);
+  for (const section of steps) section.hidden = section !== step;
+  document.body.dataset.step = names[activeIndex];
+  document.querySelectorAll<HTMLElement>(".step-dot").forEach((dot, index) => {
+    dot.classList.toggle("active", index === activeIndex);
+    dot.classList.toggle("past", index < activeIndex);
+  });
+  document.querySelectorAll<HTMLElement>(".step-line").forEach((line, index) => {
+    line.classList.toggle("past", index < activeIndex);
+  });
 }
 
 function t(locale: Locale, key: string): string {
@@ -40,6 +53,10 @@ function t(locale: Locale, key: string): string {
 }
 
 function applyTranslations(locale: Locale): void {
+  document.querySelectorAll<HTMLElement>("[data-i18n]").forEach((element) => {
+    const key = element.dataset.i18n;
+    if (key !== undefined) element.textContent = t(locale, key);
+  });
   required<HTMLElement>("welcome-title").textContent = t(locale, "onboarding.welcome.title");
   required<HTMLElement>("welcome-body").textContent = t(locale, "onboarding.welcome.body");
   welcomeNext.textContent = t(locale, "onboarding.welcome.next");
@@ -129,8 +146,9 @@ function showAddsiteError(key: string): void {
 
 async function addFirstSite(): Promise<void> {
   addsiteError.hidden = true;
-  const scope = addsiteScope.value.trim().replace(/^\./, "").toLowerCase();
+  const scope = normalizeProtectionScopeInput(addsiteScope.value);
   if (scope === "") return showAddsiteError("onboarding.addsite.error.empty");
+  if (!isValidProtectionScope(scope)) return showAddsiteError("onboarding.addsite.error.invalid");
   if (await scopeOverlapsExisting(scope)) return showAddsiteError("onboarding.addsite.error.overlap");
   const submitButton = required<HTMLButtonElement>("addsite-submit");
   submitButton.disabled = true;
@@ -160,4 +178,5 @@ void (async () => {
   locale = await currentLocale();
   document.documentElement.lang = locale;
   applyTranslations(locale);
+  enhanceSelects();
 })();

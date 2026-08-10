@@ -1,12 +1,12 @@
 {
   "name": "fursoy-vault-extension",
-  "version": "0.3.1",
+  "version": "0.4.1",
   "type": "module",
   "private": true,
   "scripts": {
     "check": "tsc -p tsconfig.json --noEmit",
     "build": "node scripts/build.mjs",
-    "test": "npm run build && node tests/protocol.test.mjs && node tests/monitor.test.mjs && node tests/i18n.test.mjs && node tests/state-machine.test.mjs",
+    "test": "npm run build && node tests/protocol.test.mjs && node tests/monitor.test.mjs && node tests/i18n.test.mjs && node tests/state-machine.test.mjs && node tests/connection-readiness.test.mjs",
     "package": "npm run check && npm test && node scripts/package.mjs"
   },
   "devDependencies": {

@@ -31,17 +31,6 @@ New-Item -ItemType Directory -Force -Path $deploymentRoot | Out-Null
 $installedExe = Join-Path $deploymentRoot "fursoy-vault-host.exe"
 Copy-Item -LiteralPath $sourceExe -Destination $installedExe
 
-$configRoot = Join-Path $dataRoot "config"
-New-Item -ItemType Directory -Force -Path $configRoot | Out-Null
-$installedConfig = Join-Path $configRoot "account-groups.json"
-if (-not (Test-Path -LiteralPath $installedConfig)) {
-  $emptyConfig = '{"version":3,"compatibility_version":3,"groups":[]}'
-  [System.IO.File]::WriteAllText($installedConfig, $emptyConfig, [System.Text.UTF8Encoding]::new($false))
-  Write-Host "Seeded empty account-group config at $installedConfig"
-} else {
-  Write-Host "Kept existing account-group config at $installedConfig"
-}
-
 $manifestPath = Join-Path $installRoot "com.fursoy.vault.json"
 $manifest = [ordered]@{
   name = "com.fursoy.vault"

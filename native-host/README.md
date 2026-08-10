@@ -8,7 +8,8 @@ Implemented:
 
 - ownership of the account-group config: validation, atomic persistence, runtime `group.add` /
   `group.remove` and the SHA-256 digest published to the extension;
-- Native Messaging v5 handshake with explicit product-version and capability compatibility;
+- Native Messaging v6 handshake with explicit product-version, capability and browser-profile
+  namespace compatibility;
 - per-group vault, lease metadata, capability ledger, pending operation and reconciliation state;
 - automatic migration of the Phase 5 Wikipedia lease/capability files to UUID-based paths;
 - host-authoritative Critical/Balanced/Convenient/Monitor policy parameters;
@@ -21,11 +22,11 @@ Implemented:
   executables under known Google Chrome install roots are inspected, without retaining command
   lines, ports or profile paths;
 - failure isolation: a group-level operation error does not mutate another group's runtime.
+- isolated per-Chrome-profile config, vault, lease, Hello and audit namespaces, with atomic
+  ownership transfer for recovery after extension storage is removed.
 
-The installer seeds `%LOCALAPPDATA%\FursoyVault\config\account-groups.json` only when it
-does not already exist; once sites can be added at runtime (ADR-020) that file is user data and a
-reinstall must not overwrite it. The executable still carries a bundled config as a first-run
-fallback.
+The installer never seeds or overwrites profile configuration. Each profile starts from the
+executable's bundled empty config and persists its own user-managed config after the first change.
 
 Close Chrome before exporting the retained, redacted audit chain:
 
@@ -37,8 +38,9 @@ Installation uses immutable versioned deployments and switches the Native Messag
 after the new executable is present. The default uninstaller only disables integration; pass
 `-Purge` to explicitly erase all local vault, configuration, audit and companion data.
 
-Still excluded: incognito/multi-profile support, persistent Windows agent, profile-directory access
-attribution, kernel drivers and management UI. Monitoring is best-effort detection, not blocking.
+Still excluded: incognito, browsers other than Chrome, persistent Windows agent,
+profile-directory access attribution and kernel drivers. Monitoring is best-effort detection, not
+blocking.
 
 ## Checks
 

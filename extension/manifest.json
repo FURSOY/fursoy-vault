@@ -2,8 +2,14 @@
   "manifest_version": 3,
   "minimum_chrome_version": "130",
   "name": "FURSOY Vault",
-  "version": "0.3.1",
+  "version": "0.4.1",
   "description": "FURSOY Vault with multi-group protection and redacted user-mode monitoring.",
+  "icons": {
+    "16": "assets/fursoy-vault-extension-icon.png",
+    "32": "assets/fursoy-vault-extension-icon.png",
+    "48": "assets/fursoy-vault-extension-icon.png",
+    "128": "assets/fursoy-vault-extension-icon.png"
+  },
   "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAudTNjBf91r1PbVuve4P5R6TA4PuWaRuQ6xOkk0bkPj44i3uoIezAc3nPyEnhPHtt7bzOTOoRak/7/DF1qHZh9hZ0FefApEqeO1W6+fyXsVtraIiLnnNZ2jZE4xijZ+RPgthkbaGg5DA3oU4Dba0x8OWHuaEQC/kkc0NHVYBN/rtBioSmINdfgBxSv9knMj9BblL0nSghw03+0IUuM/gQJ9xE9hCp4JAv0A2PsxEtALswuKOs3Ru8cMvAtxjijfSGjQYuNHHzboDqDOegNIu/c/Dspksc1R2eDK/z4zVJ3D91V5NB/ydXSy2kwbhkPFXqxHN9LqBdGjNTPsTT8LHvqQIDAQAB",
   "permissions": [
     "nativeMessaging",
@@ -24,7 +30,8 @@
   },
   "action": {
     "default_title": "FURSOY Vault",
-    "default_popup": "popup.html"
+    "default_popup": "popup.html",
+    "default_icon": "assets/fursoy-vault-extension-icon.png"
   },
   "optional_host_permissions": [
     "*://*/*"

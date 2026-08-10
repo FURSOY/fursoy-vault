@@ -19,4 +19,7 @@ Chrome and run: powershell -File uninstall.ps1 -Purge
 Audit export (close Chrome first):
   "%LOCALAPPDATA%\FursoyVault\native-host\versions\<current>\fursoy-vault-host.exe" --export-audit audit.jsonl
 
+If more than one browser profile is configured, select one explicitly:
+  "%LOCALAPPDATA%\FursoyVault\native-host\versions\<current>\fursoy-vault-host.exe" --export-audit --profile <profile-uuid> audit.jsonl
+
 This release is GPL-3.0. See LICENSE and SOURCE.txt for license, source and reproducible build info.

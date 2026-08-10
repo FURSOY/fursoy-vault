@@ -1,3 +1,6 @@
+import { translate, type Locale } from "./i18n.js";
+import { currentLocale } from "./locale.js";
+
 type UnlockStatus = "ready" | "unlocking" | "recovering" | "redirecting" | "error";
 
 interface UnlockResponse {
@@ -8,8 +11,28 @@ interface UnlockResponse {
 
 const button = requiredElement<HTMLButtonElement>("unlock");
 const statusText = requiredElement<HTMLElement>("status");
+const buttonLabelCandidate = button.querySelector<HTMLElement>(".unlock-label");
+if (buttonLabelCandidate === null) throw new Error("missing unlock button label");
+const buttonLabel: HTMLElement = buttonLabelCandidate;
+const trustLabelBox = requiredElement<HTMLElement>("trust-strip");
 let requestActive = false;
 let pollInFlight = false;
+let locale: Locale = "tr";
+let currentStatus: UnlockStatus = "ready";
+
+function t(key: string): string {
+  return translate(locale, key, undefined);
+}
+
+function applyTranslations(): void {
+  document.documentElement.lang = locale;
+  document.querySelectorAll<HTMLElement>("[data-i18n]").forEach((element) => {
+    const key = element.dataset.i18n;
+    if (key !== undefined) element.textContent = t(key);
+  });
+  trustLabelBox.setAttribute("aria-label", t("unlock.trustLabel"));
+  render(currentStatus);
+}
 
 button.addEventListener("click", () => {
   requestActive = true;
@@ -33,6 +56,11 @@ setInterval(() => {
 
 void sendUnlockMessage("unlock.status").then(handleResponse, () => render("error"));
 
+void (async () => {
+  locale = await currentLocale();
+  applyTranslations();
+})();
+
 function handleResponse(response: unknown): void {
   const result = response as UnlockResponse | undefined;
   const status = result?.status ?? "error";
@@ -41,25 +69,32 @@ function handleResponse(response: unknown): void {
 }
 
 function render(status: UnlockStatus): void {
+  currentStatus = status;
+  document.body.dataset.status = status;
   switch (status) {
     case "ready":
-      statusText.textContent = "Windows Hello ile korunan cookie'leri açabilirsiniz.";
+      statusText.textContent = t("unlock.status.ready");
+      buttonLabel.textContent = t("unlock.button.ready");
       button.disabled = false;
       break;
     case "unlocking":
-      statusText.textContent = "Windows Hello onayı ve cookie enjeksiyonu bekleniyor…";
+      statusText.textContent = t("unlock.status.unlocking");
+      buttonLabel.textContent = t("unlock.button.unlocking");
       button.disabled = true;
       break;
     case "recovering":
-      statusText.textContent = "Güvenli durum geri yükleniyor; birazdan tekrar deneyebilirsiniz.";
+      statusText.textContent = t("unlock.status.recovering");
+      buttonLabel.textContent = t("unlock.button.recovering");
       button.disabled = true;
       break;
     case "redirecting":
-      statusText.textContent = "Cookie'ler hazır; site açılıyor…";
+      statusText.textContent = t("unlock.status.redirecting");
+      buttonLabel.textContent = t("unlock.button.redirecting");
       button.disabled = true;
       break;
     case "error":
-      statusText.textContent = "Oturum açılamadı. Yeniden deneyebilirsiniz.";
+      statusText.textContent = t("unlock.status.error");
+      buttonLabel.textContent = t("unlock.button.error");
       button.disabled = requestActive;
       break;
   }

@@ -6,6 +6,8 @@ import { zipSync } from "fflate";
 const staticFiles = [
   "manifest.json",
   "monitor-icon.png",
+  "assets/deneme.png",
+  "assets/fursoy-vault-extension-icon.png",
   "theme.css",
   "popup.html", "popup.css",
   "options.html", "options.css",

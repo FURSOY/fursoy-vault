@@ -1,8 +1,8 @@
 export const HOST_NAME = "com.fursoy.vault";
-export const PROTOCOL_VERSION = 5;
-export const EXTENSION_VERSION = "0.3.1";
-export const MIN_HOST_VERSION = "0.3.1";
-export const REQUIRED_CAPABILITIES = ["chunked_cookies", "request_correlation", "config_v3", "audit_recovery"] as const;
+export const PROTOCOL_VERSION = 6;
+export const EXTENSION_VERSION = "0.4.1";
+export const MIN_HOST_VERSION = "0.4.1";
+export const REQUIRED_CAPABILITIES = ["chunked_cookies", "request_correlation", "config_v3", "audit_recovery", "profile_namespace", "profile_recovery"] as const;
 
 export function compareSemanticVersions(left: string, right: string): number {
   const parse = (value: string): number[] => {
@@ -79,7 +79,8 @@ export function validateConfig(config: AccountGroupsConfig): void {
   }
 }
 
-function isValidScope(scope: string): boolean {
+export function isValidProtectionScope(value: string): boolean {
+  const scope = value.trim().replace(/^\./, "").toLowerCase();
   if (scope === "" || scope.length > 253 || scope.startsWith(".") || scope.endsWith(".")) return false;
   if (!/^[a-z0-9.-]+$/.test(scope) || scope.includes("..")) return false;
   if (scope === "localhost") return true;
@@ -89,6 +90,15 @@ function isValidScope(scope: string): boolean {
   // github.io) and arbitrary subdomains are rejected so one group can never span unrelated sites.
   return parsed.domain === scope && (parsed.isIcann === true || parsed.isPrivate === true);
 }
+
+export function normalizeProtectionScopeInput(value: string): string {
+  const host = value.trim().replace(/^https?:\/\//i, "").replace(/[\/?#].*$/, "").replace(/^\./, "").toLowerCase();
+  if (host === "" || host === "localhost") return host;
+  const parsed = parseDomain(host, { allowPrivateDomains: true });
+  return parsed.isIp ? host : parsed.domain ?? host;
+}
+
+const isValidScope = isValidProtectionScope;
 
 function isValidIpv4(scope: string): boolean {
   const parts = scope.split(".");

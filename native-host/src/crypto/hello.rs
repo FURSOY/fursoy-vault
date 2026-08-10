@@ -33,7 +33,6 @@ use crate::crypto::fill_random;
 use crate::crypto::webauthn_codec::{
     der_ecdsa_signature_to_raw, hex_decode, hex_encode, parse_attested_credential,
 };
-use crate::paths::DataPaths;
 use crate::protocol::messages::{CapabilityPayload, SignedCapability};
 use crate::{FcpError, FcpResult};
 
@@ -89,11 +88,10 @@ struct CredentialRegistry {
 }
 
 impl HelloAuthorizer {
-    pub fn open_or_create() -> FcpResult<Self> {
+    pub fn open_or_create(credential_path: &Path) -> FcpResult<Self> {
         let apartment = ComApartment::initialize()?;
-        let paths = DataPaths::discover()?;
-        if paths.hello_credential.exists() {
-            match load_registry(&paths.hello_credential) {
+        if credential_path.exists() {
+            match load_registry(credential_path) {
                 Ok((credential_id, public_key_x, public_key_y)) => {
                     return Ok(Self {
                         credential_id,
@@ -105,20 +103,19 @@ impl HelloAuthorizer {
                 Err(_) => {
                     // The registry is only a pointer/public-key cache; vault encryption does not
                     // depend on it. Preserve corrupt evidence and enroll a fresh platform key.
-                    quarantine_registry(&paths.hello_credential)?;
+                    quarantine_registry(credential_path)?;
                 }
             }
         }
-        create_authorizer(apartment, &paths.hello_credential)
+        create_authorizer(apartment, credential_path)
     }
 
-    pub fn recreate() -> FcpResult<Self> {
+    pub fn recreate(credential_path: &Path) -> FcpResult<Self> {
         let apartment = ComApartment::initialize()?;
-        let paths = DataPaths::discover()?;
-        if paths.hello_credential.exists() {
-            quarantine_registry(&paths.hello_credential)?;
+        if credential_path.exists() {
+            quarantine_registry(credential_path)?;
         }
-        create_authorizer(apartment, &paths.hello_credential)
+        create_authorizer(apartment, credential_path)
     }
 
     pub fn is_missing_credential_error(error: &FcpError) -> bool {

@@ -39,7 +39,7 @@ declare namespace chrome {
     const onStateChanged: { addListener(callback: (state: IdleState) => void): void };
   }
   namespace storage {
-    interface Area { get(key: string, callback: (items: Record<string, unknown>) => void): void; set(items: Record<string, unknown>, callback?: () => void): void }
+    interface Area { get(key: string, callback: (items: Record<string, unknown>) => void): void; set(items: Record<string, unknown>, callback?: () => void): void; remove(keys: string | string[], callback?: () => void): void }
     const session: Area;
     const local: Area;
   }

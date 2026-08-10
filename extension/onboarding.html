@@ -2,52 +2,117 @@
 <html lang="tr">
   <head>
     <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
     <link rel="stylesheet" href="theme.css" />
     <link rel="stylesheet" href="onboarding.css" />
     <title>FURSOY Vault</title>
   </head>
-  <body>
+  <body data-step="welcome">
+    <header class="onboarding-header">
+      <div class="brand">
+        <img class="brand-mark" src="assets/deneme.png" alt="">
+        <span class="brand-copy">
+          <span class="brand-name">FURSOY Vault</span>
+          <span class="brand-kicker">Private by design</span>
+        </span>
+      </div>
+      <span class="setup-label" data-i18n="onboarding.chrome.setupLabel">Güvenli kurulum</span>
+    </header>
+
     <main>
-      <h1>FURSOY Vault</h1>
+      <aside class="story-panel" aria-hidden="true">
+        <div class="story-copy">
+          <span class="eyebrow" data-i18n="onboarding.chrome.storyKicker">Oturum kasası</span>
+          <h1><span data-i18n="onboarding.chrome.storyLine1">Hesabın açık kalmasın.</span><br /><span data-i18n="onboarding.chrome.storyLine2">Sen açtığında açılsın.</span></h1>
+          <p data-i18n="onboarding.chrome.storyBody">Cookie oturumlarını cihazında tut, Windows Hello ile geri çağır.</p>
+        </div>
+        <div class="vault-visual">
+          <span class="orbit orbit-a"></span>
+          <span class="orbit orbit-b"></span>
+          <span class="orbit-node node-a"></span>
+          <span class="orbit-node node-b"></span>
+          <div class="visual-lock"><span></span></div>
+        </div>
+        <div class="proof-row">
+          <span><i></i> TPM backed</span>
+          <span><i></i> Local only</span>
+          <span><i></i> Hello approval</span>
+        </div>
+      </aside>
 
-      <section id="step-welcome">
-        <h2 id="welcome-title"></h2>
-        <p id="welcome-body"></p>
-        <button id="welcome-next" type="button" class="primary"></button>
-      </section>
+      <section class="setup-panel">
+        <ol class="step-progress" aria-label="Kurulum ilerlemesi">
+          <li class="step-dot active" data-step-name="welcome"><span>1</span><small data-i18n="onboarding.chrome.stepWelcome">Başlangıç</small></li>
+          <li class="step-line"></li>
+          <li class="step-dot" data-step-name="install"><span>2</span><small data-i18n="onboarding.chrome.stepInstall">Companion</small></li>
+          <li class="step-line"></li>
+          <li class="step-dot" data-step-name="addsite"><span>3</span><small data-i18n="onboarding.chrome.stepSite">İlk site</small></li>
+          <li class="step-line"></li>
+          <li class="step-dot" data-step-name="done"><span>4</span><small data-i18n="onboarding.chrome.stepDone">Tamam</small></li>
+        </ol>
 
-      <section id="step-install" hidden>
-        <h2 id="install-title"></h2>
-        <p id="install-body"></p>
-        <a id="install-download" class="primary button-link" href="#" download rel="noopener"></a>
-        <button id="install-check" type="button"></button>
-        <p id="install-status" class="hint" hidden></p>
-        <button id="install-skip" type="button" class="link-button"></button>
-      </section>
+        <div class="step-stage">
+          <section id="step-welcome" class="setup-step">
+            <span class="step-number">01</span>
+            <h2 id="welcome-title">FURSOY Vault’a hoş geldin</h2>
+            <p id="welcome-body" class="step-body">Önemli hesaplarının cookie oturumlarını kullanmadığın zaman cihazındaki güvenli kasada sakla.</p>
+            <div class="feature-list">
+              <div><span class="feature-check" aria-hidden="true"></span><p><strong data-i18n="onboarding.chrome.localTitle">Yerel kasa</strong><small data-i18n="onboarding.chrome.localBody">Oturum verisi bu cihazda kalır.</small></p></div>
+              <div><span class="feature-check" aria-hidden="true"></span><p><strong data-i18n="onboarding.chrome.accessTitle">Kontrollü erişim</strong><small data-i18n="onboarding.chrome.accessBody">Geri yükleme Windows Hello onayı ister.</small></p></div>
+            </div>
+            <button id="welcome-next" type="button" class="primary step-primary">Devam et</button>
+          </section>
 
-      <section id="step-addsite" hidden>
-        <h2 id="addsite-title"></h2>
-        <p id="addsite-body"></p>
-        <form id="addsite-form" autocomplete="off">
-          <label id="addsite-scope-label" for="addsite-scope"></label>
-          <input id="addsite-scope" type="text" spellcheck="false" autocomplete="off" />
-          <label id="addsite-policy-label" for="addsite-policy"></label>
-          <select id="addsite-policy">
-            <option value="critical" data-key="policy.critical"></option>
-            <option value="balanced" selected data-key="policy.balanced"></option>
-            <option value="convenient" data-key="policy.convenient"></option>
-            <option value="monitor" data-key="policy.monitor"></option>
-          </select>
-          <p id="addsite-error" class="warning" hidden></p>
-          <button id="addsite-submit" type="submit" class="primary"></button>
-        </form>
-        <button id="addsite-skip" type="button" class="link-button"></button>
-      </section>
+          <section id="step-install" class="setup-step" hidden>
+            <span class="step-number">02</span>
+            <h2 id="install-title">Companion uygulamayı kur</h2>
+            <p id="install-body" class="step-body">Güvenli kasayı Windows Hello ve TPM ile bağlamak için yerel companion uygulamayı kur.</p>
+            <div class="download-card">
+              <span class="download-icon" aria-hidden="true"></span>
+              <div><strong>FURSOY Vault Companion</strong><small data-i18n="onboarding.chrome.companionMeta">Windows · x64 · Yerel servis</small></div>
+              <a id="install-download" class="primary button-link" href="#" download rel="noopener">İndir</a>
+            </div>
+            <button id="install-check" type="button" class="step-primary">Bağlantıyı kontrol et</button>
+            <p id="install-status" class="status-message" role="status" hidden></p>
+            <button id="install-skip" type="button" class="link-button secondary-action">Şimdilik atla</button>
+          </section>
 
-      <section id="step-done" hidden>
-        <h2 id="done-title"></h2>
-        <p id="done-body"></p>
-        <button id="done-finish" type="button" class="primary"></button>
+          <section id="step-addsite" class="setup-step" hidden>
+            <span class="step-number">03</span>
+            <h2 id="addsite-title">İlk siteni koru</h2>
+            <p id="addsite-body" class="step-body">Koruma döngüsünü başlatmak için önemli bir hesabın alan adını ekle.</p>
+            <form id="addsite-form" autocomplete="off">
+              <label id="addsite-scope-label" class="field-label" for="addsite-scope">Alan adı</label>
+              <div class="domain-input">
+                <span aria-hidden="true">https://</span>
+                <input id="addsite-scope" type="text" spellcheck="false" autocomplete="off" />
+              </div>
+              <label id="addsite-policy-label" class="field-label policy-field-label" for="addsite-policy">Koruma profili</label>
+              <select id="addsite-policy">
+                <option value="critical" data-key="policy.critical"></option>
+                <option value="balanced" selected data-key="policy.balanced"></option>
+                <option value="convenient" data-key="policy.convenient"></option>
+                <option value="monitor" data-key="policy.monitor"></option>
+              </select>
+              <p id="addsite-error" class="notice notice-danger" role="alert" hidden></p>
+              <button id="addsite-submit" type="submit" class="primary step-primary">Korumaya al</button>
+            </form>
+            <button id="addsite-skip" type="button" class="link-button secondary-action">Şimdilik atla</button>
+          </section>
+
+          <section id="step-done" class="setup-step done-step" hidden>
+            <div class="done-mark" aria-hidden="true"><span></span></div>
+            <span class="step-number">04</span>
+            <h2 id="done-title">Hazırsın</h2>
+            <p id="done-body" class="step-body">FURSOY Vault artık önemli oturumlarını korumaya hazır.</p>
+            <div class="done-summary">
+              <span><i></i><b data-i18n="onboarding.chrome.doneCompanion">Companion bağlantısı</b></span>
+              <span><i></i><b data-i18n="onboarding.chrome.doneVault">Yerel şifreli kasa</b></span>
+              <span><i></i><b data-i18n="onboarding.chrome.doneCycle">Otomatik koruma döngüsü</b></span>
+            </div>
+            <button id="done-finish" type="button" class="primary step-primary">Bitir</button>
+          </section>
+        </div>
       </section>
     </main>
     <script type="module" src="dist/onboarding.js"></script>

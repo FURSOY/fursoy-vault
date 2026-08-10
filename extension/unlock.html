@@ -1,18 +1,49 @@
 <!doctype html>
 <html lang="tr">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>FURSOY Vault</title>
-  <link rel="stylesheet" href="theme.css" />
-  <link rel="stylesheet" href="unlock.css">
-</head>
-<body>
-  <main>
-    <h1>Korunan oturum kilitli</h1>
-    <p id="status" role="status">Oturum açma işlemi hazır.</p>
-    <button id="unlock" type="button">Cookie ile giriş yap</button>
-  </main>
-  <script type="module" src="dist/unlock.js"></script>
-</body>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>FURSOY Vault</title>
+    <link rel="stylesheet" href="theme.css" />
+    <link rel="stylesheet" href="unlock.css" />
+  </head>
+  <body data-status="ready">
+    <header class="unlock-header">
+      <div class="brand">
+        <img class="brand-mark" src="assets/deneme.png" alt="">
+        <span class="brand-copy">
+          <span class="brand-name">FURSOY Vault</span>
+          <span class="brand-kicker">Protected session</span>
+        </span>
+      </div>
+      <span class="security-label"><i></i> <span data-i18n="unlock.securityLabel">Güvenli geçiş</span></span>
+    </header>
+
+    <main>
+      <section class="unlock-card">
+        <div class="unlock-visual" aria-hidden="true">
+          <span class="pulse pulse-one"></span>
+          <span class="pulse pulse-two"></span>
+          <div class="lock-body"><span></span></div>
+          <div class="progress-spinner"></div>
+        </div>
+        <div class="unlock-copy">
+          <span class="eyebrow" data-i18n="unlock.eyebrow">Oturum kasası</span>
+          <h1 data-i18n="unlock.title">Korunan oturum kilitli</h1>
+          <p id="status" role="status">Oturum açma işlemi hazır.</p>
+          <button id="unlock" type="button" class="primary">
+            <span class="hello-symbol" aria-hidden="true"></span>
+            <span class="unlock-label">Windows Hello ile aç</span>
+          </button>
+          <p class="privacy-note"><span aria-hidden="true"></span> <span data-i18n="unlock.privacyNote">Onay bu cihazda gerçekleşir. Biyometrik veri uzantıya aktarılmaz.</span></p>
+        </div>
+      </section>
+      <div id="trust-strip" class="trust-strip">
+        <span><i class="dot"></i> <span data-i18n="unlock.trust.singleUse">Tek kullanımlık yetki</span></span>
+        <span><i class="dot"></i> <span data-i18n="unlock.trust.encryptedVault">Şifreli cookie kasası</span></span>
+        <span><i class="dot"></i> <span data-i18n="unlock.trust.autoRelock">Otomatik yeniden kilitleme</span></span>
+      </div>
+    </main>
+    <script type="module" src="dist/unlock.js"></script>
+  </body>
 </html>

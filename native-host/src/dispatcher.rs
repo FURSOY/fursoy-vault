@@ -18,6 +18,7 @@ use crate::protocol::messages::{
     CookiesInjectChunk, CookiesSnapshotChunk, EvictConfirmed, EvictPhase, EvictRequest,
     EvictResult, GroupAdd, GroupRemove, GroupSetPolicy, GroupState, Handshake, HandshakeAck,
     HandshakeGroupState, InjectResult, LeaseDeny, LeaseGrant, LeasePurpose, LeaseRequest, Message,
+    ProfileRecoveryClaim, ProfileRecoveryClaimed, ProfileRecoveryRejected, RecoveryProfileSummary,
     SessionInvalidate, SessionInvalidated, SessionInvalidationReason,
 };
 use crate::protocol::messages::{MonitorEvent, MonitorSeverity, MonitorSignal, MonitorSource};
@@ -27,12 +28,14 @@ use crate::{FcpError, FcpResult, WIKIPEDIA_ACCOUNT_GROUP_ID};
 
 pub const NATIVE_HOST_NAME: &str = "com.fursoy.vault";
 pub const PRODUCT_EXTENSION_ID: &str = "ikodegbaomnahbjiokfogpedaoifhbde";
-const MIN_EXTENSION_VERSION: &str = "0.3.1";
+const MIN_EXTENSION_VERSION: &str = "0.4.1";
 const PROTOCOL_CAPABILITIES: &[&str] = &[
     "chunked_cookies",
     "request_correlation",
     "config_v3",
     "audit_recovery",
+    "profile_namespace",
+    "profile_recovery",
 ];
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -190,6 +193,14 @@ impl NativeHostApp {
             Message::GroupAdd(request) => return self.handle_group_add(request),
             Message::GroupRemove(request) => return self.handle_group_remove(request),
             Message::GroupSetPolicy(request) => return self.handle_group_set_policy(request),
+            Message::ProfileRecoveryClaim(request) => {
+                return self.handle_profile_recovery_claim(request);
+            }
+            Message::ProfileRecoveryClaimed(_) | Message::ProfileRecoveryRejected(_) => {
+                return Err(FcpError::Protocol(
+                    "profile recovery result direction is host-to-extension only".into(),
+                ));
+            }
             Message::ConfigUpdated(_) | Message::ConfigRejected(_) | Message::OperationError(_) => {
                 return Err(FcpError::Protocol(
                     "config result direction is host-to-extension only".into(),
@@ -201,11 +212,17 @@ impl NativeHostApp {
             FcpError::Protocol("message direction is host-to-extension only".into())
         })?;
         self.last_message_group = Some(group_id);
+        let hello_credential = self.paths.hello_credential.clone();
         let runtime = self
             .groups
             .get_mut(&group_id)
             .ok_or_else(|| FcpError::Protocol("unknown account group".into()))?;
-        runtime.handle(message, &self.audit, &mut self.hello_authorizer)
+        runtime.handle(
+            message,
+            &self.audit,
+            &mut self.hello_authorizer,
+            &hello_credential,
+        )
     }
 
     pub fn deny_for_error(&self, _error: &FcpError) -> Message {
@@ -254,6 +271,16 @@ impl NativeHostApp {
         }) {
             return Err(FcpError::Protocol("extension capability mismatch".into()));
         }
+        let recovery_profiles = self
+            .paths
+            .recovery_profiles(handshake.profile_id)?
+            .into_iter()
+            .map(|candidate| RecoveryProfileSummary {
+                profile_id: candidate.profile_id,
+                scopes: candidate.scopes,
+                config_modified_unix_ms: candidate.config_modified_unix_ms,
+            })
+            .collect();
         // Q24: the host is the single source of truth for the config, so a stale cached digest
         // on the extension side is not an error — the authoritative config rides along in the ack.
         self.handshake_complete = true;
@@ -273,6 +300,7 @@ impl NativeHostApp {
                 .iter()
                 .map(|value| (*value).to_string())
                 .collect(),
+            recovery_profiles,
         })])
     }
 
@@ -330,6 +358,40 @@ impl NativeHostApp {
         self.audit
             .record(added.id, "config", "success", None, Some("group_added"))?;
         Ok(vec![self.config_updated_message()])
+    }
+
+    fn handle_profile_recovery_claim(
+        &self,
+        request: ProfileRecoveryClaim,
+    ) -> FcpResult<Vec<Message>> {
+        if !self.config.groups.is_empty() {
+            return Ok(vec![Message::ProfileRecoveryRejected(
+                ProfileRecoveryRejected {
+                    reason: "profile_recovery_requires_empty".into(),
+                },
+            )]);
+        }
+        match self.paths.claim_recovery_profile(
+            self.paths
+                .root
+                .file_name()
+                .and_then(|value| value.to_str())
+                .and_then(|value| value.parse::<Uuid>().ok())
+                .ok_or_else(|| FcpError::Protocol("current profile id is unavailable".into()))?,
+            request.source_profile_id,
+            request.target_profile_id,
+        ) {
+            Ok(()) => Ok(vec![Message::ProfileRecoveryClaimed(
+                ProfileRecoveryClaimed {
+                    target_profile_id: request.target_profile_id,
+                },
+            )]),
+            Err(_) => Ok(vec![Message::ProfileRecoveryRejected(
+                ProfileRecoveryRejected {
+                    reason: "profile_recovery_unavailable".into(),
+                },
+            )]),
+        }
     }
 
     fn handle_group_remove(&mut self, request: GroupRemove) -> FcpResult<Vec<Message>> {
@@ -521,10 +583,11 @@ impl GroupRuntime {
         message: Message,
         audit: &AuditLogger,
         hello_authorizer: &mut Option<HelloAuthorizer>,
+        hello_credential: &std::path::Path,
     ) -> FcpResult<Vec<Message>> {
         match message {
             Message::LeaseRequest(request) => {
-                self.handle_lease_request(request, audit, hello_authorizer)
+                self.handle_lease_request(request, audit, hello_authorizer, hello_credential)
             }
             Message::InjectResult(result) => self.handle_inject_result(result, audit),
             Message::EvictRequest(request) => {
@@ -547,6 +610,7 @@ impl GroupRuntime {
         request: LeaseRequest,
         audit: &AuditLogger,
         hello_authorizer: &mut Option<HelloAuthorizer>,
+        hello_credential: &std::path::Path,
     ) -> FcpResult<Vec<Message>> {
         if self.pending.is_some() {
             return Ok(vec![self.lease_deny("operation_pending")]);
@@ -557,9 +621,12 @@ impl GroupRuntime {
         }
         match request.purpose {
             LeasePurpose::Enroll => self.begin_enrollment(policy.lease_duration_ms, audit),
-            LeasePurpose::Inject => {
-                self.begin_inject(policy.lease_duration_ms, audit, hello_authorizer)
-            }
+            LeasePurpose::Inject => self.begin_inject(
+                policy.lease_duration_ms,
+                audit,
+                hello_authorizer,
+                hello_credential,
+            ),
         }
     }
 
@@ -618,6 +685,7 @@ impl GroupRuntime {
         duration_ms: u64,
         audit: &AuditLogger,
         hello_authorizer: &mut Option<HelloAuthorizer>,
+        hello_credential: &std::path::Path,
     ) -> FcpResult<Vec<Message>> {
         if self.lease.state != GroupState::Sealed || !self.transactions.vault_exists() {
             return Ok(vec![self.lease_deny("group_not_sealed")]);
@@ -625,7 +693,7 @@ impl GroupRuntime {
         let now = unix_ms()?;
         let cache_duration = self.policy.parameters().hello_cache_ms.unwrap_or(0);
         if hello_authorizer.is_none() {
-            *hello_authorizer = Some(HelloAuthorizer::open_or_create()?);
+            *hello_authorizer = Some(HelloAuthorizer::open_or_create(hello_credential)?);
         }
         let mut use_cached = cache_duration > 0
             && self
@@ -645,7 +713,7 @@ impl GroupRuntime {
                 // Windows can remove a platform credential independently (Hello reset, account
                 // recovery, TPM maintenance). Re-enroll only for the provider's not-found code;
                 // user cancellation and verification failures remain hard failures.
-                *hello_authorizer = Some(HelloAuthorizer::recreate()?);
+                *hello_authorizer = Some(HelloAuthorizer::recreate(hello_credential)?);
                 use_cached = false;
                 self.transactions.authorize_inject(
                     hello_authorizer
@@ -1228,6 +1296,7 @@ mod tests {
         app.handle(Message::Handshake(Handshake {
             protocol_version: PROTOCOL_VERSION,
             extension_id: PRODUCT_EXTENSION_ID.into(),
+            profile_id: Uuid::new_v4(),
             extension_version: MIN_EXTENSION_VERSION.into(),
             min_host_version: env!("CARGO_PKG_VERSION").into(),
             capabilities: PROTOCOL_CAPABILITIES
@@ -1437,6 +1506,7 @@ mod tests {
             .handle(Message::Handshake(Handshake {
                 protocol_version: PROTOCOL_VERSION,
                 extension_id: PRODUCT_EXTENSION_ID.into(),
+                profile_id: Uuid::new_v4(),
                 extension_version: MIN_EXTENSION_VERSION.into(),
                 min_host_version: env!("CARGO_PKG_VERSION").into(),
                 capabilities: PROTOCOL_CAPABILITIES
@@ -1485,6 +1555,7 @@ mod tests {
                 app.handle(Message::Handshake(Handshake {
                     protocol_version: PROTOCOL_VERSION,
                     extension_id: PRODUCT_EXTENSION_ID.into(),
+                    profile_id: Uuid::new_v4(),
                     extension_version: extension_version.into(),
                     min_host_version: min_host_version.into(),
                     capabilities,
@@ -1505,6 +1576,7 @@ mod tests {
             .handle(Message::Handshake(Handshake {
                 protocol_version: PROTOCOL_VERSION,
                 extension_id: PRODUCT_EXTENSION_ID.into(),
+                profile_id: Uuid::new_v4(),
                 extension_version: MIN_EXTENSION_VERSION.into(),
                 min_host_version: env!("CARGO_PKG_VERSION").into(),
                 capabilities: PROTOCOL_CAPABILITIES
@@ -1533,6 +1605,7 @@ mod tests {
             .handle(Message::Handshake(Handshake {
                 protocol_version: PROTOCOL_VERSION,
                 extension_id: PRODUCT_EXTENSION_ID.into(),
+                profile_id: Uuid::new_v4(),
                 extension_version: MIN_EXTENSION_VERSION.into(),
                 min_host_version: env!("CARGO_PKG_VERSION").into(),
                 capabilities: PROTOCOL_CAPABILITIES
@@ -1566,6 +1639,7 @@ mod tests {
         app.handle(Message::Handshake(Handshake {
             protocol_version: PROTOCOL_VERSION,
             extension_id: PRODUCT_EXTENSION_ID.into(),
+            profile_id: Uuid::new_v4(),
             extension_version: MIN_EXTENSION_VERSION.into(),
             min_host_version: env!("CARGO_PKG_VERSION").into(),
             capabilities: PROTOCOL_CAPABILITIES
@@ -1633,6 +1707,7 @@ mod tests {
         app.handle(Message::Handshake(Handshake {
             protocol_version: PROTOCOL_VERSION,
             extension_id: PRODUCT_EXTENSION_ID.into(),
+            profile_id: Uuid::new_v4(),
             extension_version: MIN_EXTENSION_VERSION.into(),
             min_host_version: env!("CARGO_PKG_VERSION").into(),
             capabilities: PROTOCOL_CAPABILITIES

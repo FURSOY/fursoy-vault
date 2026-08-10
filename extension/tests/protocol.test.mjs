@@ -1,11 +1,14 @@
 import assert from "node:assert/strict";
 import {
+  REQUIRED_CAPABILITIES,
   cookieIdentity,
   cookieRoundTripMatches,
   cookieUrl,
   compareSemanticVersions,
   guessScope,
   hostInScope,
+  isValidProtectionScope,
+  normalizeProtectionScopeInput,
   navigationPatterns,
   validateConfig,
 } from "../dist/protocol.js";
@@ -62,6 +65,14 @@ assert.equal(guessScope("user.github.io"), "user.github.io");
 assert.equal(guessScope("localhost"), "localhost");
 assert.equal(guessScope("127.0.0.1"), "127.0.0.1");
 
+for (const scope of ["example.com", "example.co.uk", "user.github.io", "localhost", "127.0.0.1"]) {
+  assert.equal(isValidProtectionScope(scope), true, `${scope} must be accepted`);
+}
+for (const scope of ["example", "example.com.evil", "co.uk", "github.io", "999.1.1.1", "https://example.com/path"]) {
+  assert.equal(isValidProtectionScope(scope), false, `${scope} must be rejected`);
+}
+assert.equal(normalizeProtectionScopeInput(" HTTPS://WWW.Example.COM/login?q=1 "), "example.com");
+
 validateConfig(config([group()]));
 
 // Nested scopes would make cookie ownership ambiguous between two groups.
@@ -87,5 +98,6 @@ assert.equal(compareSemanticVersions("0.3.1", "0.3.1"), 0);
 assert.ok(compareSemanticVersions("0.4.0", "0.3.9") > 0);
 assert.throws(() => compareSemanticVersions("0.3", "0.3.1"));
 assert.throws(() => compareSemanticVersions("latest", "0.3.1"));
+assert.ok(REQUIRED_CAPABILITIES.includes("profile_recovery"));
 
 console.log("protocol tests: PASS");

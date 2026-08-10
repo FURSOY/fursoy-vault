@@ -2,84 +2,206 @@
 <html lang="tr">
   <head>
     <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
     <link rel="stylesheet" href="theme.css" />
     <link rel="stylesheet" href="options.css" />
-    <title>FURSOY Vault — Yönetim</title>
+    <title>FURSOY Vault · Yönetim</title>
   </head>
   <body>
-    <header>
-      <h1>FURSOY Vault</h1>
-      <p id="connection" class="warning" hidden>Native host bağlı değil. Koruma değişiklikleri yapılamaz.</p>
-      <p id="update-notice" class="ok" hidden>
-        Yeni bir sürüm var (<span id="update-version"></span>).
-        <a id="update-link" href="#" target="_blank" rel="noopener">İndirme sayfasını aç</a>
-      </p>
-      <p id="error" class="warning" hidden></p>
-    </header>
-
-    <section>
-      <h2>Korunan siteler</h2>
-      <table id="groups-table">
-        <thead>
-          <tr>
-            <th>Alan adı</th>
-            <th>Koruma seviyesi</th>
-            <th>Durum</th>
-            <th>Çerez</th>
-            <th></th>
-          </tr>
-        </thead>
-        <tbody id="groups"></tbody>
-      </table>
-      <p id="groups-empty" class="hint" hidden>Henüz korunan site yok.</p>
-    </section>
-
-    <section>
-      <h2>Site ekle</h2>
-      <form id="add-form" autocomplete="off">
-        <div class="row">
-          <label for="scope">Alan adı</label>
-          <input id="scope" type="text" spellcheck="false" placeholder="ornek.com" required />
+    <aside class="sidebar">
+      <div class="brand">
+        <img class="brand-mark" src="assets/deneme.png" alt="">
+        <span class="brand-copy">
+          <span class="brand-name">FURSOY Vault</span>
+          <span class="brand-kicker">Security console</span>
+        </span>
+      </div>
+      <nav aria-label="Yönetim bölümleri" id="nav">
+        <a class="nav-item active" href="#overview">
+          <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M4 13h6V4H4v9Zm0 7h6v-4H4v4Zm10 0h6v-9h-6v9Zm0-16v4h6V4h-6Z" /></svg>
+          <span data-i18n="options.nav.overview">Genel bakış</span>
+        </a>
+        <a class="nav-item" href="#sites">
+          <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M12 3 4.5 6v5.5c0 4.7 3.2 7.9 7.5 9.5 4.3-1.6 7.5-4.8 7.5-9.5V6L12 3Z" /></svg>
+          <span data-i18n="options.nav.sites">Korunan siteler</span>
+        </a>
+        <a class="nav-item" href="#events">
+          <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M5 4v16M9 7h10M9 12h10M9 17h7" /></svg>
+          <span data-i18n="options.nav.events">Olay günlüğü</span>
+        </a>
+      </nav>
+      <div class="sidebar-proof">
+        <span class="proof-icon" aria-hidden="true"></span>
+        <div>
+          <strong>Local-first</strong>
+          <p data-i18n="options.sidebar.localFirstBody">Cookie değerleri uzantı depolamasına veya buluta yazılmaz.</p>
         </div>
-        <div class="row">
-          <label for="policy">Koruma seviyesi</label>
-          <select id="policy">
-            <option value="critical">Kritik — 5 dk kira · 1 dk boşta · anında tahliye</option>
-            <option value="balanced" selected>Dengeli — 10 dk kira · 5 dk boşta · 2 dk bekleme</option>
-            <option value="convenient">Kullanışlı — 30 dk kira · 15 dk boşta · 5 dk bekleme</option>
-            <option value="monitor">Yalnız izle — cookie kasalama yok</option>
-          </select>
+      </div>
+      <div class="sidebar-footer">
+        <span>v0.4.1</span>
+        <span id="companion-state" class="connection-chip"><i></i><b>Companion</b></span>
+      </div>
+    </aside>
+
+    <div class="app-content">
+      <header class="topbar">
+        <div>
+          <span class="eyebrow" data-i18n="options.topbar.eyebrow">Yönetim merkezi</span>
+          <h1 data-i18n="options.topbar.title">Oturum güvenliği</h1>
         </div>
-        <button id="add" type="submit" class="primary">Korumaya al</button>
-        <p class="hint">
-          Bu alan adının ve alt alan adlarının <strong>tüm çerezleri</strong> korunur. Chrome ayrıca
-          kendi izin onayını isteyecektir; onaylamazsan site eklenmez.
-        </p>
-      </form>
-    </section>
+        <div class="topbar-badge"><span class="mini-lock" aria-hidden="true"></span> <span data-i18n="options.topbar.badge">Windows Hello ile korunuyor</span></div>
+      </header>
 
-    <section>
-      <h2>Olay günlüğü</h2>
-      <p class="hint">
-        Kullanıcıya gösterilen uyarılar. Bilgi seviyesindeki olaylar yalnızca native host'un
-        kurcalama-tespitli audit kaydında tutulur; burada görünmez.
-      </p>
-      <table id="log-table">
-        <thead>
-          <tr>
-            <th>Zaman</th>
-            <th>Önem</th>
-            <th>Olay</th>
-            <th>Site</th>
-            <th>Tekrar</th>
-          </tr>
-        </thead>
-        <tbody id="log"></tbody>
-      </table>
-      <p id="log-empty" class="hint" hidden>Kayıtlı olay yok.</p>
-      <button id="clear-log" type="button">Günlüğü temizle</button>
-    </section>
+      <main>
+        <div class="message-stack" aria-live="polite">
+          <p id="connection" class="notice" data-i18n="common.connectionWarning" hidden>Companion uygulama bağlı değil. Koruma değişiklikleri geçici olarak kullanılamıyor.</p>
+          <p id="update-notice" class="notice notice-success" hidden>
+            <strong id="update-ready-text">v0 hazır.</strong>
+            <a id="update-link" href="#" target="_blank" rel="noopener" data-i18n="options.update.linkText">Sürüm sayfasını aç</a>
+          </p>
+          <p id="error" class="notice notice-danger" role="alert" hidden></p>
+        </div>
 
+        <section id="overview" class="hero-section">
+          <div class="hero-copy">
+            <span class="eyebrow" data-i18n="options.hero.eyebrow">Durum özeti</span>
+            <h2><span data-i18n="options.hero.titleLine1">Önemli oturumların,</span><br /><span data-i18n="options.hero.titleLine2">yalnızca sen açtığında açık.</span></h2>
+            <p data-i18n="options.hero.body">Korunan alan adlarını, cookie kasalarının durumunu ve cihazdaki güvenlik sinyallerini tek yerden yönet.</p>
+          </div>
+          <div class="hero-seal" aria-hidden="true">
+            <span class="seal-ring ring-one"></span>
+            <span class="seal-ring ring-two"></span>
+            <span class="seal-lock"></span>
+          </div>
+        </section>
+
+        <section class="metrics" aria-label="Koruma özeti" id="metrics">
+          <article class="metric-card">
+            <span class="metric-label" data-i18n="options.metrics.totalSites">Toplam site</span>
+            <strong id="site-count">0</strong>
+            <span class="metric-note" data-i18n="options.metrics.totalSitesNote">Yönetilen kapsam</span>
+          </article>
+          <article class="metric-card">
+            <span class="metric-label" data-i18n="options.metrics.accessible">Erişilebilir</span>
+            <strong id="protected-count">0</strong>
+            <span class="metric-note" data-i18n="options.metrics.accessibleNote">İzni eksiksiz</span>
+          </article>
+          <article class="metric-card">
+            <span class="metric-label" data-i18n="options.metrics.vaultedCookies">Kasadaki cookie</span>
+            <strong id="cookie-count">0</strong>
+            <span class="metric-note" data-i18n="options.metrics.vaultedCookiesNote">Şifreli kayıt</span>
+          </article>
+          <article class="metric-card">
+            <span class="metric-label" data-i18n="options.metrics.visibleEvents">Görünür olay</span>
+            <strong id="event-count">0</strong>
+            <span class="metric-note" data-i18n="options.metrics.visibleEventsNote">Son kullanıcı uyarısı</span>
+          </article>
+        </section>
+
+        <section id="sites" class="content-section">
+          <div class="content-heading">
+            <div>
+              <span class="eyebrow" data-i18n="options.sites.eyebrow">Kasa kapsamı</span>
+              <h2 data-i18n="options.sites.title">Korunan siteler</h2>
+              <p data-i18n="options.sites.body">Her site için erişim durumunu ve koruma profilini yönet.</p>
+            </div>
+          </div>
+          <div class="data-card">
+            <div class="table-scroll">
+              <table id="groups-table">
+                <thead>
+                  <tr>
+                    <th data-i18n="options.sites.tableDomain">Alan adı</th>
+                    <th data-i18n="options.sites.tableProfile">Koruma profili</th>
+                    <th data-i18n="options.sites.tableStatus">Durum</th>
+                    <th data-i18n="options.sites.tableCookie">Cookie</th>
+                    <th><span class="sr-only" data-i18n="options.sites.tableActions">Eylemler</span></th>
+                  </tr>
+                </thead>
+                <tbody id="groups"></tbody>
+              </table>
+            </div>
+            <div id="groups-empty" class="large-empty" hidden>
+              <span class="empty-orbit" aria-hidden="true"></span>
+              <strong data-i18n="options.sites.emptyTitle">Henüz korunan bir site yok</strong>
+              <p data-i18n="options.sites.emptyBody">Aşağıdaki formdan ilk alan adını ekleyebilirsin.</p>
+            </div>
+          </div>
+
+          <div id="profile-recovery" class="recovery-card" hidden>
+            <div class="recovery-heading">
+              <span class="recovery-mark" aria-hidden="true"></span>
+              <div>
+                <span class="eyebrow" data-i18n="options.recovery.eyebrow">Yerel kurtarma</span>
+                <h3 data-i18n="options.recovery.title">Önceki kasanı yeniden bağla</h3>
+                <p data-i18n="options.recovery.body">Bu bilgisayarda daha önce kullanılan boş olmayan profil kasaları bulundu. Cookie değerleri gösterilmez; yalnızca doğru kasayı seçmen için alan adları listelenir.</p>
+              </div>
+            </div>
+            <div id="profile-recovery-list" class="recovery-list"></div>
+            <p class="recovery-note" data-i18n="options.recovery.note">Yalnızca şu anki profil boşken kullanılabilir. Yeniden bağlandıktan sonra Windows Hello koruması aynen devam eder.</p>
+          </div>
+
+          <div class="add-card">
+            <div class="add-card-copy">
+              <span class="plus-mark" aria-hidden="true"></span>
+              <div>
+                <h3 data-i18n="options.addCard.title">Yeni site ekle</h3>
+                <p data-i18n="options.addCard.body">Alan adı ve tüm alt alan adlarındaki cookie’ler kapsanır.</p>
+              </div>
+            </div>
+            <form id="add-form" autocomplete="off">
+              <div class="form-field domain-field">
+                <label class="field-label" for="scope" data-i18n="options.sites.tableDomain">Alan adı</label>
+                <input id="scope" type="text" spellcheck="false" placeholder="ornek.com" required />
+              </div>
+              <div class="form-field policy-field">
+                <label class="field-label" for="policy" data-i18n="options.sites.tableProfile">Koruma profili</label>
+                <select id="policy">
+                  <option value="critical" data-i18n="options.addCard.policyOption.critical">Kritik · en kısa süre</option>
+                  <option value="balanced" selected data-i18n="options.addCard.policyOption.balanced">Dengeli · önerilen</option>
+                  <option value="convenient" data-i18n="options.addCard.policyOption.convenient">Rahat · daha uzun süre</option>
+                  <option value="monitor" data-i18n="options.addCard.policyOption.monitor">Yalnız izle</option>
+                </select>
+              </div>
+              <button id="add" type="submit" class="primary" data-i18n="options.addCard.submit">Siteyi koru</button>
+            </form>
+            <p class="permission-note"><span aria-hidden="true">i</span> <span class="permission-note-text" data-i18n="options.addCard.permissionNote">Chrome, site verisine erişmek için ayrıca kendi izin penceresini gösterir.</span></p>
+          </div>
+        </section>
+
+        <section id="events" class="content-section">
+          <div class="content-heading event-heading">
+            <div>
+              <span class="eyebrow" data-i18n="options.events.eyebrow">Güvenlik sinyalleri</span>
+              <h2 data-i18n="options.events.title">Olay günlüğü</h2>
+              <p data-i18n="options.events.body">Kullanıcıya gösterilen önemli uyarılar. Ayrıntılı audit zinciri companion uygulamada tutulur.</p>
+            </div>
+            <button id="clear-log" class="danger-button" type="button" data-i18n="options.events.clearButton">Günlüğü temizle</button>
+          </div>
+          <div class="data-card">
+            <div class="table-scroll">
+              <table id="log-table">
+                <thead>
+                  <tr>
+                    <th data-i18n="options.events.tableTime">Zaman</th>
+                    <th data-i18n="options.events.tableSeverity">Önem</th>
+                    <th data-i18n="options.events.tableEvent">Olay</th>
+                    <th data-i18n="options.events.tableSite">Site</th>
+                    <th data-i18n="options.events.tableOccurrences">Tekrar</th>
+                  </tr>
+                </thead>
+                <tbody id="log"></tbody>
+              </table>
+            </div>
+            <div id="log-empty" class="large-empty compact-empty" hidden>
+              <span class="quiet-mark" aria-hidden="true"></span>
+              <strong data-i18n="options.events.emptyTitle">Görünür güvenlik olayı yok</strong>
+              <p data-i18n="options.events.emptyBody">Yeni bir uyarı olduğunda burada listelenecek.</p>
+            </div>
+          </div>
+        </section>
+      </main>
+    </div>
     <script type="module" src="dist/options.js"></script>
   </body>
 </html>
