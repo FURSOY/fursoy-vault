@@ -36,3 +36,9 @@ Windows acceptance coverage and the hardware/manual rows are documented in
 
 Copyright contributors. Licensed under GPL-3.0-only; see `LICENSE`. Release assets include both the
 license and `SOURCE.txt`, which identifies the matching complete source tag and build procedure.
+
+## Code signing policy
+
+Windows release binaries follow the [project code signing policy](CODE_SIGNING_POLICY.md). Public
+releases are built, tested, signed, and published from version tags by GitHub Actions; see the
+[release process](docs/RELEASING.md).

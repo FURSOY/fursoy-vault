@@ -1,0 +1,188 @@
+name: publish-release
+
+on:
+  push:
+    tags:
+      - "v[0-9]+.[0-9]+.[0-9]+"
+
+permissions:
+  actions: read
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build-sign-publish:
+    runs-on: windows-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Require SignPath configuration
+        shell: pwsh
+        env:
+          SIGNPATH_API_TOKEN: ${{ secrets.SIGNPATH_API_TOKEN }}
+          SIGNPATH_ORGANIZATION_ID: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
+          SIGNPATH_PROJECT_SLUG: ${{ vars.SIGNPATH_PROJECT_SLUG }}
+          SIGNPATH_SIGNING_POLICY_SLUG: ${{ vars.SIGNPATH_SIGNING_POLICY_SLUG }}
+        run: |
+          $required = @{
+            SIGNPATH_API_TOKEN = $env:SIGNPATH_API_TOKEN
+            SIGNPATH_ORGANIZATION_ID = $env:SIGNPATH_ORGANIZATION_ID
+            SIGNPATH_PROJECT_SLUG = $env:SIGNPATH_PROJECT_SLUG
+            SIGNPATH_SIGNING_POLICY_SLUG = $env:SIGNPATH_SIGNING_POLICY_SLUG
+          }
+          $missing = @($required.Keys | Where-Object { [string]::IsNullOrWhiteSpace($required[$_]) })
+          if ($missing.Count -gt 0) {
+            throw "Release signing is not configured. Missing: $($missing -join ', ')"
+          }
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: native-host
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: extension/package-lock.json
+
+      - name: Validate tag and project versions
+        id: version
+        shell: pwsh
+        run: |
+          $tagType = (& git cat-file -t $env:GITHUB_REF_NAME).Trim()
+          if ($LASTEXITCODE -ne 0 -or $tagType -ne "tag") {
+            throw "$env:GITHUB_REF_NAME must be an annotated tag so its message can become the release notes."
+          }
+          & git merge-base --is-ancestor HEAD origin/main
+          if ($LASTEXITCODE -ne 0) { throw "Release tags must point to a commit contained in origin/main." }
+
+          $tagVersion = $env:GITHUB_REF_NAME -replace '^v', ''
+          $extensionVersion = (Get-Content extension/package.json -Raw | ConvertFrom-Json).version
+          $manifestVersion = (Get-Content extension/manifest.json -Raw | ConvertFrom-Json).version
+          $nativeVersion = (& cargo metadata --manifest-path native-host/Cargo.toml --locked --no-deps --format-version 1 | ConvertFrom-Json).packages[0].version
+          $versions = @($extensionVersion, $manifestVersion, $nativeVersion) | Select-Object -Unique
+          if ($versions.Count -ne 1 -or $versions[0] -ne $tagVersion) {
+            throw "Tag v$tagVersion does not match extension/package.json ($extensionVersion), extension/manifest.json ($manifestVersion), and native-host/Cargo.toml ($nativeVersion)."
+          }
+          "version=$tagVersion" >> $env:GITHUB_OUTPUT
+          "extension_zip=extension/target/fursoy-vault-extension-v$tagVersion.zip" >> $env:GITHUB_OUTPUT
+          "extension_hash=extension/target/fursoy-vault-extension-v$tagVersion.zip.sha256" >> $env:GITHUB_OUTPUT
+
+      - name: Install extension dependencies
+        working-directory: extension
+        run: npm ci
+      - name: Extension dependency audit
+        working-directory: extension
+        run: npm audit --audit-level=high
+      - name: Extension tests and package
+        working-directory: extension
+        run: npm run package
+      - name: Verify deterministic extension package
+        shell: pwsh
+        run: |
+          $package = "${{ steps.version.outputs.extension_zip }}"
+          $first = (Get-FileHash $package -Algorithm SHA256).Hash
+          Push-Location extension
+          try { node scripts/package.mjs } finally { Pop-Location }
+          $second = (Get-FileHash $package -Algorithm SHA256).Hash
+          if ($first -ne $second) { throw "Extension package is not deterministic" }
+
+      - name: Rust format
+        working-directory: native-host
+        run: cargo fmt --all -- --check
+      - name: Rust clippy
+        working-directory: native-host
+        run: cargo clippy --locked --all-targets -- -D warnings
+      - name: Rust tests
+        working-directory: native-host
+        run: cargo test --release --locked
+      - name: Native Messaging acceptance
+        shell: pwsh
+        run: ./tests/acceptance/run-windows.ps1
+      - name: Rust dependency audit
+        uses: rustsec/audit-check@v2
+        with:
+          working-directory: native-host
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build unsigned companion package
+        shell: pwsh
+        working-directory: native-host
+        run: ./install/package-release.ps1
+
+      - name: Upload unsigned companion for signing
+        id: unsigned-companion
+        uses: actions/upload-artifact@v4
+        with:
+          name: unsigned-companion-${{ github.ref_name }}
+          if-no-files-found: error
+          retention-days: 7
+          path: native-host/target/fursoy-vault-windows.zip
+
+      - name: Submit companion to SignPath
+        uses: signpath/github-action-submit-signing-request@v2
+        with:
+          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
+          organization-id: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
+          project-slug: ${{ vars.SIGNPATH_PROJECT_SLUG }}
+          signing-policy-slug: ${{ vars.SIGNPATH_SIGNING_POLICY_SLUG }}
+          github-artifact-id: ${{ steps.unsigned-companion.outputs.artifact-id }}
+          wait-for-completion: true
+          output-artifact-directory: ${{ github.workspace }}/native-host/target/signed
+          parameters: |
+            version: "${{ steps.version.outputs.version }}"
+
+      - name: Verify signed companion and assemble release assets
+        shell: pwsh
+        run: |
+          $signedZip = "native-host/target/signed/fursoy-vault-windows.zip"
+          if (-not (Test-Path -LiteralPath $signedZip)) { throw "SignPath did not return the expected companion ZIP." }
+
+          $verifyRoot = Join-Path $env:RUNNER_TEMP "fursoy-vault-signature-check"
+          Expand-Archive -LiteralPath $signedZip -DestinationPath $verifyRoot
+          $signature = Get-AuthenticodeSignature (Join-Path $verifyRoot "fursoy-vault-host.exe")
+          if ($signature.Status -ne "Valid") {
+            throw "The companion executable does not have a valid Authenticode signature: $($signature.Status)"
+          }
+
+          $releaseRoot = "release-assets"
+          New-Item -ItemType Directory -Force -Path $releaseRoot | Out-Null
+          Copy-Item -LiteralPath $signedZip -Destination (Join-Path $releaseRoot "fursoy-vault-windows.zip")
+          Copy-Item -LiteralPath "${{ steps.version.outputs.extension_zip }}" -Destination $releaseRoot
+          Copy-Item -LiteralPath "${{ steps.version.outputs.extension_hash }}" -Destination $releaseRoot
+
+          $companionHash = (Get-FileHash (Join-Path $releaseRoot "fursoy-vault-windows.zip") -Algorithm SHA256).Hash.ToLowerInvariant()
+          [System.IO.File]::WriteAllText(
+            (Join-Path $releaseRoot "fursoy-vault-windows.zip.sha256"),
+            "$companionHash  fursoy-vault-windows.zip`n",
+            [System.Text.UTF8Encoding]::new($false)
+          )
+
+      - name: Upload signed release candidates
+        uses: actions/upload-artifact@v4
+        with:
+          name: signed-release-${{ github.ref_name }}
+          if-no-files-found: error
+          path: release-assets/*
+
+      - name: Publish GitHub Release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $assets = @(Get-ChildItem -LiteralPath "release-assets" -File | ForEach-Object { $_.FullName })
+          if ($assets.Count -eq 0) { throw "No release assets were assembled." }
+          gh release create "$env:GITHUB_REF_NAME" `
+            --verify-tag `
+            --latest `
+            --title "FURSOY Vault $env:GITHUB_REF_NAME" `
+            --notes-from-tag `
+            @assets

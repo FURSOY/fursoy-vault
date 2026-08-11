@@ -39,9 +39,11 @@ jobs:
         shell: pwsh
         working-directory: extension
         run: |
-          $first = (Get-FileHash target/fursoy-vault-extension-v0.4.1.zip -Algorithm SHA256).Hash
+          $version = (Get-Content package.json -Raw | ConvertFrom-Json).version
+          $package = "target/fursoy-vault-extension-v$version.zip"
+          $first = (Get-FileHash $package -Algorithm SHA256).Hash
           node scripts/package.mjs
-          $second = (Get-FileHash target/fursoy-vault-extension-v0.4.1.zip -Algorithm SHA256).Hash
+          $second = (Get-FileHash $package -Algorithm SHA256).Hash
           if ($first -ne $second) { throw "Extension package is not deterministic" }
 
       - name: Rust format
@@ -72,6 +74,6 @@ jobs:
           name: release-candidates
           if-no-files-found: error
           path: |
-            extension/target/fursoy-vault-extension-v0.4.1.zip
-            extension/target/fursoy-vault-extension-v0.4.1.zip.sha256
+            extension/target/fursoy-vault-extension-v*.zip
+            extension/target/fursoy-vault-extension-v*.zip.sha256
             native-host/target/fursoy-vault-windows.zip
