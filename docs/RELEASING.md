@@ -3,7 +3,9 @@
 Public releases are produced only by `.github/workflows/release.yml`; maintainers do not upload
 locally built binaries. A pushed `vX.Y.Z` annotated tag runs all quality gates, submits the Windows
 companion to SignPath, verifies the returned Authenticode signature, calculates SHA-256 checksums,
-and publishes the GitHub Release using the annotated tag message as its release notes.
+and publishes the GitHub Release using the annotated tag message as its release notes. The workflow
+also appends the required SignPath Foundation attribution and code-signing policy link to every
+download page.
 
 ## One-time SignPath setup
 

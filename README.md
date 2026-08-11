@@ -37,6 +37,11 @@ Windows acceptance coverage and the hardware/manual rows are documented in
 Copyright contributors. Licensed under GPL-3.0-only; see `LICENSE`. Release assets include both the
 license and `SOURCE.txt`, which identifies the matching complete source tag and build procedure.
 
+## Privacy
+
+FURSOY Vault operates locally and does not collect telemetry or transmit vault contents to the
+project maintainer. See the full [privacy policy](PRIVACY.md).
+
 ## Code signing policy
 
 Windows release binaries follow the [project code signing policy](CODE_SIGNING_POLICY.md). Public

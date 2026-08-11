@@ -180,9 +180,27 @@ jobs:
         run: |
           $assets = @(Get-ChildItem -LiteralPath "release-assets" -File | ForEach-Object { $_.FullName })
           if ($assets.Count -eq 0) { throw "No release assets were assembled." }
+
+          $tagNotes = (& git for-each-ref --format="%(contents)" "refs/tags/$env:GITHUB_REF_NAME") -join "`n"
+          if ([string]::IsNullOrWhiteSpace($tagNotes)) { throw "The annotated tag has no release notes." }
+          $policyUrl = "https://github.com/$env:GITHUB_REPOSITORY/blob/$env:GITHUB_REF_NAME/CODE_SIGNING_POLICY.md"
+          $releaseNotes = @"
+          $tagNotes
+
+          ## Code signing policy
+
+          Free code signing provided by SignPath.io, certificate by SignPath Foundation.
+          See the [project code signing policy]($policyUrl).
+          "@
+          [System.IO.File]::WriteAllText(
+            (Join-Path $env:RUNNER_TEMP "release-notes.md"),
+            $releaseNotes,
+            [System.Text.UTF8Encoding]::new($false)
+          )
+
           gh release create "$env:GITHUB_REF_NAME" `
             --verify-tag `
             --latest `
             --title "FURSOY Vault $env:GITHUB_REF_NAME" `
-            --notes-from-tag `
+            --notes-file (Join-Path $env:RUNNER_TEMP "release-notes.md") `
             @assets

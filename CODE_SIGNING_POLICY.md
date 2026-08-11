@@ -10,10 +10,10 @@ Free code signing provided by [SignPath.io](https://signpath.io/), certificate b
 
 ## Privacy
 
-FURSOY Vault does not collect telemetry or transfer vault contents, cookie values, browsing
-history, Windows Hello data, or monitoring results to any networked system. Network access occurs
-only when the user explicitly opens a download or source link. Chrome and GitHub apply their own
-privacy policies when their services are used.
+This program will not transfer any information to other networked systems unless specifically
+requested by the user or the person installing or operating it. FURSOY Vault does not collect
+telemetry or transfer vault contents, cookie values, browsing history, Windows Hello data, or
+monitoring results to the project maintainer. See the full [privacy policy](PRIVACY.md).
 
 ## Signing and release process
 
