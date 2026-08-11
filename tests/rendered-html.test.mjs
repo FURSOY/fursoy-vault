@@ -44,3 +44,14 @@ test("serves search discovery files", async () => {
   assert.equal(manifest.status, 200);
   assert.match(await manifest.text(), /FURSOY Vault/);
 });
+
+test("renders the official download page and signing policy", async () => {
+  const response = await render("/download");
+  assert.equal(response.status, 200);
+  const html = await response.text();
+  assert.match(html, /Download Windows companion/);
+  assert.match(html, /fursoy-vault-windows\.zip/);
+  assert.match(html, /Code signing policy/);
+  assert.match(html, /Free code signing provided by SignPath\.io, certificate by SignPath Foundation/);
+  assert.match(html, /blob\/main\/CODE_SIGNING_POLICY\.md/);
+});

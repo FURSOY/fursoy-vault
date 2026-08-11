@@ -1,6 +1,6 @@
 import type { Metadata } from "next";
 
-export const metadata: Metadata = { title: "Privacy Policy", description: "How FURSOY Vault handles local browser and security data." };
+export const metadata: Metadata = { title: "Privacy Policy", description: "How FURSOY Vault handles local browser and security data.", alternates: { canonical: "/privacy" } };
 
 /* eslint-disable @next/next/no-html-link-for-pages */
 export default function Privacy() {
