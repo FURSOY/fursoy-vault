@@ -22,7 +22,8 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Require SignPath configuration
+      - name: Resolve signing mode
+        id: signing-mode
         shell: pwsh
         env:
           SIGNPATH_API_TOKEN: ${{ secrets.SIGNPATH_API_TOKEN }}
@@ -37,9 +38,23 @@ jobs:
             SIGNPATH_SIGNING_POLICY_SLUG = $env:SIGNPATH_SIGNING_POLICY_SLUG
           }
           $missing = @($required.Keys | Where-Object { [string]::IsNullOrWhiteSpace($required[$_]) })
-          if ($missing.Count -gt 0) {
-            throw "Release signing is not configured. Missing: $($missing -join ', ')"
+          if ($missing.Count -eq 0) {
+            "configured=true" >> $env:GITHUB_OUTPUT
+            "bootstrap=false" >> $env:GITHUB_OUTPUT
+            exit 0
           }
+
+          if ($missing.Count -ne $required.Count) {
+            throw "Release signing is only partially configured. Missing: $($missing -join ', ')"
+          }
+
+          if ($env:GITHUB_REF_NAME -ne "v0.4.1") {
+            throw "Release signing is not configured. Missing: $($missing -join ', '). The unsigned bootstrap exception applies only to v0.4.1."
+          }
+
+          Write-Warning "v0.4.1 is the one-time unsigned bootstrap release required for the SignPath Foundation application."
+          "configured=false" >> $env:GITHUB_OUTPUT
+          "bootstrap=true" >> $env:GITHUB_OUTPUT
 
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -128,6 +143,7 @@ jobs:
           path: native-host/target/fursoy-vault-windows.zip
 
       - name: Submit companion to SignPath
+        if: steps.signing-mode.outputs.configured == 'true'
         uses: signpath/github-action-submit-signing-request@v2
         with:
           api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
@@ -141,6 +157,7 @@ jobs:
             version: "${{ steps.version.outputs.version }}"
 
       - name: Verify signed companion and assemble release assets
+        if: steps.signing-mode.outputs.configured == 'true'
         shell: pwsh
         run: |
           $signedZip = "native-host/target/signed/fursoy-vault-windows.zip"
@@ -166,10 +183,30 @@ jobs:
             [System.Text.UTF8Encoding]::new($false)
           )
 
-      - name: Upload signed release candidates
+      - name: Assemble unsigned bootstrap release assets
+        if: steps.signing-mode.outputs.bootstrap == 'true'
+        shell: pwsh
+        run: |
+          $unsignedZip = "native-host/target/fursoy-vault-windows.zip"
+          if (-not (Test-Path -LiteralPath $unsignedZip)) { throw "The unsigned companion ZIP was not produced." }
+
+          $releaseRoot = "release-assets"
+          New-Item -ItemType Directory -Force -Path $releaseRoot | Out-Null
+          Copy-Item -LiteralPath $unsignedZip -Destination (Join-Path $releaseRoot "fursoy-vault-windows.zip")
+          Copy-Item -LiteralPath "${{ steps.version.outputs.extension_zip }}" -Destination $releaseRoot
+          Copy-Item -LiteralPath "${{ steps.version.outputs.extension_hash }}" -Destination $releaseRoot
+
+          $companionHash = (Get-FileHash (Join-Path $releaseRoot "fursoy-vault-windows.zip") -Algorithm SHA256).Hash.ToLowerInvariant()
+          [System.IO.File]::WriteAllText(
+            (Join-Path $releaseRoot "fursoy-vault-windows.zip.sha256"),
+            "$companionHash  fursoy-vault-windows.zip`n",
+            [System.Text.UTF8Encoding]::new($false)
+          )
+
+      - name: Upload release candidates
         uses: actions/upload-artifact@v4
         with:
-          name: signed-release-${{ github.ref_name }}
+          name: release-${{ github.ref_name }}
           if-no-files-found: error
           path: release-assets/*
 
@@ -177,6 +214,7 @@ jobs:
         shell: pwsh
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SIGNING_CONFIGURED: ${{ steps.signing-mode.outputs.configured }}
         run: |
           $assets = @(Get-ChildItem -LiteralPath "release-assets" -File | ForEach-Object { $_.FullName })
           if ($assets.Count -eq 0) { throw "No release assets were assembled." }
@@ -184,13 +222,27 @@ jobs:
           $tagNotes = (& git for-each-ref --format="%(contents)" "refs/tags/$env:GITHUB_REF_NAME") -join "`n"
           if ([string]::IsNullOrWhiteSpace($tagNotes)) { throw "The annotated tag has no release notes." }
           $policyUrl = "https://github.com/$env:GITHUB_REPOSITORY/blob/$env:GITHUB_REF_NAME/CODE_SIGNING_POLICY.md"
-          $releaseNotes = @"
-          $tagNotes
-
+          if ($env:SIGNING_CONFIGURED -eq "true") {
+            $signingNotes = @"
           ## Code signing policy
 
           Free code signing provided by SignPath.io, certificate by SignPath Foundation.
           See the [project code signing policy]($policyUrl).
+          "@
+          } else {
+            $signingNotes = @"
+          ## One-time unsigned bootstrap release
+
+          The Windows companion in v0.4.1 is unsigned and may appear as **Unknown publisher** on Windows. This is the project's sole unsigned bootstrap release, published to establish the released project required for its SignPath Foundation application. All normal quality gates still ran before publication.
+
+          Future releases are intended to follow the [project code signing policy]($policyUrl). Free code signing provided by SignPath.io, certificate by SignPath Foundation.
+          "@
+          }
+
+          $releaseNotes = @"
+          $tagNotes
+
+          $signingNotes
           "@
           [System.IO.File]::WriteAllText(
             (Join-Path $env:RUNNER_TEMP "release-notes.md"),

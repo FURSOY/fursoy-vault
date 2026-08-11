@@ -44,6 +44,7 @@ project maintainer. See the full [privacy policy](PRIVACY.md).
 
 ## Code signing policy
 
-Windows release binaries follow the [project code signing policy](CODE_SIGNING_POLICY.md). Public
-releases are built, tested, signed, and published from version tags by GitHub Actions; see the
-[release process](docs/RELEASING.md).
+Windows release binaries follow the [project code signing policy](CODE_SIGNING_POLICY.md). The
+initial `v0.4.1` bootstrap package is unsigned and may show **Unknown publisher**; later releases
+require SignPath signing. Every release is built, tested, and published from a version tag by
+GitHub Actions; see the [release process](docs/RELEASING.md).

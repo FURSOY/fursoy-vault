@@ -618,7 +618,7 @@ mod tests {
         lines.swap(0, 1);
         let reordered = lines
             .into_iter()
-            .flat_map(|line| line.iter().copied().chain([b'\n']))
+            .flat_map(|line| line.iter().copied().chain(*b"\n"))
             .collect::<Vec<_>>();
         fs::write(&path, reordered).unwrap();
         assert!(AuditLogger::open_strict(&root).is_err());

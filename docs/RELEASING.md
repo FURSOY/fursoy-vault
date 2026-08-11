@@ -1,11 +1,15 @@
 # Release process
 
 Public releases are produced only by `.github/workflows/release.yml`; maintainers do not upload
-locally built binaries. A pushed `vX.Y.Z` annotated tag runs all quality gates, submits the Windows
-companion to SignPath, verifies the returned Authenticode signature, calculates SHA-256 checksums,
-and publishes the GitHub Release using the annotated tag message as its release notes. The workflow
-also appends the required SignPath Foundation attribution and code-signing policy link to every
-download page.
+locally built binaries. A pushed `vX.Y.Z` annotated tag runs all quality gates, calculates SHA-256
+checksums, and publishes the GitHub Release using the annotated tag message as its release notes.
+For signed releases, the workflow submits the Windows companion to SignPath and verifies the
+returned Authenticode signature before publication.
+
+Version `v0.4.1` is the sole unsigned bootstrap exception. SignPath Foundation requires a project
+to be publicly released in the form it intends to sign before applying, so this tag may publish the
+GitHub Actions-built companion without SignPath configuration. The release notes identify it as
+unsigned and warn that Windows may show **Unknown publisher**. No other tag can use this exception.
 
 ## One-time SignPath setup
 
@@ -18,8 +22,9 @@ download page.
    - `SIGNPATH_PROJECT_SLUG`
    - `SIGNPATH_SIGNING_POLICY_SLUG`
 
-The workflow fails before building or publishing when any required SignPath setting is absent. It
-never falls back to an unsigned public release.
+Except for the explicit `v0.4.1` bootstrap path above, the workflow fails before building or
+publishing when any required SignPath setting is absent. It never silently falls back to an
+unsigned public release.
 
 ## Cut a release
 
