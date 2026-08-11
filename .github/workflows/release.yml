@@ -72,6 +72,9 @@ jobs:
         id: version
         shell: pwsh
         run: |
+          & git fetch --force origin "refs/tags/$($env:GITHUB_REF_NAME):refs/tags/$($env:GITHUB_REF_NAME)" "refs/heads/main:refs/remotes/origin/main"
+          if ($LASTEXITCODE -ne 0) { throw "Could not fetch the release tag and origin/main for validation." }
+
           $tagType = (& git cat-file -t $env:GITHUB_REF_NAME).Trim()
           if ($LASTEXITCODE -ne 0 -or $tagType -ne "tag") {
             throw "$env:GITHUB_REF_NAME must be an annotated tag so its message can become the release notes."
