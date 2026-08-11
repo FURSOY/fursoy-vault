@@ -86,7 +86,7 @@ jobs:
           $extensionVersion = (Get-Content extension/package.json -Raw | ConvertFrom-Json).version
           $manifestVersion = (Get-Content extension/manifest.json -Raw | ConvertFrom-Json).version
           $nativeVersion = (& cargo metadata --manifest-path native-host/Cargo.toml --locked --no-deps --format-version 1 | ConvertFrom-Json).packages[0].version
-          $versions = @($extensionVersion, $manifestVersion, $nativeVersion) | Select-Object -Unique
+          $versions = @(@($extensionVersion, $manifestVersion, $nativeVersion) | Select-Object -Unique)
           if ($versions.Count -ne 1 -or $versions[0] -ne $tagVersion) {
             throw "Tag v$tagVersion does not match extension/package.json ($extensionVersion), extension/manifest.json ($manifestVersion), and native-host/Cargo.toml ($nativeVersion)."
           }
