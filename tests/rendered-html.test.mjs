@@ -52,6 +52,8 @@ test("renders the official download page and signing policy", async () => {
   assert.match(html, /Download Windows companion/);
   assert.match(html, /fursoy-vault-windows\.zip/);
   assert.match(html, /Code signing policy/);
+  assert.match(html, /one-time unsigned bootstrap release/);
+  assert.match(html, /Unknown publisher/);
   assert.match(html, /Free code signing provided by SignPath\.io, certificate by SignPath Foundation/);
   assert.match(html, /blob\/main\/CODE_SIGNING_POLICY\.md/);
 });
