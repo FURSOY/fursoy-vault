@@ -2,6 +2,31 @@ import Image from "next/image";
 
 const github = "https://github.com/FURSOY/fursoy-vault";
 const releases = `${github}/releases`;
+const downloadUrl = `${releases}/latest/download/fursoy-vault-windows.zip`;
+
+const softwareApplicationSchema = {
+  "@context": "https://schema.org",
+  "@type": "SoftwareApplication",
+  name: "FURSOY Vault",
+  description: "A local Windows and Chrome vault that restores protected session cookies only after Windows Hello approval.",
+  applicationCategory: "SecurityApplication",
+  operatingSystem: "Windows 10, Windows 11",
+  softwareVersion: "0.4.1",
+  downloadUrl,
+  installUrl: downloadUrl,
+  image: "https://fursoy.com/app-icon.png",
+  url: "https://fursoy.com",
+  sameAs: github,
+  license: `${github}/blob/main/LICENSE`,
+  offers: { "@type": "Offer", price: "0", priceCurrency: "USD", url: downloadUrl },
+  featureList: [
+    "Local encrypted Windows vault",
+    "Windows Hello approval",
+    "Chrome profile isolation",
+    "Per-site host permissions",
+    "No analytics or telemetry",
+  ],
+};
 
 const Arrow = () => <span aria-hidden="true">↗</span>;
 
@@ -55,9 +80,10 @@ const faqs = [
 export default function Home() {
   return (
     <main id="top">
+      <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: JSON.stringify(softwareApplicationSchema) }} />
       <nav className="nav wrap"><Brand compact /><div className="nav-links"><a href="#how">How it works</a><a href="#security">Security</a><a href="#scope">Scope</a><a href="#faq">FAQ</a></div><a className="nav-cta" href={github} target="_blank" rel="noreferrer">GitHub <Arrow /></a></nav>
       <section className="hero wrap">
-        <div className="hero-copy"><div className="announcement"><span>●</span> Open source · Local-first · No telemetry</div><h1>Close the session.<br /><em>Keep the access.</em></h1><p className="hero-lead">FURSOY Vault removes selected session cookies from Chrome, seals them in an encrypted local Windows vault, and restores them only after you approve with Windows Hello.</p><div className="hero-actions"><a className="button primary" href={releases} target="_blank" rel="noreferrer">View Windows releases <span>↓</span></a><a className="button secondary" href={github} target="_blank" rel="noreferrer">Explore the source <Arrow /></a></div><p className="availability"><i /> Built for Chrome on Windows 10/11</p></div>
+        <div className="hero-copy"><div className="announcement"><span>●</span> Open source · Local-first · No telemetry</div><h1>Close the session.<br /><em>Keep the access.</em></h1><p className="hero-lead">FURSOY Vault removes selected session cookies from Chrome, seals them in an encrypted local Windows vault, and restores them only after you approve with Windows Hello.</p><div className="hero-actions"><a className="button primary" href={downloadUrl} aria-label="Download FURSOY Vault for Windows from GitHub">Download for Windows <span>↓</span></a><a className="button secondary" href={github} target="_blank" rel="noreferrer">Explore the source <Arrow /></a></div><p className="availability"><i /> Built for Chrome on Windows 10/11</p></div>
         <ProductPreview />
       </section>
       <section className="trust-strip"><div className="wrap trust-grid"><div><strong>LOCAL</strong><span>No account. No cloud vault.</span></div><div><strong>EXPLICIT</strong><span>You choose every protected site.</span></div><div><strong>ISOLATED</strong><span>Separate identity per Chrome profile.</span></div><div><strong>OPEN</strong><span>GPL-3.0 source, publicly inspectable.</span></div></div></section>
@@ -69,7 +95,7 @@ export default function Home() {
       <section className="section wrap scope-section" id="scope"><div className="scope-card"><div className="scope-copy"><span className="kicker light">Honest scope</span><h2>One focused layer.<br />Not a magic shield.</h2><p>FURSOY Vault reduces the risk of an unattended, already-signed-in browser session. It does not claim to protect a compromised Windows account or replace the security controls around it.</p><a href={`${github}/blob/main/docs/THREAT_MODEL.md`} target="_blank" rel="noreferrer">Read the complete threat model <Arrow /></a></div><div className="scope-lists"><div><h3><span>✓</span> Designed to protect</h3><ul><li>Selected Chrome session cookies</li><li>Unattended signed-in sessions</li><li>Separation between Chrome profiles</li><li>Local recovery with explicit ownership</li></ul></div><div><h3><span>×</span> Outside its boundary</h3><ul><li>Passwords and passkeys</li><li>localStorage and IndexedDB</li><li>Malware with your Windows access</li><li>Browser history and downloaded files</li></ul></div></div></div></section>
       <section className="section wrap open-section"><div className="open-copy"><span className="kicker">Open source</span><h2>Security you can inspect.</h2><p>The Chrome extension, Rust companion, protocol, threat model, release checks and test suites are public. There is no hidden service behind the product.</p><div className="open-actions"><a className="button dark" href={github} target="_blank" rel="noreferrer">Browse the repository <Arrow /></a><a href={`${github}/blob/main/PRIVACY.md`} target="_blank" rel="noreferrer">Privacy policy</a></div></div><div className="code-card"><div className="code-head"><span><i /><i /><i /></span><b>security-boundaries.txt</b></div><pre><code><span>$</span> data_location        this_device_only{"\n"}<span>$</span> telemetry            disabled{"\n"}<span>$</span> profile_scope        isolated{"\n"}<span>$</span> restore_approval     windows_hello{"\n"}<span>$</span> failure_mode         fail_closed</code></pre><div className="verified">✓ Documented and testable</div></div></section>
       <section className="section faq-section wrap" id="faq"><div className="section-heading"><span className="kicker">Common questions</span><h2>Know what you are installing.</h2></div><div className="faq-list">{faqs.map(([q, a], i) => <details key={q} open={i === 0}><summary>{q}<span>＋</span></summary><p>{a}</p></details>)}</div></section>
-      <section className="cta-section wrap"><div><Image src="/app-icon.png" alt="FURSOY Vault icon" width={66} height={66} /><span className="kicker light">Ready when you are</span><h2>Put your open sessions<br />behind your presence.</h2><p>Review the source, understand the boundary, then install FURSOY Vault for Windows and Chrome.</p><div className="hero-actions"><a className="button white" href={releases} target="_blank" rel="noreferrer">View Windows releases <span>↓</span></a><a className="button ghost" href={github} target="_blank" rel="noreferrer">GitHub <Arrow /></a></div></div></section>
+      <section className="cta-section wrap"><div><Image src="/app-icon.png" alt="FURSOY Vault icon" width={66} height={66} /><span className="kicker light">Ready when you are</span><h2>Put your open sessions<br />behind your presence.</h2><p>Review the source, understand the boundary, then install FURSOY Vault for Windows and Chrome.</p><div className="hero-actions"><a className="button white" href={downloadUrl} aria-label="Download FURSOY Vault for Windows from GitHub">Download for Windows <span>↓</span></a><a className="button ghost" href={github} target="_blank" rel="noreferrer">GitHub <Arrow /></a></div></div></section>
       <footer><div className="wrap footer-main"><Brand /><div className="footer-links"><div><b>Project</b><a href={github}>Source code</a><a href={releases}>Releases</a><a href={`${github}/issues`}>Issues</a></div><div><b>Trust</b><a href="/privacy">Privacy</a><a href={`${github}/blob/main/docs/THREAT_MODEL.md`}>Threat model</a><a href={`${github}/blob/main/docs/CODE_SIGNING_POLICY.md`}>Code signing</a></div></div></div><div className="wrap footer-bottom"><span>© 2026 FURSOY. Licensed under GPL-3.0.</span><span>Free code signing provided by <a href="https://signpath.io" target="_blank" rel="noreferrer">SignPath.io</a>, certificate by <a href="https://signpath.org" target="_blank" rel="noreferrer">SignPath Foundation</a>.</span></div></footer>
     </main>
   );
