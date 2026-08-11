@@ -52,6 +52,7 @@ const COMMON_SIGNAL_KEYS: Record<string, string> = {
   selector_changed: "common.signal.selectorChanged",
   monitor_queue_overflow: "common.signal.monitorQueueOverflow",
   process_inspection_unavailable: "common.signal.processInspectionUnavailable",
+  permission_missing: "common.signal.permissionMissing",
 };
 
 function signalLabel(signal: string): string {
@@ -80,6 +81,8 @@ function stateLabel(state: string): string {
 
 const connectionWarning = required<HTMLElement>("connection");
 const errorText = required<HTMLElement>("error");
+const errorMessage = required<HTMLElement>("error-message");
+const dismissErrorButton = required<HTMLButtonElement>("dismiss-error");
 const currentSection = required<HTMLElement>("current");
 const currentHost = required<HTMLElement>("current-host");
 const unprotectedBox = required<HTMLElement>("current-unprotected");
@@ -92,18 +95,25 @@ const currentStateBody = required<HTMLElement>("current-state-body");
 const currentPolicySelect = required<HTMLSelectElement>("current-policy");
 const unprotectCurrentButton = required<HTMLButtonElement>("unprotect-current");
 const scopeInput = required<HTMLInputElement>("scope");
+const scopeError = required<HTMLElement>("scope-error");
 const policySelect = required<HTMLSelectElement>("policy");
 const protectButton = required<HTMLButtonElement>("protect");
 const groupList = required<HTMLUListElement>("groups");
 const groupsEmpty = required<HTMLElement>("groups-empty");
 const groupsCount = required<HTMLElement>("groups-count");
 const alertBox = required<HTMLElement>("alert");
+const alertMessage = required<HTMLElement>("alert-message");
+const dismissAlertButton = required<HTMLButtonElement>("dismiss-alert");
 const openOptionsButton = required<HTMLButtonElement>("open-options");
 const liveIndicator = document.querySelector<HTMLElement>(".live-indicator");
 
 enhanceSelects();
 
 protectButton.addEventListener("click", () => { void protectCurrentSite(); });
+scopeInput.addEventListener("input", clearScopeError);
+scopeInput.addEventListener("blur", () => { normalizeScopeField(); });
+dismissErrorButton.addEventListener("click", () => { errorText.hidden = true; });
+dismissAlertButton.addEventListener("click", () => { alertBox.hidden = true; });
 openOptionsButton.addEventListener("click", () => { chrome.runtime.openOptionsPage(); });
 unprotectCurrentButton.addEventListener("click", () => {
   if (currentGroup !== undefined) void unprotect(currentGroup);
@@ -122,6 +132,10 @@ function applyTranslations(): void {
   openOptionsButton.setAttribute("aria-label", t("popup.openOptionsLabel"));
   openOptionsButton.title = t("popup.openOptionsTitle");
   liveIndicator?.setAttribute("aria-label", t("popup.liveIndicator"));
+  for (const button of [dismissErrorButton, dismissAlertButton]) {
+    button.setAttribute("aria-label", t("common.dismissNotice"));
+    button.title = t("common.dismissNotice");
+  }
   syncCustomSelect(currentPolicySelect);
   syncCustomSelect(policySelect);
 }
@@ -146,10 +160,11 @@ void (async () => {
 })();
 
 async function protectCurrentSite(): Promise<void> {
-  const scope = normalizeProtectionScopeInput(scopeInput.value);
-  if (scope === "") return showError(t("onboarding.addsite.error.empty"));
-  if (!isValidProtectionScope(scope)) return showError(t("onboarding.addsite.error.invalid"));
-  if (scopeOverlapsExisting(scope)) return showError(describeError("scope_overlaps_existing"));
+  const scope = normalizeScopeField();
+  if (scope === "") return showScopeError(t("onboarding.addsite.error.empty"));
+  if (!isValidProtectionScope(scope)) return showScopeError(t("onboarding.addsite.error.invalid"));
+  if (scopeOverlapsExisting(scope)) return showScopeError(describeError("scope_overlaps_existing"));
+  clearScopeError();
   protectButton.disabled = true;
   try {
     // The permission prompt must run inside this click's user-gesture context, so it happens
@@ -281,7 +296,7 @@ function renderAlert(alert: StoredAlert | undefined, groups: GroupSummary[]): vo
   const where = scopes === undefined ? "" : ` — ${scopes}`;
   const when = new Date(alert.observedAtUnixMs).toLocaleTimeString();
   const times = alert.occurrences > 1 ? t("popup.alertOccurrences", { count: alert.occurrences }) : "";
-  alertBox.textContent = `${signalLabel(alert.signal)}${where} (${when}${times})`;
+  alertMessage.textContent = `${signalLabel(alert.signal)}${where} (${when}${times})`;
   alertBox.hidden = false;
 }
 
@@ -347,8 +362,26 @@ function describeError(code: string | undefined): string {
 }
 
 function showError(message: string): void {
-  errorText.textContent = message;
+  errorMessage.textContent = message;
   errorText.hidden = false;
+}
+
+function normalizeScopeField(): string {
+  const scope = normalizeProtectionScopeInput(scopeInput.value);
+  if (scope !== "") scopeInput.value = scope;
+  return scope;
+}
+
+function clearScopeError(): void {
+  scopeInput.removeAttribute("aria-invalid");
+  scopeError.hidden = true;
+}
+
+function showScopeError(message: string): void {
+  scopeInput.setAttribute("aria-invalid", "true");
+  scopeError.textContent = message;
+  scopeError.hidden = false;
+  scopeInput.focus();
 }
 
 function requestScopePermission(scope: string): Promise<boolean> {

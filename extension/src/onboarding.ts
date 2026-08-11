@@ -4,6 +4,9 @@ import { currentLocale } from "./locale.js";
 import { isValidProtectionScope, normalizeProtectionScopeInput } from "./protocol.js";
 
 type PolicyLevel = "critical" | "balanced" | "convenient" | "monitor";
+type OnboardingStepName = "welcome" | "install" | "addsite" | "done";
+
+const ONBOARDING_STEP_KEY = "fursoy.onboarding.step";
 
 // GitHub always redirects this exact URL to the latest release's same-named asset — see the
 // matching comment in native-host/install/package-release.ps1, which is what must keep producing
@@ -28,6 +31,7 @@ const installStatus = required<HTMLElement>("install-status");
 const installSkip = required<HTMLButtonElement>("install-skip");
 const addsiteForm = required<HTMLFormElement>("addsite-form");
 const addsiteScope = required<HTMLInputElement>("addsite-scope");
+const addsiteDomainInput = required<HTMLElement>("addsite-domain-input");
 const addsitePolicy = required<HTMLSelectElement>("addsite-policy");
 const addsiteError = required<HTMLElement>("addsite-error");
 const addsiteSkip = required<HTMLButtonElement>("addsite-skip");
@@ -35,10 +39,13 @@ const doneFinish = required<HTMLButtonElement>("done-finish");
 
 function showStep(step: HTMLElement): void {
   const steps = [stepWelcome, stepInstall, stepAddsite, stepDone];
-  const names = ["welcome", "install", "addsite", "done"];
+  const names: OnboardingStepName[] = ["welcome", "install", "addsite", "done"];
   const activeIndex = steps.indexOf(step);
+  const activeName = names[activeIndex];
+  if (activeIndex < 0 || activeName === undefined) throw new Error("unknown onboarding step");
   for (const section of steps) section.hidden = section !== step;
-  document.body.dataset.step = names[activeIndex];
+  document.body.dataset.step = activeName;
+  sessionStorage.setItem(ONBOARDING_STEP_KEY, activeName);
   document.querySelectorAll<HTMLElement>(".step-dot").forEach((dot, index) => {
     dot.classList.toggle("active", index === activeIndex);
     dot.classList.toggle("past", index < activeIndex);
@@ -46,6 +53,17 @@ function showStep(step: HTMLElement): void {
   document.querySelectorAll<HTMLElement>(".step-line").forEach((line, index) => {
     line.classList.toggle("past", index < activeIndex);
   });
+}
+
+function restoreStep(): void {
+  const savedStep = sessionStorage.getItem(ONBOARDING_STEP_KEY) as OnboardingStepName | null;
+  const steps: Record<OnboardingStepName, HTMLElement> = {
+    welcome: stepWelcome,
+    install: stepInstall,
+    addsite: stepAddsite,
+    done: stepDone,
+  };
+  showStep(savedStep === null ? stepWelcome : steps[savedStep] ?? stepWelcome);
 }
 
 function t(locale: Locale, key: string): string {
@@ -140,13 +158,28 @@ async function scopeOverlapsExisting(scope: string): Promise<boolean> {
 }
 
 function showAddsiteError(key: string): void {
+  addsiteScope.setAttribute("aria-invalid", "true");
+  addsiteDomainInput.classList.add("has-error");
   addsiteError.textContent = t(locale, key);
   addsiteError.hidden = false;
+  addsiteScope.focus();
+}
+
+function clearAddsiteError(): void {
+  addsiteScope.removeAttribute("aria-invalid");
+  addsiteDomainInput.classList.remove("has-error");
+  addsiteError.hidden = true;
+}
+
+function normalizeAddsiteScope(): string {
+  const scope = normalizeProtectionScopeInput(addsiteScope.value);
+  if (scope !== "") addsiteScope.value = scope;
+  return scope;
 }
 
 async function addFirstSite(): Promise<void> {
-  addsiteError.hidden = true;
-  const scope = normalizeProtectionScopeInput(addsiteScope.value);
+  clearAddsiteError();
+  const scope = normalizeAddsiteScope();
   if (scope === "") return showAddsiteError("onboarding.addsite.error.empty");
   if (!isValidProtectionScope(scope)) return showAddsiteError("onboarding.addsite.error.invalid");
   if (await scopeOverlapsExisting(scope)) return showAddsiteError("onboarding.addsite.error.overlap");
@@ -171,12 +204,18 @@ welcomeNext.addEventListener("click", () => showStep(stepInstall));
 installCheck.addEventListener("click", () => { void checkConnection(); });
 installSkip.addEventListener("click", () => showStep(stepAddsite));
 addsiteForm.addEventListener("submit", (event) => { event.preventDefault(); void addFirstSite(); });
+addsiteScope.addEventListener("input", clearAddsiteError);
+addsiteScope.addEventListener("blur", () => { normalizeAddsiteScope(); });
 addsiteSkip.addEventListener("click", () => showStep(stepDone));
-doneFinish.addEventListener("click", () => window.close());
+doneFinish.addEventListener("click", () => {
+  sessionStorage.removeItem(ONBOARDING_STEP_KEY);
+  window.close();
+});
 
 void (async () => {
   locale = await currentLocale();
   document.documentElement.lang = locale;
   applyTranslations(locale);
   enhanceSelects();
+  restoreStep();
 })();

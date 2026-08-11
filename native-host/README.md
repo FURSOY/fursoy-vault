@@ -22,8 +22,8 @@ Implemented:
   executables under known Google Chrome install roots are inspected, without retaining command
   lines, ports or profile paths;
 - failure isolation: a group-level operation error does not mutate another group's runtime.
-- isolated per-Chrome-profile config, vault, lease, Hello and audit namespaces, with atomic
-  ownership transfer for recovery after extension storage is removed.
+- isolated per-Chrome-profile config, vault, lease, Hello and audit namespaces; one profile cannot
+  enumerate or claim another profile's namespace.
 
 The installer never seeds or overwrites profile configuration. Each profile starts from the
 executable's bundled empty config and persists its own user-managed config after the first change.

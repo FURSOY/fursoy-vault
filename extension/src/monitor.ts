@@ -18,7 +18,8 @@ export type MonitorSignal =
   | "audit_integrity_recovered"
   | "lease_outside_cookie_created"
   | "selector_changed"
-  | "monitor_queue_overflow";
+  | "monitor_queue_overflow"
+  | "permission_missing";
 
 export interface MonitorEvent {
   event_id: string;
@@ -43,7 +44,8 @@ export function signalSeverity(signal: MonitorSignal): MonitorSeverity {
     case "remote_debugging_pipe":
     case "host_disconnect_active_lease":
     case "reconciliation_failed":
-    case "audit_integrity_recovered": return "high";
+    case "audit_integrity_recovered":
+    case "permission_missing": return "high";
     case "lease_outside_cookie_created":
     case "monitor_queue_overflow": return "medium";
     case "process_inspection_wmi_connect_access_denied":
@@ -133,6 +135,8 @@ export function notificationText(
       return { title: t("monitor.leaseOutsideCookieCreated.title"), message: t("monitor.leaseOutsideCookieCreated.message") };
     case "monitor_queue_overflow":
       return { title: t("monitor.queueOverflow.title"), message: t("monitor.queueOverflow.message") };
+    case "permission_missing":
+      return { title: t("monitor.permissionMissing.title"), message: t("monitor.permissionMissing.message") };
     case "process_inspection_wmi_connect_access_denied":
     case "process_inspection_wmi_connect_failed":
     case "process_inspection_wmi_poll_access_denied":
@@ -154,6 +158,6 @@ function isMonitorSignal(value: string): value is MonitorSignal {
     "process_inspection_command_line_access_denied", "process_inspection_command_line_unavailable",
     "host_disconnect", "host_disconnect_active_lease", "reconnect_success",
     "reconciliation_failed", "audit_integrity_recovered", "lease_outside_cookie_created", "selector_changed",
-    "monitor_queue_overflow",
+    "monitor_queue_overflow", "permission_missing",
   ].includes(value);
 }

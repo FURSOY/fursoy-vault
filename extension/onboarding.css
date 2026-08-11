@@ -378,33 +378,23 @@ main {
 }
 
 .download-icon {
+  align-items: center;
   border: 1.5px solid var(--accent);
   border-radius: 9px;
+  display: inline-flex;
   height: 35px;
-  position: relative;
+  justify-content: center;
   width: 35px;
 }
 
-.download-icon::before {
-  background: var(--accent);
-  content: "";
-  height: 11px;
-  left: 16px;
-  position: absolute;
-  top: 8px;
-  width: 1.5px;
-}
-
-.download-icon::after {
-  border: solid var(--accent);
-  border-width: 0 1.5px 1.5px 0;
-  content: "";
-  height: 6px;
-  left: 13px;
-  position: absolute;
-  top: 13px;
-  transform: rotate(45deg);
-  width: 6px;
+.download-icon svg {
+  fill: none;
+  height: 19px;
+  stroke: var(--accent);
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.7;
+  width: 19px;
 }
 
 .download-card strong,
@@ -455,6 +445,16 @@ main {
 .domain-input:focus-within {
   border-color: var(--accent);
   box-shadow: 0 0 0 3px rgb(19 171 184 / 13%);
+}
+
+.domain-input.has-error {
+  border-color: var(--danger);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--danger) 14%, transparent);
+}
+
+.domain-input.has-error:focus-within {
+  border-color: var(--danger);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--danger) 18%, transparent);
 }
 
 .domain-input span {

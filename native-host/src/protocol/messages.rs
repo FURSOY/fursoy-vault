@@ -170,37 +170,6 @@ pub struct HandshakeAck {
     pub host_version: String,
     pub min_extension_version: String,
     pub capabilities: Vec<String>,
-    /// Other non-empty, valid profile namespaces available to a freshly reinstalled extension.
-    /// Cookie values and vault material are never exposed; the scopes only help the local user
-    /// identify which previous browser profile they intend to reconnect.
-    pub recovery_profiles: Vec<RecoveryProfileSummary>,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct RecoveryProfileSummary {
-    pub profile_id: Uuid,
-    pub scopes: Vec<String>,
-    pub config_modified_unix_ms: u64,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct ProfileRecoveryClaim {
-    pub source_profile_id: Uuid,
-    pub target_profile_id: Uuid,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct ProfileRecoveryClaimed {
-    pub target_profile_id: Uuid,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct ProfileRecoveryRejected {
-    pub reason: String,
 }
 
 /// Extension → host: protect a new scope. The host assigns the UUID and persists the config;
@@ -580,12 +549,6 @@ pub enum Message {
     ConfigRejected(ConfigRejected),
     #[serde(rename = "operation.error")]
     OperationError(OperationError),
-    #[serde(rename = "profile.recovery.claim")]
-    ProfileRecoveryClaim(ProfileRecoveryClaim),
-    #[serde(rename = "profile.recovery.claimed")]
-    ProfileRecoveryClaimed(ProfileRecoveryClaimed),
-    #[serde(rename = "profile.recovery.rejected")]
-    ProfileRecoveryRejected(ProfileRecoveryRejected),
 }
 
 fn encode_hex(bytes: &[u8]) -> String {

@@ -44,9 +44,6 @@ use crate::{FcpError, FcpResult};
 const RP_ID: &str = "fursoy-vault.local";
 const RP_NAME: &str = "FURSOY Vault";
 const ORIGIN: &str = "https://fursoy-vault.local";
-/// There is exactly one local "user" for this credential; the id only needs to be stable, not
-/// secret or unique across installs.
-const USER_ID: &[u8; 16] = b"FCP.Hello.User.1";
 const USER_NAME: &str = "fursoy-vault";
 const COSE_ALGORITHM_ES256: i32 = -7;
 
@@ -82,6 +79,7 @@ impl Drop for ComApartment {
 #[serde(deny_unknown_fields)]
 struct CredentialRegistry {
     version: u16,
+    profile_user_id_hex: String,
     credential_id_hex: String,
     public_key_x_hex: String,
     public_key_y_hex: String,
@@ -253,9 +251,14 @@ impl HelloAuthorizer {
 fn load_registry(path: &Path) -> FcpResult<(Vec<u8>, [u8; 32], [u8; 32])> {
     let bytes = std::fs::read(path)?;
     let registry: CredentialRegistry = serde_json::from_slice(&bytes)?;
-    if registry.version != 1 {
+    if registry.version != 2 {
         return Err(FcpError::Format(
             "unsupported Hello credential registry version".into(),
+        ));
+    }
+    if registry.profile_user_id_hex != hex_encode(&hello_user_id(path)?) {
+        return Err(FcpError::Format(
+            "Hello credential belongs to another profile identity".into(),
         ));
     }
     Ok((
@@ -270,7 +273,7 @@ fn quarantine_registry(path: &Path) -> FcpResult<()> {
         .parent()
         .ok_or_else(|| FcpError::Format("Hello registry has no parent".into()))?;
     let quarantine = parent.join(format!(
-        "hello-credential.corrupt-{}.json",
+        "hello-credential.retired-{}.json",
         uuid::Uuid::new_v4()
     ));
     std::fs::rename(path, quarantine)?;
@@ -278,9 +281,11 @@ fn quarantine_registry(path: &Path) -> FcpResult<()> {
 }
 
 fn create_authorizer(apartment: ComApartment, registry_path: &Path) -> FcpResult<HelloAuthorizer> {
-    let (credential_id, public_key_x, public_key_y) = create_credential()?;
+    let profile_user_id = hello_user_id(registry_path)?;
+    let (credential_id, public_key_x, public_key_y) = create_credential(profile_user_id)?;
     let registry = CredentialRegistry {
-        version: 1,
+        version: 2,
+        profile_user_id_hex: hex_encode(&profile_user_id),
         credential_id_hex: hex_encode(&credential_id),
         public_key_x_hex: hex_encode(&public_key_x),
         public_key_y_hex: hex_encode(&public_key_y),
@@ -288,7 +293,9 @@ fn create_authorizer(apartment: ComApartment, registry_path: &Path) -> FcpResult
     let bytes = serde_json::to_vec_pretty(&registry)?;
     write_verified(registry_path, &bytes, |persisted| {
         let parsed: CredentialRegistry = serde_json::from_slice(persisted)?;
-        if parsed.credential_id_hex != registry.credential_id_hex {
+        if parsed.profile_user_id_hex != registry.profile_user_id_hex
+            || parsed.credential_id_hex != registry.credential_id_hex
+        {
             return Err(FcpError::Format(
                 "Hello credential registry failed to round-trip".into(),
             ));
@@ -303,7 +310,7 @@ fn create_authorizer(apartment: ComApartment, registry_path: &Path) -> FcpResult
     })
 }
 
-fn create_credential() -> FcpResult<(Vec<u8>, [u8; 32], [u8; 32])> {
+fn create_credential(mut user_id: [u8; 16]) -> FcpResult<(Vec<u8>, [u8; 32], [u8; 32])> {
     let hwnd = unsafe { GetForegroundWindow() };
 
     let rp_id = widen(RP_ID);
@@ -315,7 +322,10 @@ fn create_credential() -> FcpResult<(Vec<u8>, [u8; 32], [u8; 32])> {
         pwszIcon: PCWSTR::null(),
     };
 
-    let mut user_id = *USER_ID;
+    // A platform authenticator identifies an account by (RP ID, user ID). Reusing one constant
+    // user ID across Chrome profiles lets enrollment in profile B replace profile A's credential
+    // on Windows Hello. The profile namespace UUID is stable, non-secret and already unique, so
+    // it is the correct account identifier here. Re-enrollment replaces only this profile's key.
     let user_name = widen(USER_NAME);
     let user = WEBAUTHN_USER_ENTITY_INFORMATION {
         dwVersion: WEBAUTHN_USER_ENTITY_INFORMATION_CURRENT_VERSION,
@@ -378,6 +388,17 @@ fn create_credential() -> FcpResult<(Vec<u8>, [u8; 32], [u8; 32])> {
     };
     unsafe { WebAuthNFreeCredentialAttestation(Some(attestation)) };
     result
+}
+
+fn hello_user_id(registry_path: &Path) -> FcpResult<[u8; 16]> {
+    let profile_id = registry_path
+        .parent()
+        .and_then(Path::file_name)
+        .and_then(|value| value.to_str())
+        .ok_or_else(|| FcpError::Format("Hello registry has no profile identity".into()))?
+        .parse::<uuid::Uuid>()
+        .map_err(|_| FcpError::Format("Hello registry profile identity is invalid".into()))?;
+    Ok(*profile_id.as_bytes())
 }
 
 impl CapabilitySigner for HelloAuthorizer {
@@ -540,5 +561,33 @@ mod tests {
         wrong_rp[0] ^= 1;
         assert!(validate_authenticator_context(&wrong_rp).is_err());
         assert!(validate_authenticator_context(&[0u8; 36]).is_err());
+    }
+
+    #[test]
+    fn hello_user_identity_is_stable_and_isolated_per_profile() {
+        let first =
+            Path::new("profiles/5760e42f-5c62-42e3-8f4b-b94d52e144b0/hello-credential.json");
+        let second =
+            Path::new("profiles/ab9ca091-b1dd-44e7-aba0-804af7511c73/hello-credential.json");
+        assert_eq!(hello_user_id(first).unwrap(), hello_user_id(first).unwrap());
+        assert_ne!(
+            hello_user_id(first).unwrap(),
+            hello_user_id(second).unwrap()
+        );
+    }
+
+    #[test]
+    fn legacy_shared_identity_registry_is_rejected_for_automatic_reenrollment() {
+        let root = std::env::temp_dir().join(format!("fcp-hello-{}", uuid::Uuid::new_v4()));
+        let profile = root.join(uuid::Uuid::new_v4().to_string());
+        std::fs::create_dir_all(&profile).unwrap();
+        let registry = profile.join("hello-credential.json");
+        std::fs::write(
+            &registry,
+            br#"{"version":1,"credential_id_hex":"00","public_key_x_hex":"00","public_key_y_hex":"00"}"#,
+        )
+        .unwrap();
+        assert!(load_registry(&registry).is_err());
+        std::fs::remove_dir_all(root).unwrap();
     }
 }

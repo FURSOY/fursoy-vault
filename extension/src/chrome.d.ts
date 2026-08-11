@@ -79,5 +79,6 @@ declare namespace chrome {
     function contains(permissions: { origins?: string[] }, callback: (result: boolean) => void): void;
     function remove(permissions: { origins?: string[] }, callback: (removed: boolean) => void): void;
     const onAdded: { addListener(callback: (permissions: { origins?: string[] }) => void): void };
+    const onRemoved: { addListener(callback: (permissions: { origins?: string[] }) => void): void };
   }
 }

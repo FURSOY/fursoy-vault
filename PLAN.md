@@ -2094,7 +2094,7 @@ geri yüklenirken) arka arkaya birden çok prompt oluşabilir. Bu ölçülmemiş
 - Extension cookie/tab/navigation/alarm/external-logout olaylarını config sahipliğine göre gruba yönlendirir.
   Grup kilitleri bağımsız, browser cookie mutation kuyruğu çakışmayı önlemek için global ve sıralıdır.
 - Policy süreleri host-authoritative hale geldi: Kritik `5 dk lease / 1 dk idle / anında last-tab`, Dengeli
-  `10 dk / 5 dk / 2 dk grace`, Kullanışlı `30 dk / 15 dk / 5 dk grace`; İzleme cookie mutasyonu yapmaz.
+  `10 dk / 5 dk / 2 dk grace`, Kullanışlı `4 saat / 1 saat / 15 dk grace`; İzleme cookie mutasyonu yapmaz.
 - Jest cache DEK cache'i değildir. Her inject yeni sequence/nonce capability tüketir; yalnız aynı grup için
   policy-süreli Hello handle'ı tekrar kullanılabilir. Tek process-lifetime WinRT apartment korunur, cached
   handle'lar apartment'tan önce drop edilir ve lock'ta grup bazında temizlenir.
@@ -3373,49 +3373,45 @@ korunan/iç-içe bir alan adı, izin isteme veya host'a gitme adımına hiç gir
 reddediliyor. `describeError()`'daki artık hiç gönderilmeyen `last_group_cannot_be_removed`
 kolu da (bu ADR'de kaldırılan kural) her iki dosyadan temizlendi.
 
-**Açık soru olarak not edildi (Faz 9'a bağlı): kasa, Windows kullanıcısı bazında paylaşılıyor,
-Chrome profili ya da tarayıcı bazında değil.** Veri `%LOCALAPPDATA%` altında ve native-messaging
-kaydı registry'de — ikisi de Chrome **profiline** değil Windows kullanıcısına bağlı; iki farklı
-Chrome profili (ya da ileride Chrome+Edge) aynı kasayı, aynı site listesini paylaşır, ve
-`host.lock` tek-instance kilidi yüzünden aynı anda yalnızca biri aktif bağlanabilir. Profil bazlı
-ayrım, uzantının Chrome'dan doğrudan alamadığı bir "hangi profildeyim" bilgisini kendi
-icat etmemizi (rastgele profil kimliğini `chrome.storage.local`'da saklayıp handshake'te host'a
-geçirmek) gerektirir — gerçek bir mühendislik işi. Tarayıcı bazında ayrım (Chrome vs Edge) daha
-kolay olurdu çünkü registry zaten tarayıcı başına ayrı isim alanında. Şimdilik yapılmadı,
-Faz 9 (Edge desteği) zamanı değerlendirilecek.
+**Profil izolasyonu tamamlandı; çapraz profil devralma yasaklandı.** Her Chrome profili
+`chrome.storage.local` içinde üretilen rastgele profil UUID'sini handshake'te host'a geçirir;
+config, vault, lease, Hello registry ve audit dosyaları `%LOCALAPPDATA%\FursoyVault\profiles\<uuid>`
+altında ayrılır. Hello WebAuthn kullanıcı kimliği de profil UUID'sinden türetilir; bir profildeki
+enrollment diğer profilin kaydını değiştiremez. Farklı profiller aynı alan adını birbirinden
+bağımsız koruyabilir.
+
+Chrome, uzantı storage'ı silindikten sonra aynı fiziksel tarayıcı profilini güvenilir biçimde
+yeniden tanıtan kalıcı bir kimlik sağlamaz. Bu nedenle kapalı namespace'leri tarayıp başka boş
+profile taşıyan otomatik kurtarma tasarımı izolasyonla çeliştiği için kaldırıldı. Host başka profil
+namespace'lerini listelemez; eski `profile.recovery.claim` mesajı protokolde tanınmaz ve bağlantı
+fail-closed kapanır. Extension storage'ını silmek veya uzantıyı kaldırmak mevcut namespace'i
+erişilemez bırakır; profil dışı recovery/escrow yolu yoktur (ADR-004 ile uyumlu).
 
 ---
 
-### ADR-025 — Native host güncelleme kontrolü (yalnızca bildirim, otomatik uygulama yok)
+### ADR-025 — Native host sürüm uyumluluğu ve manuel güncelleme
 
-**Durum:** Kabul edildi ve uygulandı (2026-08-08).
+**Durum:** İlk yayın öncesi minimum-izin yaklaşımıyla revize edildi.
 
 **Bağlam:** Onboarding sihirbazına başlamadan önce, kullanıcı companion uygulamanın güncelleme
 mekanizmasının önce gelmesinin daha mantıklı olduğuna karar verdi — kurulum paketinin şekli
 zaten güncelleme akışına göre kurulacaktı.
 
-**Karar:** Native host, kendini **hiçbir zaman** güncellemiyor/indirmiyor. Yalnızca kendi sürüm
-numarasını (`env!("CARGO_PKG_VERSION")`) her handshake'te extension'a bildiriyor
-(`HandshakeAck.host_version`, yeni zorunlu alan). Extension, 12 saatte bir (ayrıca her başarılı
-handshake'te bir kez) `https://api.github.com/repos/FURSOY/fursoy-vault/releases/latest`'i
-kontrol edip `tag_name`'i host'un bildirdiği sürümle karşılaştırıyor; daha yeni bir sürüm varsa
-`options.html`'de bir bildirim + indirme sayfası linki gösteriyor. **Tam otomatik indirme/kendini
-değiştirme bilinçli olarak yapılmadı** — kod imzalama kesinleşmeden bunu güvenli yapmanın yolu
-yok, ve bu tür bir sessiz kendini-değiştirme davranışı tam olarak ürünün azaltmaya çalıştığı türde
-bir saldırı yüzeyi açardı. Kullanıcı ilk kurulumla aynı şekilde, kendi elleriyle indirip çalıştırır.
+**Karar:** Native host kendini **hiçbir zaman** güncellemiyor veya indirmiyor. Yalnızca kendi sürüm
+numarasını (`env!("CARGO_PKG_VERSION")`) handshake sırasında extension'a bildiriyor; bu değer iki
+bileşenin protokol uyumluluğunu doğrulamak için kullanılıyor. İlk yayın paketinde uzantı hiçbir
+uzak sunucudan sürüm sorgulamıyor. Kullanıcı yeni companion sürümünü yayın sayfasından manuel
+olarak indirip ilk kurulumla aynı şekilde çalıştırır.
 
 **Uygulama detayları:**
 
 - `protocol/messages.rs`'teki `HandshakeAck`'e `host_version: String` eklendi (zorunlu alan,
   `deny_unknown_fields` korunuyor).
-- `protocol.ts`'te aynı alan mecburi (`requiredString`); `background.ts` bunu `hostVersion`
-  modül değişkeninde tutuyor, her handshake sonrası `checkForUpdate()`'i (bekletmeden,
-  `void` ile) tetikliyor.
-- Sonuç yalnızca `chrome.storage.local`'a yazılıyor (`fcp-update-check-v1`); hiçbir şey
-  otomatik indirilmiyor. `options.html`'de `#update-notice` banner'ı bunu okuyup gösteriyor.
-- `manifest.json`'a yeni, dar kapsamlı bir zorunlu izin eklendi: `host_permissions:
-  ["https://api.github.com/*"]` — uzantının GitHub dışında hiçbir ağ isteği atmadığı, tek amaçlı
-  bir izin.
+- `protocol.ts`'te aynı alan mecburi (`requiredString`); `background.ts` bunu minimum desteklenen
+  host ve extension sürümleriyle karşılaştırıyor.
+- Otomatik sürüm sorgusu, güncelleme cache'i ve options bildirim banner'ı kaldırıldı.
+- Manifestte geliştiriciye ait bir uzak sunucu için zorunlu host izni bulunmuyor. Site izinleri
+  yalnızca kullanıcı bir alan adını korumaya eklediğinde çalışma zamanında isteniyor.
 - GitHub reposu bu oturumda `FURSOY-Cookie-Protector`'dan `fursoy-vault`'a taşınmıştı (kullanıcı
   tarafından, GitHub üzerinden); yerel `git remote`'un hâlâ eski adı gösterdiği fark edildi ve
   düzeltildi (`git remote set-url`) — GitHub eski URL'leri yönlendirdiği için işlevsel bir sorun
@@ -3423,11 +3419,7 @@ bir saldırı yüzeyi açardı. Kullanıcı ilk kurulumla aynı şekilde, kendi 
 
 **Kabul edilen sınırlar:**
 
-- Kurulum paketinin kendisi (imzasız/imzalı .exe, GitHub Release'e asset olarak yükleme) bu
-  ADR'nin kapsamında **değil** — sıradaki iş. Şu an `checkForUpdate()` gerçek bir Release
-  yayınlanana kadar GitHub API'sinden `404` alacak (istek başarısız → sessizce hiçbir şey
-  yapmıyor, sonraki kontrolde tekrar dener) — zararsız ama işlevsiz, ilk Release yayınlanana
-  kadar.
+- Kurulum paketinin kendisi (imzasız/imzalı .exe ve release asset'i) ayrı yayın adımıdır.
 - Sürüm karşılaştırması basit bir nokta-ayrılmış sayısal karşılaştırma (`compareVersions`) —
   ön-sürüm etiketleri (`-beta`, `-rc1` gibi) doğru sıralanmaz. v1 için yeterli, yalnızca
   `X.Y.Z` etiketleri kullanılacaksa sorun değil.

@@ -11,9 +11,9 @@ only records best-effort signals and never mutates browser state. Monitoring is 
 EDR or process blocker. Each regular Chrome profile receives an isolated vault namespace;
 incognito and browsers other than Chrome are currently unsupported.
 
-If extension storage is removed, a fresh empty Chrome profile can reconnect a previous local
-vault from the management screen. Recovery atomically transfers the vault to a new profile
-identity, so two browser profiles never resume sharing one namespace.
+Chrome profiles are intentionally isolated and a vault can never be listed, copied or claimed by
+another profile. Clearing extension storage or uninstalling the extension therefore makes that
+profile's existing vault unavailable; no automatic cross-profile recovery or escrow path exists.
 
 ## Build and verify
 

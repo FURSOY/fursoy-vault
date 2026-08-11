@@ -9,6 +9,7 @@ import {
   hostInScope,
   isValidProtectionScope,
   normalizeProtectionScopeInput,
+  policyParameters,
   navigationPatterns,
   validateConfig,
 } from "../dist/protocol.js";
@@ -72,6 +73,12 @@ for (const scope of ["example", "example.com.evil", "co.uk", "github.io", "999.1
   assert.equal(isValidProtectionScope(scope), false, `${scope} must be rejected`);
 }
 assert.equal(normalizeProtectionScopeInput(" HTTPS://WWW.Example.COM/login?q=1 "), "example.com");
+assert.deepEqual(policyParameters("convenient"), {
+  leaseDurationMs: 14_400_000,
+  idleThresholdSeconds: 3_600,
+  lastTabGraceMs: 900_000,
+  monitoringOnly: false,
+});
 
 validateConfig(config([group()]));
 
@@ -98,6 +105,7 @@ assert.equal(compareSemanticVersions("0.3.1", "0.3.1"), 0);
 assert.ok(compareSemanticVersions("0.4.0", "0.3.9") > 0);
 assert.throws(() => compareSemanticVersions("0.3", "0.3.1"));
 assert.throws(() => compareSemanticVersions("latest", "0.3.1"));
-assert.ok(REQUIRED_CAPABILITIES.includes("profile_recovery"));
+assert.ok(REQUIRED_CAPABILITIES.includes("profile_namespace"));
+assert.ok(!REQUIRED_CAPABILITIES.includes("profile_recovery"));
 
 console.log("protocol tests: PASS");

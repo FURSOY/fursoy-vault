@@ -18,7 +18,6 @@ use crate::protocol::messages::{
     CookiesInjectChunk, CookiesSnapshotChunk, EvictConfirmed, EvictPhase, EvictRequest,
     EvictResult, GroupAdd, GroupRemove, GroupSetPolicy, GroupState, Handshake, HandshakeAck,
     HandshakeGroupState, InjectResult, LeaseDeny, LeaseGrant, LeasePurpose, LeaseRequest, Message,
-    ProfileRecoveryClaim, ProfileRecoveryClaimed, ProfileRecoveryRejected, RecoveryProfileSummary,
     SessionInvalidate, SessionInvalidated, SessionInvalidationReason,
 };
 use crate::protocol::messages::{MonitorEvent, MonitorSeverity, MonitorSignal, MonitorSource};
@@ -35,7 +34,6 @@ const PROTOCOL_CAPABILITIES: &[&str] = &[
     "config_v3",
     "audit_recovery",
     "profile_namespace",
-    "profile_recovery",
 ];
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -193,14 +191,6 @@ impl NativeHostApp {
             Message::GroupAdd(request) => return self.handle_group_add(request),
             Message::GroupRemove(request) => return self.handle_group_remove(request),
             Message::GroupSetPolicy(request) => return self.handle_group_set_policy(request),
-            Message::ProfileRecoveryClaim(request) => {
-                return self.handle_profile_recovery_claim(request);
-            }
-            Message::ProfileRecoveryClaimed(_) | Message::ProfileRecoveryRejected(_) => {
-                return Err(FcpError::Protocol(
-                    "profile recovery result direction is host-to-extension only".into(),
-                ));
-            }
             Message::ConfigUpdated(_) | Message::ConfigRejected(_) | Message::OperationError(_) => {
                 return Err(FcpError::Protocol(
                     "config result direction is host-to-extension only".into(),
@@ -271,16 +261,6 @@ impl NativeHostApp {
         }) {
             return Err(FcpError::Protocol("extension capability mismatch".into()));
         }
-        let recovery_profiles = self
-            .paths
-            .recovery_profiles(handshake.profile_id)?
-            .into_iter()
-            .map(|candidate| RecoveryProfileSummary {
-                profile_id: candidate.profile_id,
-                scopes: candidate.scopes,
-                config_modified_unix_ms: candidate.config_modified_unix_ms,
-            })
-            .collect();
         // Q24: the host is the single source of truth for the config, so a stale cached digest
         // on the extension side is not an error — the authoritative config rides along in the ack.
         self.handshake_complete = true;
@@ -300,7 +280,6 @@ impl NativeHostApp {
                 .iter()
                 .map(|value| (*value).to_string())
                 .collect(),
-            recovery_profiles,
         })])
     }
 
@@ -358,40 +337,6 @@ impl NativeHostApp {
         self.audit
             .record(added.id, "config", "success", None, Some("group_added"))?;
         Ok(vec![self.config_updated_message()])
-    }
-
-    fn handle_profile_recovery_claim(
-        &self,
-        request: ProfileRecoveryClaim,
-    ) -> FcpResult<Vec<Message>> {
-        if !self.config.groups.is_empty() {
-            return Ok(vec![Message::ProfileRecoveryRejected(
-                ProfileRecoveryRejected {
-                    reason: "profile_recovery_requires_empty".into(),
-                },
-            )]);
-        }
-        match self.paths.claim_recovery_profile(
-            self.paths
-                .root
-                .file_name()
-                .and_then(|value| value.to_str())
-                .and_then(|value| value.parse::<Uuid>().ok())
-                .ok_or_else(|| FcpError::Protocol("current profile id is unavailable".into()))?,
-            request.source_profile_id,
-            request.target_profile_id,
-        ) {
-            Ok(()) => Ok(vec![Message::ProfileRecoveryClaimed(
-                ProfileRecoveryClaimed {
-                    target_profile_id: request.target_profile_id,
-                },
-            )]),
-            Err(_) => Ok(vec![Message::ProfileRecoveryRejected(
-                ProfileRecoveryRejected {
-                    reason: "profile_recovery_unavailable".into(),
-                },
-            )]),
-        }
     }
 
     fn handle_group_remove(&mut self, request: GroupRemove) -> FcpResult<Vec<Message>> {

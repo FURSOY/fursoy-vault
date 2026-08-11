@@ -69,7 +69,6 @@ mod tests {
                     "config_v3".into(),
                     "audit_recovery".into(),
                     "profile_namespace".into(),
-                    "profile_recovery".into(),
                 ],
                 cached_config_digest: None,
             }),

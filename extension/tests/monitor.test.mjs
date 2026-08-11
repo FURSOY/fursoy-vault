@@ -21,6 +21,7 @@ function event(index, signal = "lease_outside_cookie_created") {
 }
 
 assert.equal(signalSeverity("remote_debugging_port"), "high");
+assert.equal(signalSeverity("permission_missing"), "high");
 assert.equal(signalSeverity("lease_outside_cookie_created"), "medium");
 assert.equal(signalSeverity("selector_changed"), "info");
 

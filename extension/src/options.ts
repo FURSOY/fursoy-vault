@@ -24,26 +24,17 @@ interface StoredAlert {
   affectedScopes?: string[];
 }
 
-interface RecoveryProfileSummary {
-  profileId: string;
-  scopes: string[];
-  configModifiedUnixMs: number;
-}
-
 interface PopupState {
   ok?: boolean;
   connected?: boolean;
   groups?: GroupSummary[];
   error?: string;
   log?: StoredAlert[];
-  updateAvailable?: string;
   pending?: boolean;
   requestId?: string;
-  recoveryProfiles?: RecoveryProfileSummary[];
   reconnecting?: boolean;
 }
 
-const RELEASES_PAGE_URL = "https://github.com/FURSOY/fursoy-vault/releases/latest";
 
 let locale: Locale = "tr";
 
@@ -61,6 +52,7 @@ const COMMON_SIGNAL_KEYS: Record<string, string> = {
   selector_changed: "common.signal.selectorChanged",
   monitor_queue_overflow: "common.signal.monitorQueueOverflow",
   process_inspection_unavailable: "common.signal.processInspectionUnavailable",
+  permission_missing: "common.signal.permissionMissing",
 };
 
 function signalLabel(signal: string): string {
@@ -75,6 +67,18 @@ const POLICY_SHORT_KEYS: Record<string, string> = {
 };
 function policyShortLabel(level: string): string {
   const key = POLICY_SHORT_KEYS[level];
+  return key !== undefined ? t(key) : level;
+}
+
+const POLICY_OPTION_KEYS: Record<string, string> = {
+  critical: "options.addCard.policyOption.critical",
+  balanced: "options.addCard.policyOption.balanced",
+  convenient: "options.addCard.policyOption.convenient",
+  monitor: "options.addCard.policyOption.monitor",
+};
+
+function policyOptionLabel(level: string): string {
+  const key = POLICY_OPTION_KEYS[level];
   return key !== undefined ? t(key) : level;
 }
 
@@ -94,15 +98,13 @@ function severityLabel(severity: string): string {
 }
 
 const connectionWarning = required<HTMLElement>("connection");
-const updateNotice = required<HTMLElement>("update-notice");
-const updateReadyText = required<HTMLElement>("update-ready-text");
-const updateLink = required<HTMLAnchorElement>("update-link");
 const errorText = required<HTMLElement>("error");
 const groupRows = required<HTMLTableSectionElement>("groups");
 const groupsTable = required<HTMLTableElement>("groups-table");
 const groupsEmpty = required<HTMLElement>("groups-empty");
 const addForm = required<HTMLFormElement>("add-form");
 const scopeInput = required<HTMLInputElement>("scope");
+const addError = required<HTMLElement>("add-error");
 const policySelect = required<HTMLSelectElement>("policy");
 const addButton = required<HTMLButtonElement>("add");
 const logRows = required<HTMLTableSectionElement>("log");
@@ -116,8 +118,6 @@ const eventCount = required<HTMLElement>("event-count");
 const companionState = required<HTMLElement>("companion-state");
 const navElement = required<HTMLElement>("nav");
 const metricsSection = required<HTMLElement>("metrics");
-const recoverySection = required<HTMLElement>("profile-recovery");
-const recoveryList = required<HTMLElement>("profile-recovery-list");
 
 enhanceSelects();
 
@@ -129,6 +129,8 @@ window.addEventListener("scroll", updateActiveNavigation, { passive: true });
 updateActiveNavigation();
 
 addForm.addEventListener("submit", (event) => { event.preventDefault(); void addSite(); });
+scopeInput.addEventListener("input", clearAddError);
+scopeInput.addEventListener("blur", () => { normalizeScopeField(); });
 clearLogButton.addEventListener("click", () => { void clearLog(); });
 
 function applyTranslations(): void {
@@ -151,10 +153,11 @@ void (async () => {
 })();
 
 async function addSite(): Promise<void> {
-  const scope = normalizeProtectionScopeInput(scopeInput.value);
-  if (scope === "") return showError(t("onboarding.addsite.error.empty"));
-  if (!isValidProtectionScope(scope)) return showError(t("onboarding.addsite.error.invalid"));
-  if (scopeOverlapsExisting(scope)) return showError(describeError("scope_overlaps_existing"));
+  const scope = normalizeScopeField();
+  if (scope === "") return showAddError(t("onboarding.addsite.error.empty"));
+  if (!isValidProtectionScope(scope)) return showAddError(t("onboarding.addsite.error.invalid"));
+  if (scopeOverlapsExisting(scope)) return showAddError(describeError("scope_overlaps_existing"));
+  clearAddError();
   addButton.disabled = true;
   try {
     // Requesting inside the submit handler keeps the user-gesture context Chrome requires.
@@ -244,13 +247,6 @@ async function refresh(): Promise<void> {
   companionState.classList.toggle("offline", state.connected !== true);
   const companionLabel = companionState.querySelector<HTMLElement>("b");
   if (companionLabel !== null) companionLabel.textContent = state.connected === true ? t("options.connectedLabel") : t("options.disconnectedLabel");
-  if (state.updateAvailable !== undefined) {
-    updateReadyText.textContent = t("options.update.ready", { version: state.updateAvailable });
-    updateLink.href = RELEASES_PAGE_URL;
-    updateNotice.hidden = false;
-  } else {
-    updateNotice.hidden = true;
-  }
   if (state.error !== undefined) showError(describeError(state.error)); else errorText.hidden = true;
 
   const groups = state.groups ?? [];
@@ -261,7 +257,6 @@ async function refresh(): Promise<void> {
   groupRows.replaceChildren(...groups.map(renderGroupRow));
   groupsEmpty.hidden = groups.length > 0;
   groupsTable.hidden = groups.length === 0;
-  renderRecoveryProfiles(groups, state.recoveryProfiles ?? []);
 
   const logResponse = await send({ type: "popup.log" }) ?? {};
   const log = logResponse.log ?? [];
@@ -269,66 +264,6 @@ async function refresh(): Promise<void> {
   logRows.replaceChildren(...log.map((entry) => renderLogRow(entry, groups)));
   logEmpty.hidden = log.length > 0;
   logTable.hidden = log.length === 0;
-}
-
-function renderRecoveryProfiles(groups: GroupSummary[], candidates: RecoveryProfileSummary[]): void {
-  const visible = groups.length === 0 && candidates.length > 0;
-  recoverySection.hidden = !visible;
-  recoveryList.replaceChildren(...(visible ? candidates.map(renderRecoveryProfile) : []));
-}
-
-function renderRecoveryProfile(candidate: RecoveryProfileSummary): HTMLElement {
-  const item = document.createElement("article");
-  item.className = "recovery-profile";
-  const copy = document.createElement("div");
-  const title = document.createElement("strong");
-  title.textContent = t("options.recovery.profileTitle", { count: candidate.scopes.length });
-  const scopes = document.createElement("p");
-  scopes.textContent = candidate.scopes.slice(0, 4).join(" · ");
-  const metadata = document.createElement("span");
-  metadata.textContent = t("options.recovery.profileMeta", {
-    date: new Date(candidate.configModifiedUnixMs).toLocaleString(),
-    id: candidate.profileId.slice(-8),
-  });
-  copy.append(title, scopes, metadata);
-  const recoverButton = document.createElement("button");
-  recoverButton.type = "button";
-  recoverButton.className = "primary recovery-button";
-  recoverButton.textContent = t("options.recovery.action");
-  recoverButton.addEventListener("click", () => { void recoverPreviousProfile(candidate, recoverButton); });
-  item.append(copy, recoverButton);
-  return item;
-}
-
-async function recoverPreviousProfile(candidate: RecoveryProfileSummary, recoverButton: HTMLButtonElement): Promise<void> {
-  if (!window.confirm(t("options.recovery.confirm", { scopes: candidate.scopes.join(", ") }))) return;
-  recoverButton.disabled = true;
-  errorText.hidden = true;
-  try {
-    await requestRecoveryPermissions(candidate.scopes);
-    const response = await sendAwaitingHost({ type: "popup.recoverProfile", profileId: candidate.profileId });
-    if (response?.ok !== true) return showError(describeError(response?.error));
-    recoverySection.hidden = true;
-    for (let attempt = 0; attempt < 30; attempt += 1) {
-      await new Promise((resolve) => { setTimeout(resolve, 200); });
-      await refresh();
-      if (latestGroups.length > 0 && connectionWarning.hidden) return;
-    }
-    showError(t("options.recovery.timeout"));
-  } catch {
-    showError(t("options.recovery.failed"));
-  } finally {
-    recoverButton.disabled = false;
-  }
-}
-
-function requestRecoveryPermissions(scopes: string[]): Promise<boolean> {
-  const origins = scopes.flatMap((scope) => [`*://${scope}/*`, `*://*.${scope}/*`]);
-  return new Promise((resolve) => {
-    chrome.permissions.request({ origins }, (granted) => {
-      resolve(chrome.runtime.lastError === undefined && granted);
-    });
-  });
 }
 
 function updateActiveNavigation(): void {
@@ -369,7 +304,7 @@ function policyCell(group: GroupSummary): HTMLTableCellElement {
   for (const level of ["critical", "balanced", "convenient", "monitor"] as const) {
     const option = document.createElement("option");
     option.value = level;
-    option.textContent = policyShortLabel(level);
+    option.textContent = policyOptionLabel(level);
     option.selected = level === group.policyLevel;
     select.append(option);
   }
@@ -435,9 +370,6 @@ function describeError(code: string | undefined): string {
     case "monitor_transition_requires_unlocked_session": return t("common.error.monitorRequiresUnlocked");
     case "native_host_not_connected": return t("common.error.hostNotConnected");
     case "unknown_group": return t("common.error.unknownGroup");
-    case "profile_recovery_requires_empty": return t("options.recovery.errorNotEmpty");
-    case "profile_recovery_target_invalid": return t("options.recovery.errorInvalid");
-    case "profile_recovery_unavailable": return t("options.recovery.errorUnavailable");
     default: return t("common.error.generic");
   }
 }
@@ -445,6 +377,24 @@ function describeError(code: string | undefined): string {
 function showError(message: string): void {
   errorText.textContent = message;
   errorText.hidden = false;
+}
+
+function normalizeScopeField(): string {
+  const scope = normalizeProtectionScopeInput(scopeInput.value);
+  if (scope !== "") scopeInput.value = scope;
+  return scope;
+}
+
+function clearAddError(): void {
+  scopeInput.removeAttribute("aria-invalid");
+  addError.hidden = true;
+}
+
+function showAddError(message: string): void {
+  scopeInput.setAttribute("aria-invalid", "true");
+  addError.textContent = message;
+  addError.hidden = false;
+  scopeInput.focus();
 }
 
 function requestScopePermission(scope: string): Promise<boolean> {

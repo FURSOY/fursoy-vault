@@ -492,6 +492,48 @@ a:focus:not(:focus-visible) {
   border-left-color: var(--success);
 }
 
+.notice-dismissible {
+  padding-right: 38px;
+  position: relative;
+}
+
+.notice-close {
+  align-items: center;
+  background: transparent;
+  border: 0;
+  border-radius: 7px;
+  color: currentColor;
+  display: inline-flex;
+  font-size: 1rem;
+  height: 26px;
+  justify-content: center;
+  line-height: 1;
+  min-height: 0;
+  opacity: .72;
+  padding: 0;
+  position: absolute;
+  right: 7px;
+  top: 7px;
+  width: 26px;
+}
+
+.notice-close:hover {
+  background: rgb(255 255 255 / 7%);
+  opacity: 1;
+}
+
+.field-error {
+  color: var(--danger);
+  font-size: .7rem;
+  line-height: 1.4;
+  margin: 6px 2px 0;
+}
+
+input[aria-invalid="true"] {
+  border-color: var(--danger);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--danger) 14%, transparent);
+}
+
 .mono {
   font-family: var(--font-mono);
 }

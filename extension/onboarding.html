@@ -68,9 +68,11 @@
             <h2 id="install-title">Companion uygulamayı kur</h2>
             <p id="install-body" class="step-body">Güvenli kasayı Windows Hello ve TPM ile bağlamak için yerel companion uygulamayı kur.</p>
             <div class="download-card">
-              <span class="download-icon" aria-hidden="true"></span>
+              <span class="download-icon" aria-hidden="true">
+                <svg viewBox="0 0 24 24"><path d="M12 5v10m-4-4 4 4 4-4" /></svg>
+              </span>
               <div><strong>FURSOY Vault Companion</strong><small data-i18n="onboarding.chrome.companionMeta">Windows · x64 · Yerel servis</small></div>
-              <a id="install-download" class="primary button-link" href="#" download rel="noopener">İndir</a>
+              <a id="install-download" class="primary button-link" href="#" target="_blank" download rel="noopener">İndir</a>
             </div>
             <button id="install-check" type="button" class="step-primary">Bağlantıyı kontrol et</button>
             <p id="install-status" class="status-message" role="status" hidden></p>
@@ -83,10 +85,11 @@
             <p id="addsite-body" class="step-body">Koruma döngüsünü başlatmak için önemli bir hesabın alan adını ekle.</p>
             <form id="addsite-form" autocomplete="off">
               <label id="addsite-scope-label" class="field-label" for="addsite-scope">Alan adı</label>
-              <div class="domain-input">
+              <div id="addsite-domain-input" class="domain-input">
                 <span aria-hidden="true">https://</span>
                 <input id="addsite-scope" type="text" spellcheck="false" autocomplete="off" />
               </div>
+              <p id="addsite-error" class="field-error" role="alert" hidden></p>
               <label id="addsite-policy-label" class="field-label policy-field-label" for="addsite-policy">Koruma profili</label>
               <select id="addsite-policy">
                 <option value="critical" data-key="policy.critical"></option>
@@ -94,7 +97,6 @@
                 <option value="convenient" data-key="policy.convenient"></option>
                 <option value="monitor" data-key="policy.monitor"></option>
               </select>
-              <p id="addsite-error" class="notice notice-danger" role="alert" hidden></p>
               <button id="addsite-submit" type="submit" class="primary step-primary">Korumaya al</button>
             </form>
             <button id="addsite-skip" type="button" class="link-button secondary-action">Şimdilik atla</button>

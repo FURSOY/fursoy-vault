@@ -24,7 +24,7 @@ sınırında kaldığını ölçmek.
 |---|---:|---:|---:|---:|
 | Kritik | Yok | 5 dk | 1 dk | Anında |
 | Dengeli | 10 dk | 10 dk | 5 dk | 2 dk grace |
-| Kullanışlı | Lock'a kadar, 30 dk üst sınır | 30 dk | 15 dk | 5 dk grace |
+| Kullanışlı | Lock'a kadar, 4 saat üst sınır | 4 saat | 1 saat | 15 dk grace |
 | İzleme | Yok | Yok | Yok | Yalnız audit |
 
 DEK hiçbir policy'de cache'lenmez. Aynı Hello handle'ı kullanılsa bile her inject yeni, tek

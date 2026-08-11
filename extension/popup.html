@@ -24,8 +24,14 @@
     <div class="popup-scroll">
       <div class="message-stack" aria-live="polite">
         <p id="connection" class="notice" data-i18n="common.connectionWarning" hidden>Companion uygulama bağlı değil. Koruma değişiklikleri geçici olarak kullanılamıyor.</p>
-        <p id="error" class="notice notice-danger" role="alert" hidden></p>
-        <p id="alert" class="notice notice-danger" role="status" hidden></p>
+        <div id="error" class="notice notice-danger notice-dismissible" role="alert" hidden>
+          <span id="error-message"></span>
+          <button id="dismiss-error" class="notice-close" type="button" aria-label="Uyarıyı kapat">×</button>
+        </div>
+        <div id="alert" class="notice notice-danger notice-dismissible" role="status" hidden>
+          <span id="alert-message"></span>
+          <button id="dismiss-alert" class="notice-close" type="button" aria-label="Uyarıyı kapat">×</button>
+        </div>
       </div>
 
       <main>
@@ -48,9 +54,9 @@
             </div>
             <label class="field-label" for="current-policy" data-i18n="popup.policyLabel">Koruma profili</label>
             <select id="current-policy">
-              <option value="critical" data-i18n="popup.policyOption.critical">Kritik · en kısa açık kalma süresi</option>
-              <option value="balanced" data-i18n="popup.policyOption.balanced">Dengeli · güvenlik ve akış dengesi</option>
-              <option value="convenient" data-i18n="popup.policyOption.convenient">Rahat · daha uzun oturum süresi</option>
+              <option value="critical" data-i18n="popup.policyOption.critical">Kritik · 5 dk oturum · 1 dk boşta</option>
+              <option value="balanced" data-i18n="popup.policyOption.balanced">Dengeli · 10 dk oturum · 5 dk boşta</option>
+              <option value="convenient" data-i18n="popup.policyOption.convenient">Rahat · 4 sa oturum · 1 sa boşta</option>
               <option value="monitor" data-i18n="popup.policyOption.monitor">Yalnız izle · cookie kasalama yok</option>
             </select>
             <button id="unprotect-current" class="danger-button full-button" type="button" data-i18n="popup.unprotectButton">Korumayı kaldır</button>
@@ -60,12 +66,13 @@
             <p class="intro-copy" data-i18n="popup.introCopy">Bu oturumu kullanmadığında cookie’leri cihazındaki şifreli kasada tut.</p>
             <label class="field-label" for="scope" data-i18n="popup.scopeFieldLabel">Korunacak alan adı</label>
             <input id="scope" type="text" spellcheck="false" autocomplete="off" />
+            <p id="scope-error" class="field-error" role="alert" hidden></p>
             <p class="field-help" data-i18n="popup.scopeFieldHelp">Alan adı ve tüm alt alan adlarındaki cookie’ler kapsanır.</p>
             <label class="field-label policy-label" for="policy" data-i18n="popup.policyLabel">Koruma profili</label>
             <select id="policy">
-              <option value="critical" data-i18n="popup.policyOption.critical">Kritik · en kısa açık kalma süresi</option>
-              <option value="balanced" selected data-i18n="popup.policyOption.balanced">Dengeli · güvenlik ve akış dengesi</option>
-              <option value="convenient" data-i18n="popup.policyOption.convenient">Rahat · daha uzun oturum süresi</option>
+              <option value="critical" data-i18n="popup.policyOption.critical">Kritik · 5 dk oturum · 1 dk boşta</option>
+              <option value="balanced" selected data-i18n="popup.policyOption.balanced">Dengeli · 10 dk oturum · 5 dk boşta</option>
+              <option value="convenient" data-i18n="popup.policyOption.convenient">Rahat · 4 sa oturum · 1 sa boşta</option>
               <option value="monitor" data-i18n="popup.policyOption.monitor">Yalnız izle · cookie kasalama yok</option>
             </select>
             <button id="protect" type="button" class="primary full-button">

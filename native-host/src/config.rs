@@ -69,11 +69,11 @@ impl PolicyLevel {
                 monitoring_only: false,
             },
             Self::Convenient => PolicyParameters {
-                // Cleared on lock/disconnect; the 30-minute bound prevents an unbounded grant.
-                hello_cache_ms: Some(30 * 60_000),
-                lease_duration_ms: 30 * 60_000,
-                idle_threshold_seconds: 15 * 60,
-                last_tab_grace_ms: 5 * 60_000,
+                // Cleared on lock/disconnect; the four-hour bound prevents an unbounded grant.
+                hello_cache_ms: Some(4 * 60 * 60_000),
+                lease_duration_ms: 4 * 60 * 60_000,
+                idle_threshold_seconds: 60 * 60,
+                last_tab_grace_ms: 15 * 60_000,
                 monitoring_only: false,
             },
             Self::Monitor => PolicyParameters {
@@ -292,7 +292,7 @@ mod tests {
         );
         assert_eq!(
             PolicyLevel::Convenient.parameters().idle_threshold_seconds,
-            900
+            3600
         );
     }
 

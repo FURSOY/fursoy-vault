@@ -2,7 +2,7 @@ export const HOST_NAME = "com.fursoy.vault";
 export const PROTOCOL_VERSION = 6;
 export const EXTENSION_VERSION = "0.4.1";
 export const MIN_HOST_VERSION = "0.4.1";
-export const REQUIRED_CAPABILITIES = ["chunked_cookies", "request_correlation", "config_v3", "audit_recovery", "profile_namespace", "profile_recovery"] as const;
+export const REQUIRED_CAPABILITIES = ["chunked_cookies", "request_correlation", "config_v3", "audit_recovery", "profile_namespace"] as const;
 
 export function compareSemanticVersions(left: string, right: string): number {
   const parse = (value: string): number[] => {
@@ -49,7 +49,7 @@ export function policyParameters(level: PolicyLevel): PolicyParameters {
   switch (level) {
     case "critical": return { leaseDurationMs: 300_000, idleThresholdSeconds: 60, lastTabGraceMs: 0, monitoringOnly: false };
     case "balanced": return { leaseDurationMs: 600_000, idleThresholdSeconds: 300, lastTabGraceMs: 120_000, monitoringOnly: false };
-    case "convenient": return { leaseDurationMs: 1_800_000, idleThresholdSeconds: 900, lastTabGraceMs: 300_000, monitoringOnly: false };
+    case "convenient": return { leaseDurationMs: 14_400_000, idleThresholdSeconds: 3_600, lastTabGraceMs: 900_000, monitoringOnly: false };
     case "monitor": return { leaseDurationMs: 0, idleThresholdSeconds: 0, lastTabGraceMs: 0, monitoringOnly: true };
   }
 }

@@ -8,10 +8,9 @@ import tempfile
 
 EXTENSION_ID = "ikodegbaomnahbjiokfogpedaoifhbde"
 ORIGIN = f"chrome-extension://{EXTENSION_ID}/"
-CAPABILITIES = ["chunked_cookies", "request_correlation", "config_v3", "audit_recovery", "profile_namespace", "profile_recovery"]
+CAPABILITIES = ["chunked_cookies", "request_correlation", "config_v3", "audit_recovery", "profile_namespace"]
 PROFILE_A = "11111111-1111-4111-8111-111111111111"
 PROFILE_B = "22222222-2222-4222-8222-222222222222"
-PROFILE_C = "44444444-4444-4444-8444-444444444444"
 
 
 def write_message(stream, message):
@@ -61,7 +60,7 @@ def exchange(executable: str, origin: str, protocol: int, data_dir: str, profile
     return process.returncode, json.loads(output[4 : 4 + size]), error.decode(errors="replace")
 
 
-def claim_profile(executable: str, data_dir: str, source_id: str, current_id: str, target_id: str):
+def attempt_cross_profile_claim(executable: str, data_dir: str, source_id: str, current_id: str):
     environment = {**os.environ, "FCP_DATA_DIR": data_dir}
     process = subprocess.Popen(
         [executable, ORIGIN, "--parent-window=0"],
@@ -86,7 +85,7 @@ def claim_profile(executable: str, data_dir: str, source_id: str, current_id: st
     claim = {
         "v": 6, "conn_nonce": nonce, "seq": 2,
         "id": "52525252-5252-4252-8252-525252525252", "type": "profile.recovery.claim",
-        "payload": {"source_profile_id": source_id, "target_profile_id": target_id},
+        "payload": {"source_profile_id": source_id, "target_profile_id": "44444444-4444-4444-8444-444444444444"},
     }
     write_message(process.stdin, claim)
     result = read_message(process.stdout)
@@ -141,23 +140,14 @@ def main():
         assert code_b == 0, error_b
         assert len(response_a["payload"]["config"]["groups"]) == 2
         assert response_b["payload"]["config"]["groups"] == []
-        recovery = response_b["payload"]["recovery_profiles"]
-        assert len(recovery) == 1
-        assert recovery[0]["profile_id"] == PROFILE_A
-        assert recovery[0]["scopes"] == ["example.com", "example.org"]
+        assert "recovery_profiles" not in response_b["payload"]
 
-        claim_code, claim_result, claim_error = claim_profile(
-            arguments.executable, data_dir, PROFILE_A, PROFILE_B, PROFILE_C
+        claim_code, claim_result, _ = attempt_cross_profile_claim(
+            arguments.executable, data_dir, PROFILE_A, PROFILE_B
         )
-        assert claim_code == 0, claim_error
-        assert claim_result["type"] == "profile.recovery.claimed"
-        assert claim_result["payload"]["target_profile_id"] == PROFILE_C
-        assert not os.path.exists(os.path.join(data_dir, "profiles", PROFILE_A))
-        assert os.path.exists(os.path.join(data_dir, "profiles", PROFILE_C, "config", "account-groups.json"))
-        code_c, response_c, error_c = exchange(arguments.executable, ORIGIN, 6, data_dir, PROFILE_C)
-        assert code_c == 0, error_c
-        recovered_scopes = [group["scope"] for group in response_c["payload"]["config"]["groups"]]
-        assert recovered_scopes == ["example.com", "example.org"]
+        assert claim_code != 0 and claim_result is None
+        assert os.path.exists(os.path.join(data_dir, "profiles", PROFILE_A, "config", "account-groups.json"))
+        assert not os.path.exists(os.path.join(data_dir, "profiles", "44444444-4444-4444-8444-444444444444"))
 
     with tempfile.TemporaryDirectory(prefix="fursoy-acceptance-origin-") as data_dir:
         code, response, _ = exchange(arguments.executable, "chrome-extension://unauthorized/", 6, data_dir)

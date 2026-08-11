@@ -16,7 +16,6 @@ Hello/TPM and Chrome UI, so the release owner records them against a clean dispo
 | CHIPS round-trip | Chrome 130+ release gate | topLevelSite and hasCrossSiteAncestor round-trip exactly |
 | Permission removal/regrant | Chrome release gate | Removed scope permission disappears; regrant repairs access |
 | Two-profile isolation | Chrome release gate | Two Chrome profiles can protect the same domain without groups, vault records, leases or restored cookies crossing profiles |
-| Profile recovery transfer | Automated + Chrome release gate | An empty profile can claim an inactive previous vault; ownership rotates to a fresh ID and the old namespace is no longer reusable |
 
 For a public tag, attach the completed matrix to the release notes with Windows build, Chrome
 version, extension ZIP hash, companion ZIP hash, and tester identity.

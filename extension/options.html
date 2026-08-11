@@ -55,10 +55,6 @@
       <main>
         <div class="message-stack" aria-live="polite">
           <p id="connection" class="notice" data-i18n="common.connectionWarning" hidden>Companion uygulama bağlı değil. Koruma değişiklikleri geçici olarak kullanılamıyor.</p>
-          <p id="update-notice" class="notice notice-success" hidden>
-            <strong id="update-ready-text">v0 hazır.</strong>
-            <a id="update-link" href="#" target="_blank" rel="noopener" data-i18n="options.update.linkText">Sürüm sayfasını aç</a>
-          </p>
           <p id="error" class="notice notice-danger" role="alert" hidden></p>
         </div>
 
@@ -87,9 +83,9 @@
             <span class="metric-note" data-i18n="options.metrics.accessibleNote">İzni eksiksiz</span>
           </article>
           <article class="metric-card">
-            <span class="metric-label" data-i18n="options.metrics.vaultedCookies">Kasadaki cookie</span>
+            <span class="metric-label" data-i18n="options.metrics.activeCookies">Tarayıcıdaki cookie</span>
             <strong id="cookie-count">0</strong>
-            <span class="metric-note" data-i18n="options.metrics.vaultedCookiesNote">Şifreli kayıt</span>
+            <span class="metric-note" data-i18n="options.metrics.activeCookiesNote">Şu anda etkin</span>
           </article>
           <article class="metric-card">
             <span class="metric-label" data-i18n="options.metrics.visibleEvents">Görünür olay</span>
@@ -114,7 +110,7 @@
                     <th data-i18n="options.sites.tableDomain">Alan adı</th>
                     <th data-i18n="options.sites.tableProfile">Koruma profili</th>
                     <th data-i18n="options.sites.tableStatus">Durum</th>
-                    <th data-i18n="options.sites.tableCookie">Cookie</th>
+                    <th data-i18n="options.sites.tableCookie">Etkin cookie</th>
                     <th><span class="sr-only" data-i18n="options.sites.tableActions">Eylemler</span></th>
                   </tr>
                 </thead>
@@ -126,19 +122,6 @@
               <strong data-i18n="options.sites.emptyTitle">Henüz korunan bir site yok</strong>
               <p data-i18n="options.sites.emptyBody">Aşağıdaki formdan ilk alan adını ekleyebilirsin.</p>
             </div>
-          </div>
-
-          <div id="profile-recovery" class="recovery-card" hidden>
-            <div class="recovery-heading">
-              <span class="recovery-mark" aria-hidden="true"></span>
-              <div>
-                <span class="eyebrow" data-i18n="options.recovery.eyebrow">Yerel kurtarma</span>
-                <h3 data-i18n="options.recovery.title">Önceki kasanı yeniden bağla</h3>
-                <p data-i18n="options.recovery.body">Bu bilgisayarda daha önce kullanılan boş olmayan profil kasaları bulundu. Cookie değerleri gösterilmez; yalnızca doğru kasayı seçmen için alan adları listelenir.</p>
-              </div>
-            </div>
-            <div id="profile-recovery-list" class="recovery-list"></div>
-            <p class="recovery-note" data-i18n="options.recovery.note">Yalnızca şu anki profil boşken kullanılabilir. Yeniden bağlandıktan sonra Windows Hello koruması aynen devam eder.</p>
           </div>
 
           <div class="add-card">
@@ -153,13 +136,14 @@
               <div class="form-field domain-field">
                 <label class="field-label" for="scope" data-i18n="options.sites.tableDomain">Alan adı</label>
                 <input id="scope" type="text" spellcheck="false" placeholder="ornek.com" required />
+                <p id="add-error" class="field-error" role="alert" hidden></p>
               </div>
               <div class="form-field policy-field">
                 <label class="field-label" for="policy" data-i18n="options.sites.tableProfile">Koruma profili</label>
                 <select id="policy">
-                  <option value="critical" data-i18n="options.addCard.policyOption.critical">Kritik · en kısa süre</option>
-                  <option value="balanced" selected data-i18n="options.addCard.policyOption.balanced">Dengeli · önerilen</option>
-                  <option value="convenient" data-i18n="options.addCard.policyOption.convenient">Rahat · daha uzun süre</option>
+                  <option value="critical" data-i18n="options.addCard.policyOption.critical">Kritik · 5 dk oturum · 1 dk boşta</option>
+                  <option value="balanced" selected data-i18n="options.addCard.policyOption.balanced">Dengeli · 10 dk oturum · 5 dk boşta</option>
+                  <option value="convenient" data-i18n="options.addCard.policyOption.convenient">Rahat · 4 sa oturum · 1 sa boşta</option>
                   <option value="monitor" data-i18n="options.addCard.policyOption.monitor">Yalnız izle</option>
                 </select>
               </div>

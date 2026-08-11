@@ -4,16 +4,7 @@ use std::path::{Path, PathBuf};
 
 use uuid::Uuid;
 
-use crate::config::LoadedConfig;
-use crate::instance_lock::InstanceLock;
 use crate::{FcpError, FcpResult};
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct RecoveryProfileCandidate {
-    pub profile_id: Uuid,
-    pub scopes: Vec<String>,
-    pub config_modified_unix_ms: u64,
-}
 
 #[derive(Clone, Debug)]
 pub struct DataPaths {
@@ -37,9 +28,6 @@ impl DataPaths {
         let base = discover_root()?;
         let root = base.join("profiles").join(profile_id.to_string());
         migrate_legacy_profile(&base, &root, profile_id)?;
-        if root.join("recovery-claim-in-progress").exists() {
-            return Err(FcpError::Protocol("profile recovery is in progress".into()));
-        }
         Ok(Self::from_root(root))
     }
 
@@ -101,139 +89,6 @@ impl DataPaths {
         )?;
         Ok(())
     }
-
-    pub fn recovery_profiles(
-        &self,
-        current_profile_id: Uuid,
-    ) -> FcpResult<Vec<RecoveryProfileCandidate>> {
-        let profiles_root = self.root.parent().ok_or_else(|| {
-            FcpError::Protocol("profile namespace has no profiles directory".into())
-        })?;
-        // Dispatcher unit tests and legacy export tools can open a direct root. Recovery discovery
-        // is meaningful only for a real profiles/<uuid> namespace.
-        if profiles_root.file_name().and_then(|value| value.to_str()) != Some("profiles") {
-            return Ok(Vec::new());
-        }
-        if self.root.file_name().and_then(|value| value.to_str())
-            != Some(current_profile_id.to_string().as_str())
-        {
-            return Err(FcpError::Protocol(
-                "handshake profile does not match the selected namespace".into(),
-            ));
-        }
-        recovery_profiles_in(profiles_root, current_profile_id)
-    }
-
-    pub fn claim_recovery_profile(
-        &self,
-        current_profile_id: Uuid,
-        source_profile_id: Uuid,
-        target_profile_id: Uuid,
-    ) -> FcpResult<()> {
-        if source_profile_id == current_profile_id
-            || target_profile_id == current_profile_id
-            || source_profile_id == target_profile_id
-            || target_profile_id.is_nil()
-        {
-            return Err(FcpError::Protocol(
-                "invalid recovery profile identities".into(),
-            ));
-        }
-        let profiles_root = self.root.parent().ok_or_else(|| {
-            FcpError::Protocol("profile namespace has no profiles directory".into())
-        })?;
-        if profiles_root.file_name().and_then(|value| value.to_str()) != Some("profiles")
-            || self.root.file_name().and_then(|value| value.to_str())
-                != Some(current_profile_id.to_string().as_str())
-        {
-            return Err(FcpError::Protocol(
-                "current recovery namespace mismatch".into(),
-            ));
-        }
-        let candidates = recovery_profiles_in(profiles_root, current_profile_id)?;
-        if !candidates
-            .iter()
-            .any(|candidate| candidate.profile_id == source_profile_id)
-        {
-            return Err(FcpError::Protocol("recovery source is unavailable".into()));
-        }
-        let source = profiles_root.join(source_profile_id.to_string());
-        let target = profiles_root.join(target_profile_id.to_string());
-        if target.exists() {
-            return Err(FcpError::Protocol("recovery target already exists".into()));
-        }
-        // Prove the source profile is not active, then leave a marker that makes a source-profile
-        // host fail closed during the tiny unlock/rename window. The marker moves with the vault
-        // and is removed only after the atomic same-volume rename succeeds.
-        let source_lock = InstanceLock::acquire(&source)?;
-        let marker = source.join("recovery-claim-in-progress");
-        fs::write(&marker, target_profile_id.to_string())?;
-        drop(source_lock);
-        if let Err(error) = fs::rename(&source, &target) {
-            let _ = fs::remove_file(&marker);
-            return Err(error.into());
-        }
-        fs::remove_file(target.join("recovery-claim-in-progress"))?;
-        Ok(())
-    }
-}
-
-fn recovery_profiles_in(
-    profiles_root: &Path,
-    current_profile_id: Uuid,
-) -> FcpResult<Vec<RecoveryProfileCandidate>> {
-    let mut candidates = Vec::new();
-    if !profiles_root.exists() {
-        return Ok(candidates);
-    }
-    for entry in fs::read_dir(profiles_root)? {
-        let entry = entry?;
-        if !entry.file_type()?.is_dir() {
-            continue;
-        }
-        let Ok(profile_id) = entry.file_name().to_string_lossy().parse::<Uuid>() else {
-            continue;
-        };
-        if profile_id == current_profile_id {
-            continue;
-        }
-        let config_path = entry.path().join("config").join("account-groups.json");
-        if !config_path.is_file() {
-            continue;
-        }
-        // A corrupt or partially copied namespace must not prevent the current profile from
-        // connecting. It is simply not offered as a recovery target.
-        let Ok(loaded) = LoadedConfig::load(&config_path) else {
-            continue;
-        };
-        if loaded.config.groups.is_empty() {
-            continue;
-        }
-        let modified = fs::metadata(&config_path)?
-            .modified()?
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_millis()
-            .try_into()
-            .unwrap_or(u64::MAX);
-        candidates.push(RecoveryProfileCandidate {
-            profile_id,
-            scopes: loaded
-                .config
-                .groups
-                .into_iter()
-                .map(|group| group.scope)
-                .collect(),
-            config_modified_unix_ms: modified,
-        });
-    }
-    candidates.sort_by(|left, right| {
-        right
-            .config_modified_unix_ms
-            .cmp(&left.config_modified_unix_ms)
-            .then_with(|| left.profile_id.cmp(&right.profile_id))
-    });
-    Ok(candidates)
 }
 
 fn discover_root() -> FcpResult<PathBuf> {
@@ -381,93 +236,6 @@ mod tests {
         assert_eq!(
             fs::read_to_string(base.join("profile-migration-owner")).unwrap(),
             first.to_string()
-        );
-        fs::remove_dir_all(base).unwrap();
-    }
-
-    #[test]
-    fn recovery_lists_only_other_non_empty_valid_profiles() {
-        let base = std::env::temp_dir().join(format!("fcp-recovery-paths-{}", Uuid::new_v4()));
-        let profiles = base.join("profiles");
-        let current = Uuid::new_v4();
-        let recoverable = Uuid::new_v4();
-        let empty = Uuid::new_v4();
-        let broken = Uuid::new_v4();
-        for id in [current, recoverable, empty, broken] {
-            fs::create_dir_all(profiles.join(id.to_string()).join("config")).unwrap();
-        }
-        let group_id = Uuid::new_v4();
-        fs::write(
-            profiles.join(recoverable.to_string()).join("config/account-groups.json"),
-            format!(r#"{{"version":3,"compatibility_version":3,"groups":[{{"id":"{group_id}","display_name":"Example","scope":"example.com","policy_level":"balanced","store_policy":"normal_profile"}}]}}"#),
-        ).unwrap();
-        fs::write(
-            profiles
-                .join(empty.to_string())
-                .join("config/account-groups.json"),
-            br#"{"version":3,"compatibility_version":3,"groups":[]}"#,
-        )
-        .unwrap();
-        fs::write(
-            profiles
-                .join(broken.to_string())
-                .join("config/account-groups.json"),
-            b"not-json",
-        )
-        .unwrap();
-
-        let found = recovery_profiles_in(&profiles, current).unwrap();
-        assert_eq!(found.len(), 1);
-        assert_eq!(found[0].profile_id, recoverable);
-        assert_eq!(found[0].scopes, vec!["example.com"]);
-        fs::remove_dir_all(base).unwrap();
-    }
-
-    #[test]
-    fn recovery_claim_moves_vault_to_a_fresh_identity() {
-        let base = std::env::temp_dir().join(format!("fcp-recovery-claim-{}", Uuid::new_v4()));
-        let profiles = base.join("profiles");
-        let current = Uuid::new_v4();
-        let source = Uuid::new_v4();
-        let target = Uuid::new_v4();
-        fs::create_dir_all(profiles.join(current.to_string())).unwrap();
-        fs::create_dir_all(profiles.join(source.to_string()).join("config")).unwrap();
-        let group_id = Uuid::new_v4();
-        fs::write(
-            profiles.join(source.to_string()).join("config/account-groups.json"),
-            format!(r#"{{"version":3,"compatibility_version":3,"groups":[{{"id":"{group_id}","display_name":"Recovered","scope":"recover.example","policy_level":"balanced","store_policy":"normal_profile"}}]}}"#),
-        ).unwrap();
-        fs::create_dir_all(profiles.join(source.to_string()).join("vault/groups")).unwrap();
-        fs::write(
-            profiles
-                .join(source.to_string())
-                .join("vault/groups/marker"),
-            b"vault",
-        )
-        .unwrap();
-        let paths = DataPaths::from_root(profiles.join(current.to_string()));
-
-        let active_source = InstanceLock::acquire(&profiles.join(source.to_string())).unwrap();
-        assert!(
-            paths
-                .claim_recovery_profile(current, source, target)
-                .is_err()
-        );
-        assert!(profiles.join(source.to_string()).exists());
-        drop(active_source);
-        paths
-            .claim_recovery_profile(current, source, target)
-            .unwrap();
-
-        assert!(!profiles.join(source.to_string()).exists());
-        assert_eq!(
-            fs::read(
-                profiles
-                    .join(target.to_string())
-                    .join("vault/groups/marker")
-            )
-            .unwrap(),
-            b"vault"
         );
         fs::remove_dir_all(base).unwrap();
     }
