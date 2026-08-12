@@ -16,7 +16,7 @@ test("renders the FURSOY Vault homepage", async () => {
   assert.match(html, /FURSOY Vault/);
   assert.match(html, /Close the session/);
   assert.match(html, /Windows Hello/);
-  assert.match(html, /SignPath Foundation/);
+  assert.match(html, /Windows companion currently unsigned/);
   assert.match(html, /releases\/latest\/download\/fursoy-vault-windows\.zip/);
   assert.match(html, /SoftwareApplication/);
   assert.match(html, /rel="canonical" href="https:\/\/fursoy\.com\/?"/);
@@ -45,15 +45,15 @@ test("serves search discovery files", async () => {
   assert.match(await manifest.text(), /FURSOY Vault/);
 });
 
-test("renders the official download page and signing policy", async () => {
+test("renders the official download page and signing status", async () => {
   const response = await render("/download");
   assert.equal(response.status, 200);
   const html = await response.text();
   assert.match(html, /Download Windows companion/);
   assert.match(html, /fursoy-vault-windows\.zip/);
-  assert.match(html, /Code signing policy/);
-  assert.match(html, /one-time unsigned bootstrap release/);
+  assert.match(html, /Code signing status/);
   assert.match(html, /Unknown publisher/);
-  assert.match(html, /Free code signing provided by SignPath\.io, certificate by SignPath Foundation/);
+  assert.match(html, /SHA-256 checksum/);
+  assert.doesNotMatch(html, /SignPath/);
   assert.match(html, /blob\/main\/CODE_SIGNING_POLICY\.md/);
 });
