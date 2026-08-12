@@ -2,10 +2,11 @@ use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use crate::FcpResult;
 use crate::atomic_file;
+use crate::atomic_file::{DurableWriteFailure, DurableWriteResult};
 use crate::crypto::aead::SecretDek;
 use crate::vault::format::VaultRecord;
+use crate::{FcpError, FcpResult};
 
 pub struct VaultStore {
     root: PathBuf,
@@ -26,6 +27,10 @@ impl VaultStore {
 
     pub fn read(&self, group_id: uuid::Uuid) -> FcpResult<VaultRecord> {
         VaultRecord::decode(&fs::read(self.path_for(group_id))?)
+    }
+
+    pub(crate) fn read_bytes(&self, group_id: uuid::Uuid) -> FcpResult<Vec<u8>> {
+        Ok(fs::read(self.path_for(group_id))?)
     }
 
     pub fn delete(&self, group_id: uuid::Uuid) -> FcpResult<()> {
@@ -95,10 +100,29 @@ impl VaultStore {
     /// Writes, flushes, reads back, authenticates, then atomically replaces the group file.
     /// The caller must not remove browser cookies until this function returns success.
     pub fn write_verified(&self, record: &VaultRecord, dek: &SecretDek) -> FcpResult<()> {
-        let target = self.path_for(record.header.group_id);
         let bytes = record.encode()?;
-        atomic_file::write_verified(&target, &bytes, |persisted| {
+        self.write_prepared(record.header.group_id, &bytes, dek)
+            .map_err(|failure| failure.error)?;
+        Ok(())
+    }
+
+    pub(crate) fn write_prepared(
+        &self,
+        group_id: uuid::Uuid,
+        bytes: &[u8],
+        dek: &SecretDek,
+    ) -> Result<DurableWriteResult, DurableWriteFailure> {
+        let target = self.path_for(group_id);
+        atomic_file::write_verified_durable(&target, bytes, |persisted| {
+            if persisted != bytes {
+                return Err(FcpError::Format(
+                    "prepared vault bytes changed before commit".into(),
+                ));
+            }
             let verified = VaultRecord::decode(persisted)?;
+            if verified.header.group_id != group_id {
+                return Err(FcpError::Format("prepared vault group mismatch".into()));
+            }
             let _ = verified.open(dek)?;
             Ok(())
         })
@@ -147,6 +171,32 @@ mod tests {
         assert_eq!(store.read(group_id).unwrap().open(&dek).unwrap(), payload);
         store.delete(group_id).unwrap();
         assert!(!store.path_for(group_id).exists());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn prepared_bytes_are_the_exact_bytes_committed_to_the_vault() {
+        let root = std::env::temp_dir().join(format!("fcp-vault-prepared-{}", Uuid::new_v4()));
+        let group_id = Uuid::new_v4();
+        let dek = SecretDek::from_bytes([17; DEK_BYTES]);
+        let mut payload = VaultPayload::empty();
+        payload.vault_sequence = 9;
+        let record = VaultRecord::seal(
+            group_id,
+            [18; 16],
+            vec![19; WRAPPED_DEK_BYTES],
+            &dek,
+            &payload,
+        )
+        .unwrap();
+        let prepared = record.encode().unwrap();
+        let store = VaultStore::new(&root);
+
+        assert_eq!(
+            store.write_prepared(group_id, &prepared, &dek).unwrap(),
+            DurableWriteResult::Committed
+        );
+        assert_eq!(fs::read(store.path_for(group_id)).unwrap(), prepared);
         fs::remove_dir_all(root).unwrap();
     }
 

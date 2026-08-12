@@ -4,13 +4,17 @@ import { build } from "esbuild";
 const entryPoints = [
   "src/background.ts",
   "src/connection-readiness.ts",
+  "src/cookie-chunks.ts",
   "src/i18n.ts",
+  "src/guarded-removal.ts",
   "src/locale.ts",
   "src/monitor.ts",
+  "src/operation-coordinator.ts",
   "src/onboarding.ts",
   "src/options.ts",
   "src/popup.ts",
   "src/protocol.ts",
+  "src/site-permissions.ts",
   "src/state-machine.ts",
   "src/unlock.ts",
 ];

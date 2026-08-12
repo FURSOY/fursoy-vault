@@ -26,6 +26,7 @@ cd ..\native-host
 cargo fmt --all -- --check
 cargo clippy --locked --all-targets -- -D warnings
 cargo test --release --locked
+dotnet tool install --global vpk --version 1.2.0
 powershell -File install/package-release.ps1
 ```
 

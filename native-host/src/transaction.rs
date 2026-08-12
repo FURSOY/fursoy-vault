@@ -1,11 +1,13 @@
 use uuid::Uuid;
 
+use crate::atomic_file::{DurableWriteFailure, DurableWriteResult};
 use crate::audit::unix_ms;
 use crate::crypto::aead::SecretDek;
 use crate::crypto::hello::HelloAuthorizer;
 use crate::crypto::platform_kek::{KEK_KEY_ID, PlatformKek};
 use crate::lease::state_machine::{CapabilityLedger, ConsumedCapability};
 use crate::lease::store::FileCapabilityLedgerStore;
+use crate::operation::Digest32;
 use crate::protocol::messages::{CapabilityOperation, CookieRecord};
 use crate::vault::format::VaultRecord;
 use crate::vault::payload::{PAYLOAD_SCHEMA_VERSION, VaultPayload};
@@ -13,6 +15,49 @@ use crate::vault::store::VaultStore;
 use crate::{FcpError, FcpResult};
 
 const CAPABILITY_LIFETIME_MS: u64 = 60_000;
+
+pub(crate) struct PreparedVaultWrite {
+    group_id: Uuid,
+    bytes: Vec<u8>,
+    dek: SecretDek,
+    previous_digest: Option<Digest32>,
+    target_digest: Digest32,
+    vault_sequence: u64,
+    commit_required: bool,
+}
+
+impl PreparedVaultWrite {
+    pub(crate) fn previous_digest(&self) -> Option<Digest32> {
+        self.previous_digest
+    }
+
+    pub(crate) fn target_digest(&self) -> Digest32 {
+        self.target_digest
+    }
+
+    pub(crate) fn vault_sequence(&self) -> u64 {
+        self.vault_sequence
+    }
+
+    #[cfg(test)]
+    pub(crate) fn for_test(
+        group_id: Uuid,
+        bytes: Vec<u8>,
+        dek: SecretDek,
+        previous_digest: Option<Digest32>,
+        vault_sequence: u64,
+    ) -> Self {
+        Self {
+            group_id,
+            target_digest: Digest32::sha256(&bytes),
+            previous_digest,
+            bytes,
+            dek,
+            vault_sequence,
+            commit_required: true,
+        }
+    }
+}
 
 pub struct VaultTransactions {
     group_id: Uuid,
@@ -96,6 +141,81 @@ impl VaultTransactions {
                 "enrollment refused because the group vault already exists".into(),
             ));
         }
+        let prepared = self.prepare_after_snapshot(cookies)?;
+        let sequence = prepared.vault_sequence();
+        self.commit_prepared(prepared)
+            .map_err(|failure| failure.error)?;
+        Ok(sequence)
+    }
+
+    /// Replaces the encrypted cookie payload after snapshot. Eviction is a fail-closed operation:
+    /// TPM-backed unwrap is silent, transaction-scoped, and never waits for user presence.
+    pub fn update_after_snapshot(&self, cookies: Vec<CookieRecord>) -> FcpResult<u64> {
+        if !self.vault_store.path_for(self.group_id).exists() {
+            return Err(FcpError::Format(
+                "snapshot update refused because the group vault is missing".into(),
+            ));
+        }
+        let prepared = self.prepare_after_snapshot(cookies)?;
+        let sequence = prepared.vault_sequence();
+        self.commit_prepared(prepared)
+            .map_err(|failure| failure.error)?;
+        Ok(sequence)
+    }
+
+    pub(crate) fn prepare_after_snapshot(
+        &self,
+        cookies: Vec<CookieRecord>,
+    ) -> FcpResult<PreparedVaultWrite> {
+        if self.vault_store.path_for(self.group_id).exists() {
+            let previous_bytes = self.vault_store.read_bytes(self.group_id)?;
+            let existing = VaultRecord::decode(&previous_bytes)?;
+            let dek = PlatformKek::unwrap_dek(&existing.header.wrapped_dek)?;
+            let previous = existing.open(&dek)?;
+            if cookies.is_empty() {
+                let digest = Digest32::sha256(&previous_bytes);
+                return Ok(PreparedVaultWrite {
+                    group_id: self.group_id,
+                    bytes: previous_bytes,
+                    dek,
+                    previous_digest: Some(digest),
+                    target_digest: digest,
+                    vault_sequence: previous.vault_sequence,
+                    commit_required: false,
+                });
+            }
+            let vault_sequence = previous
+                .vault_sequence
+                .checked_add(1)
+                .ok_or_else(|| FcpError::Format("vault sequence exhausted".into()))?;
+            let payload = VaultPayload {
+                schema_version: PAYLOAD_SCHEMA_VERSION,
+                vault_sequence,
+                cookies,
+            };
+            let replacement = VaultRecord::seal(
+                self.group_id,
+                existing.header.kek_key_id,
+                existing.header.wrapped_dek,
+                &dek,
+                &payload,
+            )?;
+            let bytes = replacement.encode()?;
+            return Ok(PreparedVaultWrite {
+                group_id: self.group_id,
+                target_digest: Digest32::sha256(&bytes),
+                previous_digest: Some(Digest32::sha256(&previous_bytes)),
+                bytes,
+                dek,
+                vault_sequence,
+                commit_required: true,
+            });
+        }
+        if cookies.is_empty() {
+            return Err(FcpError::Protocol(
+                "cannot create an empty group vault".into(),
+            ));
+        }
         PlatformKek::ensure_exists()?;
         let dek = SecretDek::generate()?;
         let wrapped_dek = PlatformKek::wrap_dek(&dek)?;
@@ -105,36 +225,31 @@ impl VaultTransactions {
             cookies,
         };
         let record = VaultRecord::seal(self.group_id, KEK_KEY_ID, wrapped_dek, &dek, &payload)?;
-        self.vault_store.write_verified(&record, &dek)?;
-        drop(dek);
-        Ok(payload.vault_sequence)
+        let bytes = record.encode()?;
+        Ok(PreparedVaultWrite {
+            group_id: self.group_id,
+            target_digest: Digest32::sha256(&bytes),
+            previous_digest: None,
+            bytes,
+            dek,
+            vault_sequence: 1,
+            commit_required: true,
+        })
     }
 
-    /// Replaces the encrypted cookie payload after snapshot. Eviction is a fail-closed operation:
-    /// TPM-backed unwrap is silent, transaction-scoped, and never waits for user presence.
-    pub fn update_after_snapshot(&self, cookies: Vec<CookieRecord>) -> FcpResult<u64> {
-        let existing = self.vault_store.read(self.group_id)?;
-        let dek = PlatformKek::unwrap_dek(&existing.header.wrapped_dek)?;
-        let previous = existing.open(&dek)?;
-        let vault_sequence = previous
-            .vault_sequence
-            .checked_add(1)
-            .ok_or_else(|| FcpError::Format("vault sequence exhausted".into()))?;
-        let payload = VaultPayload {
-            schema_version: PAYLOAD_SCHEMA_VERSION,
-            vault_sequence,
-            cookies,
-        };
-        let replacement = VaultRecord::seal(
-            self.group_id,
-            existing.header.kek_key_id,
-            existing.header.wrapped_dek,
-            &dek,
-            &payload,
-        )?;
-        self.vault_store.write_verified(&replacement, &dek)?;
-        drop(dek);
-        Ok(vault_sequence)
+    pub(crate) fn commit_prepared(
+        &self,
+        prepared: PreparedVaultWrite,
+    ) -> Result<DurableWriteResult, DurableWriteFailure> {
+        if !prepared.commit_required {
+            return Ok(DurableWriteResult::Committed);
+        }
+        self.vault_store
+            .write_prepared(prepared.group_id, &prepared.bytes, &prepared.dek)
+    }
+
+    pub(crate) fn vault_path(&self) -> std::path::PathBuf {
+        self.vault_store.path_for(self.group_id)
     }
 
     pub fn vault_exists(&self) -> bool {

@@ -30,6 +30,8 @@ struct UnsignedAuditEntry<'a> {
     outcome: &'a str,
     operation_id: Option<Uuid>,
     detail_code: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    audit_event_id: Option<Uuid>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -44,6 +46,8 @@ struct AuditEntry {
     outcome: String,
     operation_id: Option<Uuid>,
     detail_code: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    audit_event_id: Option<Uuid>,
     mac: String,
 }
 
@@ -62,6 +66,17 @@ struct AuditCheckpoint {
     sequence: u64,
     mac: String,
     archived_through_day: u64,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct AuditOutboxEntry {
+    audit_event_id: Uuid,
+    account_group_id: Uuid,
+    event: String,
+    outcome: String,
+    operation_id: Option<Uuid>,
+    detail_code: Option<String>,
 }
 
 struct AuditState {
@@ -165,6 +180,7 @@ impl AuditLogger {
             logger.persist_anchor(verified.sequence, &verified.mac)?;
         }
         logger.compact_expired_segments()?;
+        logger.drain_outbox()?;
         Ok(logger)
     }
 
@@ -177,10 +193,10 @@ impl AuditLogger {
     pub fn record(
         &self,
         account_group_id: Uuid,
-        event: &'static str,
-        outcome: &'static str,
+        event: &str,
+        outcome: &str,
         operation_id: Option<Uuid>,
-        detail_code: Option<&'static str>,
+        detail_code: Option<&str>,
     ) -> FcpResult<()> {
         self.record_inner(
             Some(account_group_id),
@@ -188,25 +204,160 @@ impl AuditLogger {
             outcome,
             operation_id,
             detail_code,
+            None,
         )
     }
 
     pub fn record_system(
         &self,
-        event: &'static str,
-        outcome: &'static str,
-        detail_code: Option<&'static str>,
+        event: &str,
+        outcome: &str,
+        detail_code: Option<&str>,
     ) -> FcpResult<()> {
-        self.record_inner(None, event, outcome, None, detail_code)
+        self.record_inner(None, event, outcome, None, detail_code, None)
+    }
+
+    pub fn record_once(
+        &self,
+        audit_event_id: Uuid,
+        account_group_id: Uuid,
+        event: &str,
+        outcome: &str,
+        operation_id: Option<Uuid>,
+        detail_code: Option<&str>,
+    ) -> FcpResult<bool> {
+        if audit_event_id.is_nil() {
+            return Err(FcpError::Protocol("audit event id must not be nil".into()));
+        }
+        for path in chain_files(&self.directory)? {
+            for line in fs::read(path)?
+                .split(|byte| *byte == b'\n')
+                .filter(|line| !line.is_empty())
+            {
+                let entry: AuditEntry = serde_json::from_slice(line)?;
+                if entry.audit_event_id == Some(audit_event_id) {
+                    return Ok(false);
+                }
+            }
+        }
+        self.record_inner(
+            Some(account_group_id),
+            event,
+            outcome,
+            operation_id,
+            detail_code,
+            Some(audit_event_id),
+        )?;
+        Ok(true)
+    }
+
+    pub fn record_once_deferred(
+        &self,
+        audit_event_id: Uuid,
+        account_group_id: Uuid,
+        event: &str,
+        outcome: &str,
+        operation_id: Option<Uuid>,
+        detail_code: Option<&str>,
+    ) {
+        if self
+            .record_once(
+                audit_event_id,
+                account_group_id,
+                event,
+                outcome,
+                operation_id,
+                detail_code,
+            )
+            .is_ok()
+        {
+            return;
+        }
+        // A post-append failure is already present and is therefore deduplicated by this retry.
+        if self
+            .record_once(
+                audit_event_id,
+                account_group_id,
+                event,
+                outcome,
+                operation_id,
+                detail_code,
+            )
+            .is_ok()
+        {
+            return;
+        }
+        let entry = AuditOutboxEntry {
+            audit_event_id,
+            account_group_id,
+            event: event.into(),
+            outcome: outcome.into(),
+            operation_id,
+            detail_code: detail_code.map(str::to_owned),
+        };
+        let _ = self.enqueue_outbox(entry);
+    }
+
+    fn enqueue_outbox(&self, entry: AuditOutboxEntry) -> FcpResult<()> {
+        let path = self.directory.join("audit-outbox-v1.json");
+        let mut entries: Vec<AuditOutboxEntry> = if path.exists() {
+            serde_json::from_slice(&fs::read(&path)?)?
+        } else {
+            Vec::new()
+        };
+        if !entries
+            .iter()
+            .any(|value| value.audit_event_id == entry.audit_event_id)
+        {
+            entries.push(entry);
+        }
+        atomic_file::write_verified(&path, &serde_json::to_vec(&entries)?, |bytes| {
+            let verified: Vec<AuditOutboxEntry> = serde_json::from_slice(bytes)?;
+            if verified.len() != entries.len() {
+                return Err(FcpError::Format("audit outbox read-back mismatch".into()));
+            }
+            Ok(())
+        })
+    }
+
+    fn drain_outbox(&self) -> FcpResult<()> {
+        let path = self.directory.join("audit-outbox-v1.json");
+        if !path.exists() {
+            return Ok(());
+        }
+        let entries: Vec<AuditOutboxEntry> = serde_json::from_slice(&fs::read(&path)?)?;
+        let mut remaining = Vec::new();
+        for entry in entries {
+            if self
+                .record_once(
+                    entry.audit_event_id,
+                    entry.account_group_id,
+                    &entry.event,
+                    &entry.outcome,
+                    entry.operation_id,
+                    entry.detail_code.as_deref(),
+                )
+                .is_err()
+            {
+                remaining.push(entry);
+            }
+        }
+        if remaining.is_empty() {
+            fs::remove_file(path)?;
+        } else {
+            atomic_file::write_verified(&path, &serde_json::to_vec(&remaining)?, |_| Ok(()))?;
+        }
+        Ok(())
     }
 
     fn record_inner(
         &self,
         account_group_id: Option<Uuid>,
-        event: &'static str,
-        outcome: &'static str,
+        event: &str,
+        outcome: &str,
         operation_id: Option<Uuid>,
-        detail_code: Option<&'static str>,
+        detail_code: Option<&str>,
+        audit_event_id: Option<Uuid>,
     ) -> FcpResult<()> {
         let mut state = self
             .state
@@ -228,6 +379,7 @@ impl AuditLogger {
             outcome,
             operation_id,
             detail_code,
+            audit_event_id,
         };
         let canonical = serde_json::to_vec(&unsigned)?;
         let mac = calculate_mac(state.key.as_slice(), &canonical)?;
@@ -241,15 +393,24 @@ impl AuditLogger {
             outcome: outcome.into(),
             operation_id,
             detail_code: detail_code.map(str::to_owned),
+            audit_event_id,
             mac: encode_hex(&mac),
         };
         let day = now / 86_400_000;
         let path = self.directory.join(format!("audit-v2-day-{day}.jsonl"));
         let mut line = serde_json::to_vec(&entry)?;
         line.push(b'\n');
+
+        #[cfg(test)]
+        crate::test_support::check(crate::test_support::FailurePoint::AuditBeforeAppend)?;
+
         let mut file = OpenOptions::new().create(true).append(true).open(path)?;
         file.write_all(&line)?;
         file.sync_data()?;
+
+        #[cfg(test)]
+        crate::test_support::check(crate::test_support::FailurePoint::AuditAfterAppend)?;
+
         state.sequence = sequence;
         state.mac = mac;
         self.persist_anchor(sequence, &mac)
@@ -397,6 +558,7 @@ fn verify_chain(
                 outcome: &entry.outcome,
                 operation_id: entry.operation_id,
                 detail_code: entry.detail_code.as_deref(),
+                audit_event_id: entry.audit_event_id,
             };
             let canonical = serde_json::to_vec(&unsigned)?;
             let actual_mac = decode_mac(&entry.mac)?;
@@ -563,6 +725,7 @@ pub fn unix_ms() -> FcpResult<u64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::{FailurePoint, fail_next};
 
     fn root(label: &str) -> PathBuf {
         std::env::temp_dir().join(format!("fcp-audit-{label}-{}", Uuid::new_v4()))
@@ -695,5 +858,95 @@ mod tests {
 
         fs::remove_dir_all(root).unwrap();
         fs::remove_file(export).unwrap();
+    }
+
+    #[test]
+    fn injected_failure_before_append_leaves_the_chain_unchanged() {
+        let root = root("before-append-failure");
+        let logger = AuditLogger::open(&root).unwrap();
+        logger
+            .record_system("monitor", "observed", Some("baseline"))
+            .unwrap();
+        let before = fs::read(&chain_files(&root).unwrap()[0]).unwrap();
+        let _failure = fail_next(FailurePoint::AuditBeforeAppend);
+
+        assert!(
+            logger
+                .record_system("monitor", "observed", Some("second"))
+                .is_err()
+        );
+        assert_eq!(fs::read(&chain_files(&root).unwrap()[0]).unwrap(), before);
+        drop(logger);
+        assert!(AuditLogger::open_strict(&root).is_ok());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn injected_failure_after_append_is_recoverable_but_reports_an_error() {
+        let root = root("after-append-failure");
+        let logger = AuditLogger::open(&root).unwrap();
+        logger
+            .record_system("monitor", "observed", Some("baseline"))
+            .unwrap();
+        let _failure = fail_next(FailurePoint::AuditAfterAppend);
+
+        assert!(
+            logger
+                .record_system("monitor", "observed", Some("second"))
+                .is_err()
+        );
+        drop(logger);
+
+        let reopened = AuditLogger::open_strict(&root).unwrap();
+        assert_eq!(reopened.state.lock().unwrap().sequence, 2);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn record_once_deduplicates_after_append_and_restart() {
+        let root = root("record-once");
+        let event_id = Uuid::new_v4();
+        let group_id = Uuid::new_v4();
+        let operation_id = Uuid::new_v4();
+        let logger = AuditLogger::open(&root).unwrap();
+        assert!(
+            logger
+                .record_once(
+                    event_id,
+                    group_id,
+                    "eviction",
+                    "success",
+                    Some(operation_id),
+                    None
+                )
+                .unwrap()
+        );
+        assert!(
+            !logger
+                .record_once(
+                    event_id,
+                    group_id,
+                    "eviction",
+                    "success",
+                    Some(operation_id),
+                    None
+                )
+                .unwrap()
+        );
+        drop(logger);
+        let reopened = AuditLogger::open_strict(&root).unwrap();
+        assert!(
+            !reopened
+                .record_once(
+                    event_id,
+                    group_id,
+                    "eviction",
+                    "success",
+                    Some(operation_id),
+                    None
+                )
+                .unwrap()
+        );
+        fs::remove_dir_all(root).unwrap();
     }
 }

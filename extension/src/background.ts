@@ -5,14 +5,17 @@ import {
   type AccountGroup, type AccountGroupsConfig, type CookieRecord, type CookieSetFailureCategory,
   type Envelope, type LoadedConfig, type PolicyLevel, type WireMessage,
 } from "./protocol.js";
+import { OrderedChunkAssembler, chunkRecords } from "./cookie-chunks.js";
 import {
-  addToBoundedOutbox, makeMonitorEvent, notificationDecision, notificationText,
+  addToBoundedOutbox, makeMonitorEvent, MonitorDeliveryWindow, notificationDecision, notificationText,
   validateMonitorEvent, type MonitorEvent, type MonitorSignal, type NotificationDecisionState,
 } from "./monitor.js";
-import { decideStartup, stateAfterHostError } from "./state-machine.js";
+import { chainedEvictionAfterCompletion, decideStartup, shouldRetryReconciliation, stateAfterDisconnect, stateAfterHostError } from "./state-machine.js";
 import { currentLocale } from "./locale.js";
 import type { Locale } from "./i18n.js";
 import { ConnectionReadiness } from "./connection-readiness.js";
+import { mayAbortWithEmptySnapshot, OperationCoordinator, type OperationReference } from "./operation-coordinator.js";
+import { GuardedRemovalPlan } from "./guarded-removal.js";
 
 // Resolved once per service-worker lifetime; a restart re-resolves it from the same persisted
 // storage value, same as loadedConfig re-adopts its cache. Notifications sent before this resolves
@@ -51,6 +54,7 @@ interface GroupRuntimeState {
   pendingNavigationUnlocks?: Record<string, string>;
   navigationUnlockRequestTabId?: number;
   navigationUnlockError?: string;
+  reconciliationAttempts?: number;
 }
 
 interface RuntimeState {
@@ -65,6 +69,14 @@ interface HandshakeGroupState {
   reconciliation_required: boolean;
   lease_id?: string | null;
   lease_expiry_unix_ms?: number | null;
+}
+
+interface RecoveryCandidate {
+  profileId: string;
+  displayName: string;
+  browser: string;
+  lastUsedUnixMs: number;
+  siteCount: number;
 }
 
 const STATE_KEY = "fcp-runtime-v2";
@@ -84,24 +96,18 @@ const ALERT_LOG_KEY = "fcp-alert-log-v1";
 const ALERT_LOG_LIMIT = 100;
 const PENDING_ADD_KEY = "fcp-pending-add-v1";
 const PENDING_ADD_TTL_MS = 120_000;
-const COOKIE_CHUNK_TARGET_BYTES = 400 * 1024;
 const PROFILE_ID_KEY = "fcp-profile-id-v1";
+const OPERATION_REFERENCE_KEY = "fcp-operation-reference-v1";
 
 // Q24: the host is the config's single source of truth. The cache exists only so the extension
 // can still evict fail-closed while the host is unreachable; the handshake always overwrites it.
 let loadedConfig: LoadedConfig | undefined;
 let configWaiters: Array<(value: LoadedConfig) => void> = [];
-interface PendingInjectChunks {
-  leaseId: string;
-  chunkCount: number;
-  cookieCount: number;
-  nextChunk: number;
-  cookies: CookieRecord[];
-}
+let recoveryCandidates: RecoveryCandidate[] = [];
 // Intentionally memory-only: a native port keeps the worker alive during transfer, while a
 // restart abandons the lease and lets handshake reconciliation fail closed. Cookie values never
 // enter extension storage merely to support chunk assembly.
-const pendingInjectChunks = new Map<string, PendingInjectChunks>();
+const pendingInjectChunks = new OrderedChunkAssembler<CookieRecord>();
 
 function awaitConfig(): Promise<LoadedConfig> {
   if (loadedConfig !== undefined) return Promise.resolve(loadedConfig);
@@ -135,6 +141,12 @@ let queue: Promise<void> = Promise.resolve();
 let client: NativeClient | undefined;
 const mutatingGroups = new Set<string>();
 const expectedRemovals = new Map<string, number>();
+const removalSnapshots = new Map<string, chrome.cookies.Cookie[]>();
+const operationCoordinator = new OperationCoordinator({
+  load: () => getLocal(OPERATION_REFERENCE_KEY),
+  save: (value) => value === undefined ? removeLocal([OPERATION_REFERENCE_KEY]) : setLocal(OPERATION_REFERENCE_KEY, value),
+});
+const monitorDelivery = new MonitorDeliveryWindow();
 
 class RedactedCookieSetFailure extends Error {
   constructor(readonly category: CookieSetFailureCategory | "no_result") {
@@ -213,7 +225,7 @@ function isPendingAdd(value: unknown): value is PendingAdd {
 }
 
 type OperationStatus = "pending" | "success" | "error";
-type ConfigOperation = { type: "group.add" | "group.remove" | "group.set_policy"; status: OperationStatus; scope?: string; error?: string; updatedAt: number };
+type ConfigOperation = { type: "group.add" | "group.remove" | "group.set_policy" | "profile.recover"; status: OperationStatus; scope?: string; groupId?: string; error?: string; updatedAt: number };
 const configOperations = new Map<string, ConfigOperation>();
 
 async function flushPendingAdd(): Promise<string | undefined> {
@@ -241,6 +253,7 @@ type PopupMessage =
   | { type: "popup.clearLog" }
   | { type: "popup.operation"; requestId: string }
   | { type: "popup.protect"; scope: string; displayName: string; policyLevel: PolicyLevel }
+  | { type: "popup.recover"; profileId: string }
   | { type: "popup.unprotect"; groupId: string }
   | { type: "popup.setPolicy"; groupId: string; policyLevel: PolicyLevel };
 
@@ -267,7 +280,7 @@ async function handlePopupMessage(message: PopupMessage): Promise<Record<string,
     }
     return {
       ok: true, connected: client?.ready === true, host,
-      suggestedScope: guessScope(host), groups, error, alert,
+      suggestedScope: guessScope(host), groups, recoveryCandidates, error, alert,
     };
   }
   if (message.type === "popup.log") {
@@ -277,6 +290,8 @@ async function handlePopupMessage(message: PopupMessage): Promise<Record<string,
   }
   if (message.type === "popup.clearLog") {
     await setLocal(ALERT_LOG_KEY, []);
+    await setLocal(LAST_ALERT_KEY, undefined);
+    await setBadge("", "#b3261e");
     return { ok: true };
   }
   if (message.type === "popup.operation") {
@@ -297,6 +312,16 @@ async function handlePopupMessage(message: PopupMessage): Promise<Record<string,
     return { ok: true };
   }
   if (!client?.ready) { void connect(); return { ok: false, error: "native_host_not_connected" }; }
+  if (message.type === "popup.recover") {
+    if (!isProfileId(message.profileId) || !recoveryCandidates.some((candidate) => candidate.profileId === message.profileId)) {
+      return { ok: false, error: "unknown_recovery_candidate" };
+    }
+    const requestId = send("recovery.adopt", { profile_id: message.profileId });
+    configOperations.set(requestId, {
+      type: "profile.recover", groupId: message.profileId, status: "pending", updatedAt: Date.now(),
+    });
+    return { ok: true, pending: true, requestId };
+  }
   if (message.type === "popup.protect") {
     const requestId = await flushPendingAdd();
     return requestId === undefined ? { ok: false, error: "native_host_not_connected" } : { ok: true, pending: true, requestId };
@@ -331,7 +356,7 @@ function isPopupMessage(value: unknown): value is PopupMessage {
   const type = typeof value === "object" && value !== null ? (value as { type?: unknown }).type : undefined;
   return type === "popup.state" || type === "popup.protect" || type === "popup.unprotect" ||
     type === "popup.log" || type === "popup.clearLog" || type === "popup.operation" || type === "popup.stageProtect" ||
-    type === "popup.cancelProtect" || type === "popup.setPolicy";
+    type === "popup.cancelProtect" || type === "popup.setPolicy" || type === "popup.recover";
 }
 
 chrome.tabs.onUpdated.addListener((tabId, change, tab) => enqueue(async () => {
@@ -473,10 +498,12 @@ async function connect(): Promise<void> {
 
 async function openNativeConnection(): Promise<void> {
   await restoreCachedConfig();
+  await operationCoordinator.restore();
   if (client?.connected) return;
   let nextClient!: NativeClient;
   nextClient = new NativeClient(await getOrCreateProfileId(), loadedConfig?.digest, handleHostMessage, flushPendingAdd, async () => {
     if (client !== nextClient) return;
+    monitorDelivery.resetConnection();
     // Scheduled first and unconditionally: awaitConfig() below only resolves once a config has
     // ever been adopted (cache or a successful handshake), which never happens if the very first
     // connection attempt in a profile fails before any config exists — gating the retry behind it
@@ -488,12 +515,20 @@ async function openNativeConnection(): Promise<void> {
     if (loaded === undefined) return;
     const root = await loadState(loaded);
     const activeGroups: string[] = [];
+    const upgradeRequired = !nextClient.ready;
+    if (upgradeRequired) lastConfigError = "upgrade_required";
     for (const group of loaded.config.groups) {
       const state = root.groups[group.id];
-      if (state === undefined || (state.groupState !== "leased" && state.groupState !== "evicting")) continue;
+      if (state === undefined) continue;
+      // A failed pre-Hello connection proves only that the host is unavailable/incompatible. It
+      // does not prove that a sealed browser scope or its committed vault object is inconsistent.
+      // Only an exposed active lease needs fail-closed cookie cleanup and reconciliation.
+      const disconnected = stateAfterDisconnect(state.groupState);
+      if (!disconnected.activeLease) continue;
       activeGroups.push(group.id);
       try { await removeAllCookies(group); } catch { /* continue fail-closed cleanup for other groups */ }
-      state.groupState = "degraded";
+      state.groupState = disconnected.state;
+      state.reconciliation = disconnected.reconciliation;
       state.lastEvent = "native_disconnect_fail_closed";
     }
     await saveState(root);
@@ -526,6 +561,7 @@ async function handleHostMessage(message: WireMessage): Promise<void> {
           const pending = await getLocal(PENDING_ADD_KEY);
           if (isPendingAdd(pending) && pending.requestId === message.requestId) await setLocal(PENDING_ADD_KEY, undefined);
         } else if (operation.type === "group.remove" && operation.scope !== undefined) {
+          if (operation.groupId !== undefined) await operationCoordinator.discardGroup(operation.groupId);
           await removeUnusedScopePermission(operation.scope);
         }
       }
@@ -542,6 +578,23 @@ async function handleHostMessage(message: WireMessage): Promise<void> {
       const pending = await getLocal(PENDING_ADD_KEY);
       if (isPendingAdd(pending) && pending.requestId === message.requestId) await setLocal(PENDING_ADD_KEY, undefined);
     }
+    return;
+  }
+  if (message.type === "recovery.adopted") {
+    if (message.requestId === undefined) throw new Error("recovery result lacks correlation");
+    const operation = configOperations.get(message.requestId);
+    const profileId = requiredString(message.payload, "profile_id");
+    if (operation?.type !== "profile.recover" || operation.groupId !== profileId || !isProfileId(profileId)) {
+      throw new Error("recovery result binding mismatch");
+    }
+    await setLocal(PROFILE_ID_KEY, profileId.toLowerCase());
+    await removeLocal([CONFIG_CACHE_KEY, STATE_KEY, LEGACY_STATE_KEY, OPERATION_REFERENCE_KEY, PENDING_ADD_KEY]);
+    loadedConfig = undefined;
+    recoveryCandidates = [];
+    configOperations.set(message.requestId, { ...operation, status: "success", updatedAt: Date.now() });
+    // Let the initiating onboarding page observe success, then reconnect under the recovered
+    // namespace. No domain or cookie data is copied through extension storage.
+    setTimeout(() => client?.close(), 500);
     return;
   }
   if (message.type === "operation.error") {
@@ -580,12 +633,22 @@ async function handleHostMessage(message: WireMessage): Promise<void> {
   const state = requiredGroupState(root, group.id);
   switch (message.type) {
     case "lease.grant":
+      {
+      const purpose = state.pendingLeaseRequest;
       state.leaseId = requiredString(message.payload, "lease_id");
       chrome.alarms.create(alarmName("expiry", group.id), { when: requiredNumber(message.payload, "expiry_unix_ms") });
       state.pendingLeaseRequest = undefined;
       state.lastEvent = "lease_grant";
       await saveState(root);
+      if (purpose === "enroll") {
+        const operation = await operationCoordinator.begin(group.id, state.leaseId, "enrollment");
+        state.evictionRequestPending = true;
+        state.groupState = "evicting";
+        await saveState(root);
+        sendOperationBegin(operation, "initial_enrollment");
+      }
       break;
+      }
     case "lease.deny": {
       const deniedLease = state.pendingLeaseRequest;
       const deniedEviction = state.evictionRequestPending === true;
@@ -619,10 +682,18 @@ async function handleHostMessage(message: WireMessage): Promise<void> {
         (await getCookies(group)).map(cookieRecord),
       );
       break;
-    case "evict.confirmed": await finishEviction(loaded, group, message.payload, root, state); break;
+    case "evict.confirmed":
+      if (message.payload.operation_sequence !== undefined) await handleEvictConfirmedV7(group, message.payload, root, state);
+      else await finishEviction(loaded, group, message.payload, root, state);
+      break;
+    case "operation.snapshot_required": await handleOperationSnapshotRequired(group, message.payload, root, state); break;
+    case "operation.status": await handleOperationStatus(group, message.payload, root, state); break;
+    case "evict.remove.authorized": await handleRemovalAuthorized(group, message.payload, root, state); break;
+    case "operation.completed": await handleOperationCompleted(loaded, group, message.payload, root, state); break;
     case "session.invalidated":
       clearGroupAlarms(group.id);
       try { await removeAllCookies(group); } catch { state.lastEvent = "session_invalidated_cleanup_failed"; }
+      await operationCoordinator.discardGroup(group.id);
       resetGroupState(state, "session_invalidated");
       await saveState(root);
       break;
@@ -655,6 +726,8 @@ async function handleHandshakeAck(payload: Record<string, unknown>): Promise<voi
   if (!Array.isArray(hostCapabilities) || !REQUIRED_CAPABILITIES.every((capability) => hostCapabilities.includes(capability))) {
     throw new Error("native host capability mismatch");
   }
+  if (!Array.isArray(payload.recovery_candidates)) throw new Error("handshake recovery candidates must be an array");
+  recoveryCandidates = payload.recovery_candidates.map(parseRecoveryCandidate);
   await adoptConfig(payload.config as AccountGroupsConfig, requiredString(payload, "config_digest"));
   const loaded = await awaitConfig();
   if (!Array.isArray(payload.groups)) throw new Error("handshake groups must be an array");
@@ -729,6 +802,7 @@ async function handleHandshakeAck(payload: Record<string, unknown>): Promise<voi
   // authoritative state has been adopted. UI messages are serialized behind this handler, so
   // they cannot observe a half-applied handshake.
   client?.markHandshakeReady();
+  for (const statusQuery of operationCoordinator.statusQueries()) send("operation.status.query", statusQuery);
   for (const action of actions) await action();
   const pending = await monitorOutbox();
   if (pending.some((event) => event.signal === "host_disconnect" || event.signal === "host_disconnect_active_lease")) {
@@ -737,6 +811,22 @@ async function handleHandshakeAck(payload: Record<string, unknown>): Promise<voi
   await flushMonitorOutbox();
   await pollNativeMonitor();
   await flushPendingAdd();
+}
+
+function parseRecoveryCandidate(value: unknown): RecoveryCandidate {
+  if (typeof value !== "object" || value === null) throw new Error("invalid recovery candidate");
+  const raw = value as Record<string, unknown>;
+  const profileId = requiredString(raw, "profile_id");
+  const displayName = requiredString(raw, "display_name");
+  const browser = requiredString(raw, "browser");
+  const lastUsedUnixMs = requiredNumber(raw, "last_used_unix_ms");
+  const siteCount = requiredNumber(raw, "site_count");
+  if (!isProfileId(profileId) || displayName.length > 80 || browser.length > 40 ||
+      !Number.isSafeInteger(lastUsedUnixMs) || lastUsedUnixMs < 0 ||
+      !Number.isSafeInteger(siteCount) || siteCount < 1 || siteCount > 32) {
+    throw new Error("invalid recovery candidate fields");
+  }
+  return { profileId: profileId.toLowerCase(), displayName, browser, lastUsedUnixMs, siteCount };
 }
 
 async function injectCookies(loaded: LoadedConfig, group: AccountGroup, payload: Record<string, unknown>, root: RuntimeState, state: GroupRuntimeState): Promise<void> {
@@ -868,31 +958,16 @@ async function receiveInjectChunk(loaded: LoadedConfig, group: AccountGroup, pay
   const chunkIndex = requiredInteger(payload, "chunk_index");
   const chunkCount = requiredInteger(payload, "chunk_count");
   const cookieCount = requiredInteger(payload, "cookie_count");
-  if (chunkCount < 1 || chunkCount > 65_536 || cookieCount < 0 || cookieCount > 100_000) throw new Error("inject chunk metadata is out of range");
   if (!Array.isArray(payload.cookies)) throw new Error("cookies.inject.chunk cookies must be an array");
-  let pending = pendingInjectChunks.get(group.id);
-  if (pending === undefined) {
-    if (chunkIndex !== 0) throw new Error("first inject chunk is missing");
-    pending = { leaseId, chunkCount, cookieCount, nextChunk: 0, cookies: [] };
-    pendingInjectChunks.set(group.id, pending);
-  }
-  if (pending.leaseId !== leaseId || pending.chunkCount !== chunkCount || pending.cookieCount !== cookieCount || pending.nextChunk !== chunkIndex) {
-    pendingInjectChunks.delete(group.id);
-    throw new Error("inject chunk binding or order mismatch");
-  }
-  const records = payload.cookies as CookieRecord[];
-  if (chunkIndex + 1 < chunkCount && records.length === 0) throw new Error("non-final inject chunk is empty");
-  if (pending.cookies.length + records.length > cookieCount) throw new Error("inject cookie total exceeds declaration");
-  pending.cookies.push(...records);
-  pending.nextChunk += 1;
-  if (pending.nextChunk < chunkCount) return;
-  pendingInjectChunks.delete(group.id);
-  if (pending.cookies.length !== cookieCount) throw new Error("inject cookie total does not match declaration");
-  await injectCookies(loaded, group, { lease_id: leaseId, cookies: pending.cookies }, root, state);
+  const records = pendingInjectChunks.receive(
+    group.id, leaseId, chunkIndex, chunkCount, cookieCount, payload.cookies as CookieRecord[],
+  );
+  if (records === undefined) return;
+  await injectCookies(loaded, group, { lease_id: leaseId, cookies: records }, root, state);
 }
 
 function sendCookieSnapshotChunks(groupId: string, leaseId: string | undefined, operationId: string, cookies: CookieRecord[]): void {
-  const chunks = chunkCookieRecords(cookies);
+  const chunks = chunkRecords(cookies);
   for (let chunkIndex = 0; chunkIndex < chunks.length; chunkIndex += 1) {
     send("cookies.snapshot.chunk", {
       account_group_id: groupId,
@@ -904,27 +979,6 @@ function sendCookieSnapshotChunks(groupId: string, leaseId: string | undefined, 
       cookies: chunks[chunkIndex],
     });
   }
-}
-
-export function chunkCookieRecords(cookies: CookieRecord[]): CookieRecord[][] {
-  if (cookies.length === 0) return [[]];
-  const encoder = new TextEncoder();
-  const chunks: CookieRecord[][] = [];
-  let current: CookieRecord[] = [];
-  let currentBytes = 2;
-  for (const cookie of cookies) {
-    const bytes = encoder.encode(JSON.stringify(cookie)).byteLength + (current.length === 0 ? 0 : 1);
-    if (bytes > COOKIE_CHUNK_TARGET_BYTES) throw new Error("one cookie exceeds the chunk byte limit");
-    if (current.length > 0 && currentBytes + bytes > COOKIE_CHUNK_TARGET_BYTES) {
-      chunks.push(current);
-      current = [];
-      currentBytes = 2;
-    }
-    current.push(cookie);
-    currentBytes += bytes;
-  }
-  chunks.push(current);
-  return chunks;
 }
 
 async function finishEviction(loaded: LoadedConfig, group: AccountGroup, payload: Record<string, unknown>, root: RuntimeState, state: GroupRuntimeState): Promise<void> {
@@ -1009,11 +1063,192 @@ async function requestEviction(loaded: LoadedConfig, group: AccountGroup, reason
     (state.groupState === "degraded" && reason === "degraded_cookie_detected") ||
     (reason === "startup_reconciliation" && state.groupState !== "uninitialized");
   if (!valid) return;
+  const recoveryQuery = operationCoordinator.recoveryQuery(group.id);
+  if (recoveryQuery !== undefined) {
+    // Startup/browser triggers are observations, not authority to supersede an already-issued
+    // durable operation. Resume it by identity; its semantic status determines the next action.
+    state.evictionRequestPending = true;
+    state.groupState = "evicting";
+    state.lastEvent = `operation_recovery_pending:${reason}`;
+    await saveState(root);
+    send("operation.status.query", recoveryQuery);
+    return;
+  }
   state.evictionRequestPending = true;
   state.groupState = "evicting";
   state.lastEvent = `eviction_request_pending:${reason}`;
   await saveState(root);
-  send("evict.request", { account_group_id: group.id, lease_id: leaseId, operation_id: crypto.randomUUID(), phase: "begin", reason });
+  const kind = reason === "startup_reconciliation" || reason === "degraded_cookie_detected" ? "reconciliation" : "eviction";
+  const operation = await operationCoordinator.begin(group.id, leaseId, kind);
+  sendOperationBegin(operation, reason);
+}
+
+function sendOperationBegin(operation: OperationReference, reason: string, retry = 0): void {
+  send("operation.begin", { account_group_id: operation.groupId, lease_id: operation.leaseId ?? null,
+    attempt_id: operation.attemptId, kind: operation.kind, reason });
+  // Native messaging delivery and service-worker scheduling have separate completion boundaries.
+  // Until snapshot_required durably binds the host identity, repeat the exact idempotent begin.
+  // The host returns the same issued identity for this attempt. A bounded failure closes the port
+  // so startup recovery can classify the journal instead of leaving Evicting alive indefinitely.
+  const delayMs = 750 * (retry + 1);
+  setTimeout(() => enqueue(async () => {
+    const current = operationCoordinator.current(operation.groupId);
+    if (current?.attemptId !== operation.attemptId || current.phase !== "begin_pending") return;
+    if (!client?.ready) return;
+    if (retry < 2) sendOperationBegin(current, reason, retry + 1);
+    else client.close();
+  }), delayMs);
+}
+
+function sendV7Snapshot(operation: OperationReference, purpose: "commit" | "removal_precheck", cookies: chrome.cookies.Cookie[]): void {
+  if (operation.operationId === undefined || operation.operationSequence === undefined) throw new Error("operation is not host-issued");
+  const records = cookies.map(cookieRecord);
+  const chunks = chunkRecords(records);
+  for (let chunkIndex = 0; chunkIndex < chunks.length; chunkIndex += 1) {
+    send("cookies.snapshot.chunk", { account_group_id: operation.groupId,
+      operation_id: operation.operationId, operation_sequence: operation.operationSequence,
+      lease_id: operation.leaseId ?? null, attempt_id: operation.attemptId, purpose,
+      chunk_index: chunkIndex, chunk_count: chunks.length, cookie_count: records.length,
+      cookies: chunks[chunkIndex] });
+  }
+}
+
+async function handleOperationSnapshotRequired(group: AccountGroup, payload: Record<string, unknown>, root: RuntimeState, state: GroupRuntimeState): Promise<void> {
+  let operation: OperationReference;
+  try {
+    operation = await operationCoordinator.bindIssued(group.id, requiredString(payload, "operation_id"),
+      requiredInteger(payload, "operation_sequence"), optionalString(payload, "lease_id"), requiredString(payload, "attempt_id"));
+  } catch (error: unknown) {
+    // The host has durably issued an operation but the extension could not durably bind it. The
+    // only safe recovery is to end this connection: host startup recovery aborts a snapshot-less
+    // NotCommitted operation, instead of leaving the group Evicting forever on a live port.
+    client?.close();
+    throw error;
+  }
+  try {
+    sendV7Snapshot(operation, "commit", await getCookies(group));
+    state.lastEvent = "v7_snapshot_required";
+  } catch (error: unknown) {
+    if (!mayAbortWithEmptySnapshot(operation.kind)) throw error;
+    // Enrollment has no authoritative vault object yet. If Chrome refuses the observation (most
+    // commonly a permission race), finish through the host's durable scope-empty abort instead
+    // of marooning a NotCommitted journal record and an Evicting lease forever.
+    sendV7Snapshot(operation, "commit", []);
+    state.lastEvent = "enrollment_snapshot_unavailable";
+  }
+  // Host messages are serialized behind this handler, so the response cannot overtake this
+  // projection write. Sending first prevents a repairable Chrome storage failure from blocking
+  // the authoritative snapshot/abort message forever.
+  state.groupState = "evicting";
+  state.evictionRequestPending = true;
+  await saveState(root);
+}
+
+async function prepareGuardedRemoval(group: AccountGroup, payload: Record<string, unknown>): Promise<void> {
+  const operation = operationCoordinator.assertBinding(payload);
+  await operationCoordinator.phase(group.id, "removal_precheck");
+  const fresh = await getCookies(group);
+  removalSnapshots.set(group.id, fresh);
+  send("evict.remove.prepare", { account_group_id: group.id, operation_id: operation.operationId,
+    operation_sequence: operation.operationSequence, lease_id: operation.leaseId ?? null,
+    attempt_id: operation.attemptId });
+  sendV7Snapshot(operation, "removal_precheck", fresh);
+}
+
+async function handleEvictConfirmedV7(group: AccountGroup, payload: Record<string, unknown>, root: RuntimeState, state: GroupRuntimeState): Promise<void> {
+  const operation = operationCoordinator.assertBinding(payload);
+  const disposition = requiredString(payload, "cookie_disposition");
+  await operationCoordinator.phase(group.id, "committed");
+  if (disposition === "retain_leased") {
+    const remaining = (await getCookies(group)).length;
+    send("evict.result", { account_group_id: group.id, operation_id: operation.operationId,
+      operation_sequence: operation.operationSequence, lease_id: operation.leaseId ?? null,
+      attempt_id: operation.attemptId, success: remaining > 0, remaining_cookie_count: remaining });
+    state.lastEvent = remaining > 0 ? "enrollment_retained_leased" : "enrollment_cookie_missing";
+    await saveState(root);
+    return;
+  }
+  if (disposition !== "remove") throw new Error("unsupported v7 cookie disposition");
+  await prepareGuardedRemoval(group, payload);
+}
+
+async function handleRemovalAuthorized(group: AccountGroup, payload: Record<string, unknown>, root: RuntimeState, state: GroupRuntimeState): Promise<void> {
+  const operation = operationCoordinator.assertBinding(payload);
+  const authorized = removalSnapshots.get(group.id);
+  if (authorized === undefined) throw new Error("authorized snapshot is unavailable after worker restart");
+  await operationCoordinator.phase(group.id, "removal_authorized");
+  let success = true;
+  const plan = new GuardedRemovalPlan(authorized.map(cookieRecord));
+  for (;;) {
+    const currentCookies = await getCookies(group);
+    const step = plan.next(currentCookies.map(cookieRecord));
+    if ("mutation" in step) { success = false; break; }
+    if (step.done) break;
+    const actual = currentCookies.find((cookie) => cookieIdentity(cookie) === cookieIdentity(step.record));
+    if (actual === undefined || !cookieRoundTripMatches(step.record, actual)) { success = false; break; }
+    await removeCookie(group, actual);
+    if ((await getCookies(group)).some((cookie) => cookieIdentity(cookie) === cookieIdentity(step.record))) { success = false; break; }
+  }
+  const remaining = (await getCookies(group)).length;
+  success = success && remaining === 0;
+  send("evict.result", { account_group_id: group.id, operation_id: operation.operationId,
+    operation_sequence: operation.operationSequence, lease_id: operation.leaseId ?? null,
+    attempt_id: operation.attemptId, success, remaining_cookie_count: remaining });
+  removalSnapshots.delete(group.id);
+  state.groupState = success ? "sealed" : "degraded";
+  state.reconciliation = !success;
+  state.lastEvent = success ? "eviction_complete" : "cookie_rotation_reconciliation_required";
+  await saveState(root);
+}
+
+async function handleOperationStatus(group: AccountGroup, payload: Record<string, unknown>, root: RuntimeState, state: GroupRuntimeState): Promise<void> {
+  const operation = operationCoordinator.assertBinding(payload);
+  const action = requiredString(payload, "required_action");
+  if (action === "send_snapshot") sendV7Snapshot(operation, "commit", await getCookies(group));
+  else if (action === "prepare_removal" || action === "verify_browser_state") await prepareGuardedRemoval(group, payload);
+  else if (action === "completed") await operationCoordinator.complete(group.id);
+  else if (action === "reconciliation_required") {
+    await operationCoordinator.phase(group.id, "reconciliation_required");
+    state.groupState = "degraded"; state.reconciliation = true; state.lastEvent = "operation_reconciliation_required";
+    await saveState(root);
+  } else if (action === "classify_durability") {
+    setTimeout(() => { const query = operationCoordinator.statusQuery(group.id); if (query !== undefined && client?.ready) send("operation.status.query", query); }, 250);
+  } else throw new Error("unsupported operation status action");
+}
+
+async function handleOperationCompleted(loaded: LoadedConfig, group: AccountGroup, payload: Record<string, unknown>, root: RuntimeState, state: GroupRuntimeState): Promise<void> {
+  const operation = operationCoordinator.assertBinding(payload);
+  const success = payload.success === true;
+  const chained = chainedEvictionAfterCompletion(operation.kind, success, state.evictAfterEnrollment);
+  if (success) {
+    state.groupState = operation.kind === "enrollment" ? "leased" : "sealed";
+    state.reconciliation = false;
+    state.evictionRequestPending = false;
+    if (operation.kind !== "enrollment") state.leaseId = undefined;
+    state.lastEvent = "operation_completed";
+    state.evictAfterEnrollment = undefined;
+    state.reconciliationAttempts = 0;
+    await operationCoordinator.complete(group.id);
+  } else {
+    state.groupState = "degraded"; state.reconciliation = true;
+    state.evictionRequestPending = false;
+    state.reconciliationAttempts = (state.reconciliationAttempts ?? 0) + 1;
+    state.lastEvent = "operation_failed_reconciliation_required";
+    await operationCoordinator.phase(group.id, "reconciliation_required");
+  }
+  await saveState(root);
+  // Enrollment retains the just-captured browser cookies. If it was initiated because the user
+  // had already closed/left the site, immediately continue with the original eviction trigger
+  // after the enrollment operation has been durably completed and removed from local authority.
+  if (chained !== undefined) await requestEviction(loaded, group, chained, state.leaseId);
+  else if (shouldRetryReconciliation(success, state.reconciliationAttempts ?? 0)) {
+    // Cookie-heavy sites can rotate/expire a cookie between the authoritative vault commit and
+    // the fresh browser-removal precheck. The host correctly rejects that stale snapshot. Retry
+    // immediately with a new durable reconciliation instead of exposing this expected race as a
+    // lasting user-visible degraded state. The bound prevents a continuously mutating scope from
+    // spinning forever; after two retries it remains fail-closed and visibly degraded.
+    await requestEviction(loaded, group, "degraded_cookie_detected", state.leaseId);
+  }
 }
 
 async function markPermissionMissing(loaded: LoadedConfig, group: AccountGroup): Promise<void> {
@@ -1119,6 +1354,7 @@ async function handleUnlockPageMessage(loaded: LoadedConfig, type: "unlock.statu
 
 class NativeClient {
   private port?: chrome.runtime.Port;
+  private disconnectHandled = false;
   private readonly readiness = new ConnectionReadiness();
   private readonly nonce = randomNonce();
   private outgoing = 0;
@@ -1146,9 +1382,7 @@ class NativeClient {
       // reading it acknowledges the error and prevents an "Unchecked runtime.lastError" console
       // flood; state recovery remains centralized in onDisconnect and exposes no provider text.
       void chrome.runtime.lastError?.message;
-      this.port = undefined;
-      this.readiness.closed();
-      enqueue(this.onDisconnect);
+      this.handlePortDisconnect();
     });
     this.send("handshake", {
       protocol_version: PROTOCOL_VERSION,
@@ -1171,11 +1405,29 @@ class NativeClient {
       // The port can die between the connected check and this write (a service-worker restart
       // after a permission grant does exactly that). Drop it here so the reconnect path runs
       // instead of repeatedly writing into a dead port.
-      this.port = undefined;
-      this.readiness.closed();
-      throw error instanceof Error ? error : new Error("native host write failed");
+      this.handlePortDisconnect();
+      throw new Error("native host disconnected before write completed");
     }
     return requestId;
+  }
+  trySend(type: string, payload: Record<string, unknown>): boolean {
+    if (!this.ready) return false;
+    try {
+      this.send(type, payload);
+      return true;
+    } catch {
+      // Best-effort monitor traffic must not turn an already-detected disconnect into a global
+      // controller failure. handlePortDisconnect has scheduled the ordinary reconnect path and
+      // the durable monitor outbox remains available for that connection.
+      return false;
+    }
+  }
+  private handlePortDisconnect(): void {
+    if (this.disconnectHandled) return;
+    this.disconnectHandled = true;
+    this.port = undefined;
+    this.readiness.closed();
+    enqueue(this.onDisconnect);
   }
   private async receive(raw: unknown): Promise<void> {
     if (!isEnvelope(raw)) throw new Error("malformed native envelope");
@@ -1212,7 +1464,7 @@ function startConfigOperation(type: "group.add" | "group.remove" | "group.set_po
     ? loadedConfig?.config.groups.find((group) => group.id === groupId)?.scope
     : undefined;
   const requestId = send(type, payload);
-  configOperations.set(requestId, { type, scope, status: "pending", updatedAt: Date.now() });
+  configOperations.set(requestId, { type, scope, groupId, status: "pending", updatedAt: Date.now() });
   return requestId;
 }
 
@@ -1249,19 +1501,22 @@ async function monitorOutbox(): Promise<MonitorEvent[]> {
 
 async function flushMonitorOutbox(): Promise<void> {
   if (!client?.ready) return;
-  for (const event of await monitorOutbox()) send("monitor.event", { ...event });
+  for (const event of monitorDelivery.takeUnsent(await monitorOutbox())) {
+    if (!client?.trySend("monitor.event", { ...event })) break;
+  }
 }
 
 async function pollNativeMonitor(): Promise<void> {
   if (!client?.ready) return;
   await flushMonitorOutbox();
-  send("monitor.poll", { max_events: 32 });
+  client?.trySend("monitor.poll", { max_events: 32 });
 }
 
 async function handleMonitorAlert(value: unknown): Promise<void> {
   if (!validateMonitorEvent(value)) throw new Error("invalid monitor alert");
   const event = value;
   if (event.source === "extension") {
+    monitorDelivery.acknowledge(event.event_id);
     const pending = await monitorOutbox();
     await setLocal(MONITOR_OUTBOX_KEY, pending.filter((item) => item.event_id !== event.event_id));
   }
@@ -1394,7 +1649,7 @@ async function getCookies(group: AccountGroup): Promise<chrome.cookies.Cookie[]>
   const found = await callbackPromise<chrome.cookies.Cookie[]>((done) => chrome.cookies.getAll({ domain: group.scope }, done));
   const uniqueCookies = new Map<string, chrome.cookies.Cookie>();
   for (const cookie of found) if (cookieBelongsToGroup(group, cookie)) uniqueCookies.set(cookieIdentity(cookie), cookie);
-  return [...uniqueCookies.values()];
+  return [...uniqueCookies.values()].sort((left, right) => cookieIdentity(left).localeCompare(cookieIdentity(right)));
 }
 
 // The host's config and the extension's optional host permissions are independent: uninstalling

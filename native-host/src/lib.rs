@@ -2,6 +2,9 @@
 
 mod atomic_file;
 
+#[cfg(test)]
+pub(crate) mod test_support;
+
 pub mod audit;
 pub mod config;
 pub mod crypto;
@@ -12,9 +15,11 @@ pub mod host_loop;
 pub mod instance_lock;
 pub mod lease;
 pub mod monitor;
+pub(crate) mod operation;
 pub mod paths;
 pub mod protocol;
 pub mod transaction;
+pub mod update;
 pub mod vault;
 
 pub use error::{FcpError, FcpResult};

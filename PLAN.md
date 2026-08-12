@@ -11,7 +11,7 @@
 > [Sonraki Kesin Adım](#31-sonraki-kesin-adım) ve [Karar Günlüğü](#32-karar-günlüğü)
 > bölümleri gözden geçirilir. Günlük tarzı uzun kayıt tutulmaz; belge güncel ve okunabilir kalır.
 
-**Son güncelleme:** 2026-08-08
+**Son güncelleme:** 2026-08-12
 **Durum:** Tasarım tamamlandı. **Faz 1–4 deneylerinin tamamı GO; Faz 5 tek grup uçtan uca MVP
 kontrollü uygulama ve düşük-riskli gerçek site manuel kabul testlerini tam geçti.** Q16 Aday A ile kapatıldı; vault v1, crypto temeli, Native Messaging v1 sözleşmesi ve
 inject'e özel tek kullanımlık Hello capability/replay ledger'ı, gerçek vault transaction/lease dispatcher'ı,
@@ -878,6 +878,42 @@ ve 12'si yürütülemez. Bu durumda:
   hangi cookie'nin açıkta olduğu bilinir.
 - Reconciliation başarısız olur veya tamamlanamazsa grup `degraded` işaretlenir.
 - `degraded` gruptan çıkış yalnızca başarılı bir reconciliation ile mümkündür.
+
+### 15.5 Cross-component transaction authority sözleşmesi
+
+Workstream 1 ile eviction/reconciliation işlemlerinde tek bir dosyayı bütün sistemin doğruluk
+kaynağı saymak yerine her bileşenin yetki alanı açıkça ayrılır:
+
+- **Vault, data-safety authority'dir.** Browser cookie'sinin silinmesine yalnız exact hedef vault
+  nesnesinin doğrulanmış ve durable olduğu kanıtlandıktan sonra izin verilir. Vault sequence veya
+  hedef nesne digest'i eşleşmiyorsa commit varsayılmaz.
+- **Operation journal, cross-component operation authority'dir.** Operation ID, monoton sequence,
+  request/payload binding ve `not_committed → durability_unknown → committed →
+  browser_removal_pending → completed` yaşam döngüsünün durable sonucu journal'dan okunur. Aynı
+  operation ID farklı payload ile yeniden kullanılırsa hiçbir side effect uygulanmadan fail-closed
+  reddedilir.
+- **Browser observation, current exposure authority'dir.** Vault browser'ın güncel durumunu
+  kanıtlamaz. Cookie removal öncesinde ve sonrasında extension'ın yeni gözlemi gerekir; snapshot
+  sonrasında değişen browser state eski snapshot'a dayanarak silinmez.
+- **Lease metadata repairable projection'dır.** Stable grup/lease görünümünü hızlandırır fakat aktif
+  operation sonucunu belirlemez. Journal ve doğrulanmış vault ile çelişirse startup recovery
+  sırasında onarılır.
+- **Audit non-authoritative observability'dir.** Audit append başarısızlığı veya
+  committed-but-reported-failed sonucu vault/journal commit'ini geri almaz ve başarılı core
+  operation'ı başarısız yapmaz. Audit daha sonra idempotent olarak tamamlanır.
+
+Atomik yazma sonucu üç tipe ayrılır: `NotCommitted` replace öncesi kesin başarısızlık,
+`Committed` doğrulanmış başarı, `DurabilityUnknown` ise replace çağrısından sonra işlemin sonucunun
+yalnız dönen hata ile belirlenemediği durumdur. `DurabilityUnknown`, diskteki exact nesnenin previous
+ve target digest'leriyle yeniden okunup sınıflandırılmasıyla çözülür; ikisine de uymayan nesne
+reconciliation gerektirir.
+
+Bu sözleşmenin Aşama 2 implementasyonu Native Messaging v6 dispatcher'ının gerçek vault snapshot
+transaction'ına internal olarak bağlanmıştır. Exact encrypted target bytes commit öncesinde
+hazırlanır; previous/target digest ve keyed snapshot tag journal'a yazıldıktan sonra aynı bytes
+atomik commit edilir. Startup, nonterminal kayıtları vault object identity ile sınıflandırır ve
+mevcut lease v1'i yalnız güvenli projection yönünde onarır. Protocol sürümü/mesajları, lease şeması,
+browser removal ve kullanıcıya görünür davranış değişmemiştir.
 
 ---
 
@@ -3424,8 +3460,8 @@ olarak indirip ilk kurulumla aynı şekilde çalıştırır.
   ön-sürüm etiketleri (`-beta`, `-rc1` gibi) doğru sıralanmaz. v1 için yeterli, yalnızca
   `X.Y.Z` etiketleri kullanılacaksa sorun değil.
 
-**Ek (aynı gün): kurulum paketi.** ADR-025'te "sıradaki iş" olarak bırakılan kısım — `cargo`/Rust
-gerektirmeyen, gerçek bir kullanıcının indirip çalıştırabileceği bir paket:
+**Ek (aynı gün): kurulum paketi.** Aşağıdaki ZIP tabanlı ilk çözüm tarihsel kayıttır ve ADR-029 ile
+tek `Setup.exe` + otomatik güncelleme modeline yükseltilmiştir:
 
 - `native-host/install/release/` — kullanıcıya giden şablon: `install.ps1` (register.ps1'in
   cargo-build adımı olmadan sürümü — yanına konan `fursoy-vault-host.exe`'yi kopyalar, manifest/
@@ -3522,9 +3558,101 @@ yok" başlangıç durumu yarattı, (2) onboarding'in kendisi kurulumda otomatik 
 hatayı loglamayan eski hâli (bugün başında düzeltildi) bu kilitlenmeyi aylarca görünmez
 bırakabilirdi.
 
-**Ek: "İndir" düğmesi artık Release sayfasına değil, doğrudan dosyaya gidiyor.** GitHub'ın
+**Ek: "İndir" düğmesi artık Release sayfasına değil, doğrudan dosyaya gidiyor.** Aşağıdaki sabit
+ZIP adı tarihsel kayıttır; ADR-029 sonrasında sabit asset `FURSOY-Vault-Setup.exe` olmuştur. GitHub'ın
 `releases/latest/download/<dosya-adı>` deseni, o isimdeki asset her zaman en son Release'de bulunduğu
 sürece kalıcı, sürümden bağımsız bir indirme linki sağlıyor. `package-release.ps1` artık zip dosyasını
 sürüm numarasız (`fursoy-vault-windows.zip`) üretiyor — Release'in kendi etiketi (`vX.Y.Z`) yine
 normal şekilde sürümlü kalıyor, yalnızca asset dosya adı sabit. Bu ismi her Release'de aynı tutmak
 gerekiyor, yoksa onboarding'in indirme linki kırılır.
+
+---
+
+### ADR-027 — Cross-component transaction authority ve durable operation journal
+
+**Durum:** Kabul edildi; Aşama 1–3 uçtan uca v7 entegrasyonu uygulandı (2026-08-12).
+
+**Bağlam:** Eviction akışı `snapshot → vault commit → lease metadata → audit → evict.confirmed →
+browser removal → evict.result` boyunca birden fazla bağımsız durable ve process-dışı state'i
+değiştirir. Vault replace gerçekleştikten sonra lease/audit/response hatası oluşabilmesi, tek bir
+`Result` değerinin hem data durability'yi hem operation completion'ı doğru ifade edemediğini
+gösterdi. Pending operation'ın yalnız host belleğinde tutulması da restart sonrasında cached result,
+payload conflict ve commit classification yapılmasını engelliyordu.
+
+**Karar:** §15.5'teki beşli authority ayrımı bağlayıcıdır: vault data-safety authority, operation
+journal cross-component operation authority, browser observation current exposure authority, lease
+repairable projection ve audit non-authoritative observability olacaktır. Journal cookie plaintext,
+cookie adı/domain'i veya unkeyed snapshot digest'i tutmaz. Snapshot identity, DPAPI ile korunan
+profil anahtarıyla domain-separated HMAC-SHA256 tag olarak saklanır; journal yalnız tag, sayım,
+byte sınırı ve encrypted vault nesnesinin SHA-256 identity'lerini taşır.
+
+Operation phase geçişleri ileri yönlü ve kapalı kümedir. Terminal veya ileri bir phase'den eski
+phase'e rollback reddedilir. Duplicate operation aynı request fingerprint ile cached semantic
+sonuca yönlendirilebilir; aynı UUID farklı fingerprint/snapshot binding ile gelirse fail-closed
+payload conflict olur. Operation sequence grup içinde monoton artar.
+
+Atomic replace API'si `NotCommitted`, `Committed` ve `DurabilityUnknown` sonuçlarını ayırır.
+`DurabilityUnknown` yalnız exact previous/target object digest classification ile çözülür. Target
+eşleşmesi commit, previous eşleşmesi not-committed, ikisine de uymayan veya doğrulanamayan nesne
+reconciliation-required sonucudur.
+
+**Aşama 2 uygulaması:** Production yerleşimi profil namespace'i altında
+`operations/groups/<group_id>.json` ve DPAPI-protected `operations/snapshot-key.dpapi` olarak
+belirlendi. V6 operation begin, snapshot binding, prepared vault commit, commit classification,
+external-result-pending ve terminal result internal journal'a bağlandı. Host startup'ı
+`not_committed`/`durability_unknown`/`committed`/`browser_removal_pending` kayıtlarını exact vault
+digest'iyle sınıflandırır. Target eşleşen incomplete işlem yeni lease/inject'i bloke eder ve lease v1
+projection'ını `degraded` yapar; v6 `startup_reconciliation` yeni güvenli operation'a geçmeden eski
+incomplete kaydı terminal reconciliation-required olarak kapatır. Journal `completed` olmuş fakat
+lease persist edilememişse, yalnız disk lease'in `pending_operation_id` binding'i eşleştiğinde lease
+v1 `sealed`/`leased` projection'ı onarılır.
+
+**Aşama 3 uygulaması:** Workstream 1 Aşama 3 (2026-08-12) bu authority modelini protocol v7'ye taşır. Host operation ID ve
+monotonic sequence üretir; extension yalnız non-secret attempt/operation referansını persist eder.
+Lease metadata v2 `protocol_floor` ve `operation_sequence_high_water` tutar. İlk başarılı v7
+handshake sonrasında floor 7 atomik persist edilir ve profile v6 operation semantics uygulanmaz.
+Cookie removal, committed snapshot ile eşleşen fresh browser observation ve host authorization
+olmadan başlamaz; her removal öncesi exact record yeniden doğrulanır. Audit operation event'leri
+deterministic event ID ile idempotent kaydedilir ve audit hatası core transaction sonucunu geri almaz.
+
+### ADR-028 — Reinstall recovery restores the original profile namespace
+
+- Chrome does not expose a stable, trustworthy browser-profile identifier. The extension's
+  persisted random UUID therefore remains the isolation boundary and is never inferred from a
+  Chrome profile name or filesystem path.
+- After an extension reinstall creates an empty namespace, the host may enumerate sibling local
+  namespaces as opaque recovery candidates. Before authorization it exposes only an generated
+  label, browser family, protected-site count and last-used time; domains, cookie names, cookie
+  values and vault contents remain undisclosed.
+- Recovery is an explicit user choice and always requires the selected old profile's existing
+  Windows Hello credential. The host must open that credential without creating/replacing it and
+  must re-scan the candidate at authorization time. Missing/corrupt credentials fail closed.
+- A namespace that already has configured groups cannot adopt another profile. There is no
+  automatic adoption, including when exactly one candidate exists.
+- Successful recovery returns only the original opaque profile UUID. The extension persists that
+  UUID, clears projections belonging to the empty install, and reconnects. Vault/journal/lease
+  data is not copied or rebound, preserving snapshot-tag and operation identity invariants.
+- Candidates are ordered by last activity, newest first; generated `Chrome Profile N` labels are
+  hints rather than asserted Chrome identities. The first candidate is presented as recommended,
+  while the user may choose any listed candidate or continue with a new empty vault.
+
+### ADR-029 — Single-file companion installer and fail-safe automatic updates
+
+- The public companion entry point is `FURSOY-Vault-Setup.exe`; ZIP/PowerShell extraction is no
+  longer part of the normal user flow. Velopack produces the one-click installer, full update
+  package and `releases.win.json` feed from the same tested/tagged build.
+- The Chrome-launched host never performs network I/O and never mutates its running executable.
+  It may only detach the installed updater at a rate-limited interval. The updater owns download,
+  checksum verification and package apply outside the Native Messaging stdio process.
+- Velopack auto-apply-on-startup is disabled. Install/update callbacks reuse the existing
+  side-by-side deployment transaction: exact release bytes are copied to a new version directory,
+  then the manifest is atomically switched. Existing Chrome-owned processes can finish on their
+  old bytes and the next connection observes the new host.
+- Vault profiles, operation journals, lease projections, Hello credentials and audit data remain
+  outside the Velopack application directory. Update failure is non-authoritative observability:
+  it cannot change browser exposure, transaction phase or vault state.
+- Uninstall removes Native Messaging registration and updater discovery but preserves encrypted
+  vault data by default. Permanent purge remains a separate explicit action.
+- Rollout is host-first: publish the GitHub companion assets before submitting the matching
+  extension package to the Chrome Web Store. Protocol minimum-version and capability checks remain
+  fail-closed; an updater failure never relaxes compatibility requirements.

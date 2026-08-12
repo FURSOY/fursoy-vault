@@ -34,3 +34,22 @@ export function stateAfterHostError(state: ControllerGroupState, pendingLease?: 
   if (pendingLease === "enroll" || state === "unlocking" || state === "evicting") return { state: "degraded", reconciliation: true };
   return { state, reconciliation: state === "degraded" };
 }
+
+export function stateAfterDisconnect(state: ControllerGroupState): { state: ControllerGroupState; reconciliation: boolean; activeLease: boolean } {
+  if (state === "leased" || state === "evicting") {
+    return { state: "degraded", reconciliation: true, activeLease: true };
+  }
+  return { state, reconciliation: state === "degraded", activeLease: false };
+}
+
+export function chainedEvictionAfterCompletion(
+  operationKind: "enrollment" | "eviction" | "reconciliation",
+  success: boolean,
+  pendingReason: string | undefined,
+): string | undefined {
+  return success && operationKind === "enrollment" ? pendingReason : undefined;
+}
+
+export function shouldRetryReconciliation(success: boolean, attempts: number, limit = 2): boolean {
+  return !success && Number.isSafeInteger(attempts) && attempts > 0 && attempts <= limit;
+}

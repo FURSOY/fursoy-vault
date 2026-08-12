@@ -5,13 +5,20 @@ import { isValidProtectionScope, normalizeProtectionScopeInput } from "./protoco
 
 type PolicyLevel = "critical" | "balanced" | "convenient" | "monitor";
 type OnboardingStepName = "welcome" | "install" | "addsite" | "done";
+interface RecoveryCandidate {
+  profileId: string;
+  displayName: string;
+  browser: string;
+  lastUsedUnixMs: number;
+  siteCount: number;
+}
 
 const ONBOARDING_STEP_KEY = "fursoy.onboarding.step";
 
 // GitHub always redirects this exact URL to the latest release's same-named asset — see the
-// matching comment in native-host/install/package-release.ps1, which is what must keep producing
-// a zip with this exact filename for the link to never go stale.
-const INSTALLER_DOWNLOAD_URL = "https://github.com/FURSOY/fursoy-vault/releases/latest/download/fursoy-vault-windows.zip";
+// matching comment in native-host/install/package-release.ps1. The friendly Setup filename stays
+// fixed while Velopack's versioned package/feed assets power automatic companion updates.
+const INSTALLER_DOWNLOAD_URL = "https://github.com/FURSOY/fursoy-vault/releases/latest/download/FURSOY-Vault-Setup.exe";
 
 function required<T extends HTMLElement>(id: string): T {
   const element = document.getElementById(id);
@@ -29,6 +36,9 @@ const installDownload = required<HTMLAnchorElement>("install-download");
 const installCheck = required<HTMLButtonElement>("install-check");
 const installStatus = required<HTMLElement>("install-status");
 const installSkip = required<HTMLButtonElement>("install-skip");
+const recoveryPanel = required<HTMLElement>("recovery-panel");
+const recoveryList = required<HTMLElement>("recovery-list");
+const recoveryStatus = required<HTMLElement>("recovery-status");
 const addsiteForm = required<HTMLFormElement>("addsite-form");
 const addsiteScope = required<HTMLInputElement>("addsite-scope");
 const addsiteDomainInput = required<HTMLElement>("addsite-domain-input");
@@ -85,6 +95,8 @@ function applyTranslations(locale: Locale): void {
   installDownload.href = INSTALLER_DOWNLOAD_URL;
   installCheck.textContent = t(locale, "onboarding.install.checkButton");
   installSkip.textContent = t(locale, "onboarding.install.skip");
+  required<HTMLElement>("recovery-title").textContent = t(locale, "onboarding.recovery.title");
+  required<HTMLElement>("recovery-body").textContent = t(locale, "onboarding.recovery.body");
 
   required<HTMLElement>("addsite-title").textContent = t(locale, "onboarding.addsite.title");
   required<HTMLElement>("addsite-body").textContent = t(locale, "onboarding.addsite.body");
@@ -139,12 +151,79 @@ async function checkConnection(): Promise<void> {
   installCheck.disabled = false;
   if (state?.connected === true) {
     installStatus.textContent = t(locale, "onboarding.install.connected");
-    setTimeout(() => showStep(stepAddsite), 600);
+    const candidates = parseRecoveryCandidates(state.recoveryCandidates);
+    if (candidates.length > 0) {
+      renderRecoveryCandidates(candidates);
+      recoveryPanel.hidden = false;
+      installSkip.textContent = t(locale, "onboarding.recovery.startFresh");
+    } else {
+      setTimeout(() => showStep(stepAddsite), 600);
+    }
   } else {
     // state is undefined when the message never got a response at all (e.g. this tab was left
     // open across an extension reload and its page context is stale) — same actionable hint
     // either way: reload this tab and try again.
     installStatus.textContent = t(locale, "onboarding.install.notConnected");
+  }
+}
+
+function parseRecoveryCandidates(value: unknown): RecoveryCandidate[] {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((raw): RecoveryCandidate[] => {
+    if (typeof raw !== "object" || raw === null) return [];
+    const candidate = raw as Partial<RecoveryCandidate>;
+    return typeof candidate.profileId === "string" && typeof candidate.displayName === "string" &&
+      typeof candidate.browser === "string" && typeof candidate.lastUsedUnixMs === "number" &&
+      typeof candidate.siteCount === "number"
+      ? [candidate as RecoveryCandidate] : [];
+  });
+}
+
+function renderRecoveryCandidates(candidates: RecoveryCandidate[]): void {
+  recoveryList.replaceChildren();
+  candidates.forEach((candidate, index) => {
+    const card = document.createElement("div");
+    card.className = "recovery-card";
+    const copy = document.createElement("div");
+    const name = document.createElement("strong");
+    name.textContent = candidate.displayName;
+    if (index === 0) {
+      const badge = document.createElement("span");
+      badge.className = "recovery-badge";
+      badge.textContent = t(locale, "onboarding.recovery.recommended");
+      name.append(badge);
+    }
+    const details = document.createElement("small");
+    const date = new Intl.DateTimeFormat(locale, { dateStyle: "medium", timeStyle: "short" })
+      .format(new Date(candidate.lastUsedUnixMs));
+    details.textContent = t(locale, "onboarding.recovery.details")
+      .replace("{browser}", candidate.browser)
+      .replace("{count}", String(candidate.siteCount))
+      .replace("{date}", date);
+    copy.append(name, details);
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "primary";
+    button.textContent = t(locale, "onboarding.recovery.button");
+    button.addEventListener("click", () => { void recoverProfile(candidate, button); });
+    card.append(copy, button);
+    recoveryList.append(card);
+  });
+}
+
+async function recoverProfile(candidate: RecoveryCandidate, button: HTMLButtonElement): Promise<void> {
+  recoveryList.querySelectorAll<HTMLButtonElement>("button").forEach((item) => { item.disabled = true; });
+  recoveryStatus.hidden = false;
+  recoveryStatus.textContent = t(locale, "onboarding.recovery.waiting");
+  try {
+    const response = await awaitConfigAck(await send({ type: "popup.recover", profileId: candidate.profileId }));
+    if (response?.ok !== true) throw new Error("recovery_failed");
+    recoveryStatus.textContent = t(locale, "onboarding.recovery.success");
+    setTimeout(() => showStep(stepDone), 700);
+  } catch {
+    recoveryStatus.textContent = t(locale, "onboarding.recovery.error");
+    recoveryList.querySelectorAll<HTMLButtonElement>("button").forEach((item) => { item.disabled = false; });
+    button.focus();
   }
 }
 

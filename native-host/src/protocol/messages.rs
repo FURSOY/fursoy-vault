@@ -13,6 +13,7 @@ pub const CAPABILITY_MAX_LIFETIME_MS: u64 = 60_000;
 #[repr(u8)]
 pub enum CapabilityOperation {
     Inject = 1,
+    RecoverProfile = 2,
 }
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
@@ -170,6 +171,29 @@ pub struct HandshakeAck {
     pub host_version: String,
     pub min_extension_version: String,
     pub capabilities: Vec<String>,
+    pub recovery_candidates: Vec<RecoveryCandidate>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RecoveryCandidate {
+    pub profile_id: Uuid,
+    pub display_name: String,
+    pub browser: String,
+    pub last_used_unix_ms: u64,
+    pub site_count: u32,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RecoveryAdopt {
+    pub profile_id: Uuid,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RecoveryAdopted {
+    pub profile_id: Uuid,
 }
 
 /// Extension → host: protect a new scope. The host assigns the UUID and persists the config;
@@ -306,6 +330,12 @@ pub struct CookiesSnapshotChunk {
     pub chunk_count: u32,
     pub cookie_count: u32,
     pub cookies: Vec<CookieRecord>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub operation_sequence: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub attempt_id: Option<Uuid>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub purpose: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -323,6 +353,10 @@ pub struct EvictConfirmed {
     pub operation_id: Uuid,
     pub vault_sequence: u64,
     pub cookie_disposition: CookieDisposition,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub operation_sequence: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub attempt_id: Option<Uuid>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -333,6 +367,138 @@ pub struct EvictResult {
     pub operation_id: Uuid,
     pub success: bool,
     pub remaining_cookie_count: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub operation_sequence: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub attempt_id: Option<Uuid>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum OperationKindWire {
+    Enrollment,
+    Eviction,
+    Reconciliation,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum OperationRequiredAction {
+    SendSnapshot,
+    ClassifyDurability,
+    PrepareRemoval,
+    VerifyBrowserState,
+    Completed,
+    ReconciliationRequired,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct OperationBegin {
+    pub account_group_id: Uuid,
+    pub lease_id: Option<Uuid>,
+    pub attempt_id: Uuid,
+    pub kind: OperationKindWire,
+    pub reason: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct OperationSnapshotRequired {
+    pub account_group_id: Uuid,
+    pub operation_id: Uuid,
+    pub operation_sequence: u64,
+    pub lease_id: Option<Uuid>,
+    pub attempt_id: Uuid,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CookiesSnapshotChunkV7 {
+    pub account_group_id: Uuid,
+    pub operation_id: Uuid,
+    pub operation_sequence: u64,
+    pub lease_id: Option<Uuid>,
+    pub attempt_id: Uuid,
+    pub purpose: String,
+    pub chunk_index: u32,
+    pub chunk_count: u32,
+    pub cookie_count: u32,
+    pub cookies: Vec<CookieRecord>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct OperationStatusQuery {
+    pub account_group_id: Uuid,
+    pub operation_id: Uuid,
+    pub operation_sequence: u64,
+    pub lease_id: Option<Uuid>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct OperationStatus {
+    pub account_group_id: Uuid,
+    pub operation_id: Uuid,
+    pub operation_sequence: u64,
+    pub lease_id: Option<Uuid>,
+    pub phase: String,
+    pub required_action: OperationRequiredAction,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct EvictConfirmedV7 {
+    pub account_group_id: Uuid,
+    pub operation_id: Uuid,
+    pub operation_sequence: u64,
+    pub lease_id: Option<Uuid>,
+    pub attempt_id: Uuid,
+    pub vault_sequence: u64,
+    pub cookie_disposition: CookieDisposition,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct EvictRemovePrepare {
+    pub account_group_id: Uuid,
+    pub operation_id: Uuid,
+    pub operation_sequence: u64,
+    pub lease_id: Option<Uuid>,
+    pub attempt_id: Uuid,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct EvictRemoveAuthorized {
+    pub account_group_id: Uuid,
+    pub operation_id: Uuid,
+    pub operation_sequence: u64,
+    pub lease_id: Option<Uuid>,
+    pub attempt_id: Uuid,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct EvictResultV7 {
+    pub account_group_id: Uuid,
+    pub operation_id: Uuid,
+    pub operation_sequence: u64,
+    pub lease_id: Option<Uuid>,
+    pub attempt_id: Uuid,
+    pub success: bool,
+    pub remaining_cookie_count: u32,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct OperationCompleted {
+    pub account_group_id: Uuid,
+    pub operation_id: Uuid,
+    pub operation_sequence: u64,
+    pub lease_id: Option<Uuid>,
+    pub success: bool,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -507,6 +673,10 @@ pub enum Message {
     Handshake(Handshake),
     #[serde(rename = "handshake.ack")]
     HandshakeAck(HandshakeAck),
+    #[serde(rename = "recovery.adopt")]
+    RecoveryAdopt(RecoveryAdopt),
+    #[serde(rename = "recovery.adopted")]
+    RecoveryAdopted(RecoveryAdopted),
     #[serde(rename = "lease.request")]
     LeaseRequest(LeaseRequest),
     #[serde(rename = "lease.grant")]
@@ -525,6 +695,20 @@ pub enum Message {
     EvictConfirmed(EvictConfirmed),
     #[serde(rename = "evict.result")]
     EvictResult(EvictResult),
+    #[serde(rename = "operation.begin")]
+    OperationBegin(OperationBegin),
+    #[serde(rename = "operation.snapshot_required")]
+    OperationSnapshotRequired(OperationSnapshotRequired),
+    #[serde(rename = "operation.status.query")]
+    OperationStatusQuery(OperationStatusQuery),
+    #[serde(rename = "operation.status")]
+    OperationStatus(OperationStatus),
+    #[serde(rename = "evict.remove.prepare")]
+    EvictRemovePrepare(EvictRemovePrepare),
+    #[serde(rename = "evict.remove.authorized")]
+    EvictRemoveAuthorized(EvictRemoveAuthorized),
+    #[serde(rename = "operation.completed")]
+    OperationCompleted(OperationCompleted),
     #[serde(rename = "session.invalidate")]
     SessionInvalidate(SessionInvalidate),
     #[serde(rename = "session.invalidated")]

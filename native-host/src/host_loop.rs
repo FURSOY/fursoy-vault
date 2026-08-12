@@ -4,7 +4,7 @@ use crate::dispatcher::NativeHostApp;
 use crate::dispatcher::PRODUCT_EXTENSION_ID;
 use crate::instance_lock::InstanceLock;
 use crate::paths::DataPaths;
-use crate::protocol::envelope::{Envelope, PROTOCOL_VERSION};
+use crate::protocol::envelope::Envelope;
 use crate::protocol::framing::{read_envelope, write_envelope};
 use crate::protocol::messages::{Message, Nonce32, OperationError};
 use crate::{FcpError, FcpResult};
@@ -42,6 +42,7 @@ fn run_connection_with_app(
     writer: &mut impl Write,
     app: &mut NativeHostApp,
 ) -> FcpResult<()> {
+    let negotiated_version = first.v;
     let mut connection_nonce: Option<Nonce32> = None;
     let mut incoming_sequence = 0u64;
     let mut outgoing_sequence = 0u64;
@@ -58,6 +59,11 @@ fn run_connection_with_app(
         match connection_nonce {
             Some(expected_nonce) => envelope.validate(&expected_nonce, incoming_sequence)?,
             None => validate_first_envelope(&envelope)?,
+        }
+        if envelope.v != negotiated_version {
+            return Err(FcpError::Protocol(
+                "protocol version changed within one connection".into(),
+            ));
         }
         let nonce = *connection_nonce.get_or_insert(envelope.conn_nonce);
         incoming_sequence = envelope.seq;
@@ -84,7 +90,7 @@ fn run_connection_with_app(
             write_envelope(
                 writer,
                 &Envelope {
-                    v: PROTOCOL_VERSION,
+                    v: negotiated_version,
                     conn_nonce: nonce,
                     seq: outgoing_sequence,
                     id: request_id,
@@ -120,6 +126,7 @@ fn error_category(error: &FcpError) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::protocol::envelope::PROTOCOL_VERSION;
     use crate::protocol::messages::Handshake;
     use uuid::Uuid;
 

@@ -3,6 +3,8 @@ param([switch]$Purge)
 $ErrorActionPreference = "Stop"
 $registryPath = "HKCU:\Software\Google\Chrome\NativeMessagingHosts\com.fursoy.vault"
 if (Test-Path -LiteralPath $registryPath) { Remove-Item -LiteralPath $registryPath -Recurse -Force }
+$updaterPathFile = Join-Path $env:LOCALAPPDATA "FursoyVault\native-host\updater-path.txt"
+if (Test-Path -LiteralPath $updaterPathFile) { Remove-Item -LiteralPath $updaterPathFile -Force }
 if ($Purge) {
   $dataRoot = Join-Path $env:LOCALAPPDATA "FursoyVault"
   if (Test-Path -LiteralPath $dataRoot) { Remove-Item -LiteralPath $dataRoot -Recurse -Force }

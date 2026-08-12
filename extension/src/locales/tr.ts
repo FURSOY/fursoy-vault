@@ -28,14 +28,23 @@ export const tr: Record<string, string> = {
   "onboarding.install.title": "Companion uygulamayı kur",
   "onboarding.install.body":
     "FURSOY Vault'un çalışması için bilgisayarına küçük bir yardımcı program kurman gerekiyor. " +
-    "Aşağıdaki düğmeyle indir, indirilen dosyayı aç ve install.bat'a çift tıkla.",
+    "Aşağıdaki düğmeyle FURSOY Vault Setup'ı indir ve çalıştır. Sonraki companion güncellemeleri otomatik yapılır.",
   "onboarding.install.downloadButton": "İndir",
   "onboarding.install.checkButton": "Bağlantıyı kontrol et",
   "onboarding.install.waiting": "Companion uygulama bekleniyor…",
   "onboarding.install.connected": "Bağlandı.",
   "onboarding.install.notConnected":
-    "Henüz bağlanamadı. install.bat'ı çalıştırdığından emin ol, sonra bu sekmeyi yenileyip tekrar dene.",
+    "Henüz bağlanamadı. FURSOY Vault Setup'ın tamamlandığından emin ol, sonra bu sekmeyi yenileyip tekrar dene.",
   "onboarding.install.skip": "Şimdilik atla",
+  "onboarding.recovery.title": "Eski bir kasa bulundu",
+  "onboarding.recovery.body": "Bu cihazdaki önceki kasalardan birini Windows Hello ile yeniden bağlayabilirsin. Korunan alan adları onaydan önce gösterilmez.",
+  "onboarding.recovery.recommended": "Önerilen",
+  "onboarding.recovery.details": "{browser} · {count} korunan site · Son kullanım {date}",
+  "onboarding.recovery.button": "Windows Hello ile kurtar",
+  "onboarding.recovery.waiting": "Windows Hello onayı bekleniyor…",
+  "onboarding.recovery.success": "Kasa yeniden bağlandı. Korunan siteler yükleniyor…",
+  "onboarding.recovery.error": "Kasa kurtarılamadı. Windows Hello onayını ve companion bağlantısını kontrol et.",
+  "onboarding.recovery.startFresh": "Yeni kasa ile devam et",
 
   "onboarding.addsite.title": "İlk siteni koru",
   "onboarding.addsite.body": "Hangi sitenin oturumunu korumak istersin? (E-posta, banka, sosyal medya gibi.)",
@@ -63,7 +72,10 @@ export const tr: Record<string, string> = {
 
   // Shared between two or more pages, byte-identical text.
   "common.grantPermission": "İzin ver",
+  "common.grantAllPermissions": "Tümüne izin ver",
+  "common.multiplePermissionsMissing": "{count} korunan site için Chrome izni eksik.",
   "common.remove": "Kaldır",
+  "common.confirmPermanentRemoval": "Kalıcı silmek için tekrar tıkla",
   "common.connectionWarning": "Companion uygulama bağlı değil. Koruma değişiklikleri geçici olarak kullanılamıyor.",
   "common.state.uninitialized": "kasa boş",
   "common.state.sealed": "kilitli",
@@ -84,6 +96,8 @@ export const tr: Record<string, string> = {
   "common.error.monitorRequiresUnlocked":
     "Yalnız izleme moduna geçmeden önce kilitli oturumu bir kez açın; aksi halde kasadaki tek oturum kopyası kaybolur.",
   "common.error.hostNotConnected": "Native host bağlı değil.",
+  "common.error.upgradeRequired":
+    "Companion sürümü bu eklentiyle uyumlu değil. FURSOY Vault Setup'ı bir kez çalıştırın; sonraki companion güncellemeleri otomatik yapılır.",
   "common.error.unknownGroup": "Bu site zaten korunmuyor.",
   "common.error.generic": "İşlem tamamlanamadı.",
   "common.error.permissionDenied": "Chrome izni verilmedi.",

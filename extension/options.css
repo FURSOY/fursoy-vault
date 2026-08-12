@@ -403,6 +403,30 @@ main {
   overflow-x: auto;
 }
 
+.bulk-permission {
+  align-items: center;
+  background: var(--danger-soft);
+  border: 1px solid color-mix(in srgb, var(--danger) 22%, var(--line));
+  border-radius: var(--radius-md);
+  display: flex;
+  gap: 18px;
+  justify-content: space-between;
+  margin-bottom: 12px;
+  padding: 13px 15px;
+}
+
+.bulk-permission[hidden] { display: none; }
+
+.bulk-permission span {
+  color: var(--ink-soft);
+  font-size: .76rem;
+}
+
+.bulk-permission button {
+  flex: 0 0 auto;
+  min-height: 38px;
+}
+
 table {
   border-collapse: collapse;
   min-width: 730px;

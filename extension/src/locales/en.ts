@@ -27,14 +27,23 @@ export const en: Record<string, string> = {
   "onboarding.install.title": "Install the companion app",
   "onboarding.install.body":
     "FURSOY Vault needs a small companion app installed on your PC to work. Download it below, " +
-    "open the file, and double-click install.bat.",
+    "run FURSOY Vault Setup. Later companion updates are installed automatically.",
   "onboarding.install.downloadButton": "Download",
   "onboarding.install.checkButton": "Check connection",
   "onboarding.install.waiting": "Waiting for the companion app…",
   "onboarding.install.connected": "Connected.",
   "onboarding.install.notConnected":
-    "Not connected yet. Make sure you ran install.bat, then reload this tab and try again.",
+    "Not connected yet. Make sure FURSOY Vault Setup completed, then reload this tab and try again.",
   "onboarding.install.skip": "Skip for now",
+  "onboarding.recovery.title": "An existing vault was found",
+  "onboarding.recovery.body": "Reconnect one of this device's previous vaults with Windows Hello. Protected domains stay hidden until approval.",
+  "onboarding.recovery.recommended": "Recommended",
+  "onboarding.recovery.details": "{browser} · {count} protected sites · Last used {date}",
+  "onboarding.recovery.button": "Recover with Windows Hello",
+  "onboarding.recovery.waiting": "Waiting for Windows Hello approval…",
+  "onboarding.recovery.success": "Vault reconnected. Loading protected sites…",
+  "onboarding.recovery.error": "The vault could not be recovered. Check Windows Hello and the companion connection.",
+  "onboarding.recovery.startFresh": "Continue with a new vault",
 
   "onboarding.addsite.title": "Protect your first site",
   "onboarding.addsite.body": "Which site's session do you want to protect? (Email, banking, social media, etc.)",
@@ -61,7 +70,10 @@ export const en: Record<string, string> = {
 
   // Shared between two or more pages, byte-identical text.
   "common.grantPermission": "Grant permission",
+  "common.grantAllPermissions": "Grant all",
+  "common.multiplePermissionsMissing": "Chrome permission is missing for {count} protected sites.",
   "common.remove": "Remove",
+  "common.confirmPermanentRemoval": "Click again to delete permanently",
   "common.connectionWarning": "The companion app isn't connected. Protection changes are temporarily unavailable.",
   "common.state.uninitialized": "vault empty",
   "common.state.sealed": "locked",
@@ -82,6 +94,8 @@ export const en: Record<string, string> = {
   "common.error.monitorRequiresUnlocked":
     "Unlock the locked session once before switching to monitor-only mode, or the vault's only copy of it will be lost.",
   "common.error.hostNotConnected": "The native host isn't connected.",
+  "common.error.upgradeRequired":
+    "This companion version is incompatible with the extension. Run FURSOY Vault Setup once; later companion updates are automatic.",
   "common.error.unknownGroup": "This site isn't protected anymore.",
   "common.error.generic": "The operation couldn't be completed.",
   "common.error.permissionDenied": "Chrome permission was denied.",

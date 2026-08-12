@@ -2,6 +2,9 @@ param([switch]$SkipBuild)
 $ErrorActionPreference = "Stop"
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
 
+& python (Join-Path $PSScriptRoot "verify_matrix.py")
+if ($LASTEXITCODE -ne 0) { throw "acceptance matrix traceability failed" }
+
 if (-not $SkipBuild) {
   & cargo build --release --locked --manifest-path (Join-Path $repoRoot "native-host\Cargo.toml")
   if ($LASTEXITCODE -ne 0) { throw "native host build failed" }

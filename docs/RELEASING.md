@@ -5,6 +5,8 @@ locally built binaries. A pushed `vX.Y.Z` annotated tag runs all quality gates, 
 checksums, and publishes the GitHub Release using the annotated tag message as its release notes.
 The Windows companion is currently unsigned. Every release description automatically warns that
 Windows may show **Unknown publisher** and directs users to verify the published SHA-256 checksum.
+The companion is packaged by Velopack: `FURSOY-Vault-Setup.exe` is the user-facing installer and
+the remaining `releases.win.json`/versioned package assets are the automatic-update feed.
 
 ## Cut a release
 
@@ -21,5 +23,13 @@ Windows may show **Unknown publisher** and directs users to verify the published
 4. Watch the `publish-release` workflow. GitHub publishes the release only after every automated
    quality gate, package build, and checksum step succeeds.
 
-The companion asset must retain the exact name `fursoy-vault-windows.zip`, because onboarding uses
-GitHub's stable `releases/latest/download/fursoy-vault-windows.zip` URL.
+The installer alias must retain the exact name `FURSOY-Vault-Setup.exe`, because onboarding uses
+GitHub's stable `releases/latest/download/FURSOY-Vault-Setup.exe` URL. Publish every file produced
+under `native-host/target/velopack`; omitting the feed or full package breaks automatic updates.
+
+## Rollout order
+
+Publish the GitHub Release first so existing companions can download it. Submit the matching
+extension package to the Chrome Web Store only after the companion release is available. Protocol
+changes must retain the documented minimum-version checks and, where possible, one previous host
+version of overlap. A failed update check never changes vault, lease, journal or browser state.

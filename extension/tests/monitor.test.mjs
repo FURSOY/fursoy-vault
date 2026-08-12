@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import {
   MONITOR_OUTBOX_LIMIT,
   MONITOR_RATE_LIMIT_MS,
+  MonitorDeliveryWindow,
   addToBoundedOutbox,
   notificationDecision,
   signalSeverity,
@@ -45,4 +46,13 @@ assert.equal(notificationDecision(event(21, "selector_changed"), {}, 100_000).sh
 
 assert.equal(validateMonitorEvent(warning), true);
 assert.equal(validateMonitorEvent({ ...warning, severity: "info" }), false);
+
+const delivery = new MonitorDeliveryWindow();
+const deliveryEvent = event(30, "host_disconnect_active_lease");
+assert.deepEqual(delivery.takeUnsent([deliveryEvent]).map((item) => item.event_id), [deliveryEvent.event_id]);
+assert.deepEqual(delivery.takeUnsent([deliveryEvent]), []);
+delivery.acknowledge(deliveryEvent.event_id);
+assert.deepEqual(delivery.takeUnsent([deliveryEvent]).map((item) => item.event_id), [deliveryEvent.event_id]);
+delivery.resetConnection();
+assert.deepEqual(delivery.takeUnsent([deliveryEvent]).map((item) => item.event_id), [deliveryEvent.event_id]);
 console.log("monitor tests: PASS");

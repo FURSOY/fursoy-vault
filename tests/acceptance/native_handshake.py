@@ -9,6 +9,7 @@ import tempfile
 EXTENSION_ID = "ikodegbaomnahbjiokfogpedaoifhbde"
 ORIGIN = f"chrome-extension://{EXTENSION_ID}/"
 CAPABILITIES = ["chunked_cookies", "request_correlation", "config_v3", "audit_recovery", "profile_namespace"]
+V7_CAPABILITIES = CAPABILITIES + ["durable_operations_v7", "guarded_cookie_removal", "semantic_operation_status", "profile_recovery_v1"]
 PROFILE_A = "11111111-1111-4111-8111-111111111111"
 PROFILE_B = "22222222-2222-4222-8222-222222222222"
 
@@ -27,7 +28,8 @@ def read_message(stream):
     return json.loads(stream.read(size))
 
 
-def exchange(executable: str, origin: str, protocol: int, data_dir: str, profile_id: str = PROFILE_A):
+def exchange(executable: str, origin: str, protocol: int, data_dir: str, profile_id: str = PROFILE_A, capabilities=None):
+    version = "0.5.0" if protocol == 7 else "0.4.1"
     message = {
         "v": protocol,
         "conn_nonce": "42" * 32,
@@ -38,9 +40,9 @@ def exchange(executable: str, origin: str, protocol: int, data_dir: str, profile
             "protocol_version": protocol,
             "extension_id": EXTENSION_ID,
             "profile_id": profile_id,
-            "extension_version": "0.4.1",
-            "min_host_version": "0.4.1",
-            "capabilities": CAPABILITIES,
+            "extension_version": version,
+            "min_host_version": version,
+            "capabilities": capabilities if capabilities is not None else (V7_CAPABILITIES if protocol == 7 else CAPABILITIES),
             "cached_config_digest": None,
         },
     }
@@ -153,9 +155,38 @@ def main():
         code, response, _ = exchange(arguments.executable, "chrome-extension://unauthorized/", 6, data_dir)
         assert code != 0 and response is None
 
+    # Rollout is host-first safe: a v7 extension built immediately before profile recovery did
+    # not offer the new optional capability. The new host still accepts it while advertising the
+    # feature to updated extensions.
+    with tempfile.TemporaryDirectory(prefix="fursoy-acceptance-recovery-rollout-") as data_dir:
+        old_v7 = CAPABILITIES + ["durable_operations_v7", "guarded_cookie_removal", "semantic_operation_status"]
+        code, response, error = exchange(
+            arguments.executable, ORIGIN, 7, data_dir, PROFILE_A, old_v7
+        )
+        assert code == 0, error
+        assert response and response["type"] == "handshake.ack"
+        assert "profile_recovery_v1" in response["payload"]["capabilities"]
+
     with tempfile.TemporaryDirectory(prefix="fursoy-acceptance-version-") as data_dir:
         code, response, _ = exchange(arguments.executable, ORIGIN, 5, data_dir)
         assert code != 0 and response is None
+
+    with tempfile.TemporaryDirectory(prefix="fursoy-acceptance-v7-floor-") as data_dir:
+        profile_config = os.path.join(data_dir, "profiles", PROFILE_A, "config")
+        os.makedirs(profile_config)
+        with open(os.path.join(profile_config, "account-groups.json"), "w", encoding="utf-8") as file:
+            json.dump({"version": 3, "compatibility_version": 3, "groups": [{
+                "id": "33333333-3333-4333-8333-333333333333", "display_name": "Floor",
+                "scope": "example.com", "policy_level": "balanced", "store_policy": "normal_profile"
+            }]}, file)
+        code, response, error = exchange(arguments.executable, ORIGIN, 7, data_dir)
+        assert code == 0, error
+        assert response and response["type"] == "handshake.ack" and response["v"] == 7
+        lease_path = os.path.join(data_dir, "profiles", PROFILE_A, "leases", "groups", "33333333-3333-4333-8333-333333333333.json")
+        with open(lease_path, encoding="utf-8") as file:
+            assert json.load(file)["protocol_floor"] == 7
+        _, downgrade, _ = exchange(arguments.executable, ORIGIN, 6, data_dir)
+        assert downgrade is None or downgrade["type"] != "handshake.ack"
 
     print("native handshake acceptance: PASS")
 

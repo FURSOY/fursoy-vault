@@ -16,6 +16,7 @@ Reproducible extension build (Node.js 22):
 Windows companion build (stable Rust toolchain):
   cd native-host
   cargo build --release --locked
+  dotnet tool install --global vpk --version 1.2.0
   powershell -File install/package-release.ps1
 
 CI repeats the extension packaging and compares SHA-256 hashes, runs all Rust/TypeScript checks,

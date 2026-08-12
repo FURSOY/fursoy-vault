@@ -2,6 +2,7 @@ import { enhanceSelect, enhanceSelects } from "./custom-select.js";
 import { translate, type Locale } from "./i18n.js";
 import { currentLocale } from "./locale.js";
 import { isValidProtectionScope, normalizeProtectionScopeInput } from "./protocol.js";
+import { permissionOrigins, shouldOfferGrantAll } from "./site-permissions.js";
 
 type PolicyLevel = "critical" | "balanced" | "convenient" | "monitor";
 
@@ -118,6 +119,9 @@ const eventCount = required<HTMLElement>("event-count");
 const companionState = required<HTMLElement>("companion-state");
 const navElement = required<HTMLElement>("nav");
 const metricsSection = required<HTMLElement>("metrics");
+const grantAllPermissions = required<HTMLElement>("grant-all-permissions");
+const grantAllPermissionsCopy = required<HTMLElement>("grant-all-permissions-copy");
+const grantAllPermissionsButton = required<HTMLButtonElement>("grant-all-permissions-button");
 
 enhanceSelects();
 
@@ -132,6 +136,7 @@ addForm.addEventListener("submit", (event) => { event.preventDefault(); void add
 scopeInput.addEventListener("input", clearAddError);
 scopeInput.addEventListener("blur", () => { normalizeScopeField(); });
 clearLogButton.addEventListener("click", () => { void clearLog(); });
+grantAllPermissionsButton.addEventListener("click", () => { void grantAllMissingPermissions(); });
 
 function applyTranslations(): void {
   document.documentElement.lang = locale;
@@ -179,15 +184,29 @@ async function addSite(): Promise<void> {
   finally { addButton.disabled = false; }
 }
 
-async function unprotect(group: GroupSummary): Promise<void> {
+async function unprotect(group: GroupSummary, trigger: HTMLButtonElement): Promise<void> {
   const warning = group.state === "sealed"
     ? t("options.unprotectWarningSealed", { scope: group.scope })
     : t("common.unprotectWarning", { scope: group.scope });
-  if (!window.confirm(warning)) return;
-  const response = await sendAwaitingHost({ type: "popup.unprotect", groupId: group.id });
-  if (response?.ok !== true) return showError(describeError(response?.error));
-  const before = groupCount();
-  await refreshUntil(() => groupCount() !== before);
+  if (trigger.dataset.confirmRemove !== group.id) {
+    trigger.dataset.confirmRemove = group.id;
+    trigger.textContent = t("common.confirmPermanentRemoval");
+    trigger.title = warning;
+    setTimeout(() => {
+      if (trigger.dataset.confirmRemove !== group.id) return;
+      delete trigger.dataset.confirmRemove;
+      trigger.textContent = t("common.remove");
+      trigger.title = "";
+    }, 8_000);
+    return;
+  }
+  trigger.disabled = true;
+  try {
+    const before = groupCount();
+    const response = await sendAwaitingHost({ type: "popup.unprotect", groupId: group.id });
+    if (response?.ok !== true) return showError(describeError(response?.error));
+    await refreshUntil(() => groupCount() !== before);
+  } finally { trigger.disabled = false; }
 }
 
 async function grantPermission(group: GroupSummary): Promise<void> {
@@ -251,6 +270,7 @@ async function refresh(): Promise<void> {
 
   const groups = state.groups ?? [];
   latestGroups = groups;
+  renderBulkPermission(groups);
   siteCount.textContent = String(groups.length);
   protectedCount.textContent = String(groups.filter((group) => group.hasPermission).length);
   cookieCount.textContent = String(groups.reduce((total, group) => total + (group.hasPermission ? group.cookieCount : 0), 0));
@@ -264,6 +284,25 @@ async function refresh(): Promise<void> {
   logRows.replaceChildren(...log.map((entry) => renderLogRow(entry, groups)));
   logEmpty.hidden = log.length > 0;
   logTable.hidden = log.length === 0;
+}
+
+function renderBulkPermission(groups: GroupSummary[]): void {
+  const missing = groups.filter((group) => !group.hasPermission);
+  grantAllPermissions.hidden = !shouldOfferGrantAll(missing.length);
+  if (grantAllPermissions.hidden) return;
+  grantAllPermissionsCopy.textContent = t("common.multiplePermissionsMissing", { count: missing.length });
+  grantAllPermissionsButton.textContent = t("common.grantAllPermissions");
+}
+
+async function grantAllMissingPermissions(): Promise<void> {
+  const missing = latestGroups.filter((group) => !group.hasPermission);
+  if (!shouldOfferGrantAll(missing.length)) return;
+  grantAllPermissionsButton.disabled = true;
+  try {
+    const granted = await requestPermissions(missing.map((group) => group.scope));
+    if (!granted) return showError(t("common.error.permissionDenied"));
+    await refresh();
+  } finally { grantAllPermissionsButton.disabled = false; }
 }
 
 function updateActiveNavigation(): void {
@@ -293,7 +332,8 @@ function renderGroupRow(group: GroupSummary): HTMLTableRowElement {
   const actions = document.createElement("td");
   actions.className = "actions";
   if (!group.hasPermission) actions.append(button(t("common.grantPermission"), () => { void grantPermission(group); }));
-  actions.append(button(t("common.remove"), () => { void unprotect(group); }));
+  const remove = button(t("common.remove"), () => { void unprotect(group, remove); });
+  actions.append(remove);
   row.append(actions);
   return row;
 }
@@ -369,6 +409,7 @@ function describeError(code: string | undefined): string {
     case "operation_pending": return t("common.error.operationPending");
     case "monitor_transition_requires_unlocked_session": return t("common.error.monitorRequiresUnlocked");
     case "native_host_not_connected": return t("common.error.hostNotConnected");
+    case "upgrade_required": return t("common.error.upgradeRequired");
     case "unknown_group": return t("common.error.unknownGroup");
     default: return t("common.error.generic");
   }
@@ -398,8 +439,12 @@ function showAddError(message: string): void {
 }
 
 function requestScopePermission(scope: string): Promise<boolean> {
+  return requestPermissions([scope]);
+}
+
+function requestPermissions(scopes: readonly string[]): Promise<boolean> {
   return new Promise((resolve) => {
-    chrome.permissions.request({ origins: [`*://${scope}/*`, `*://*.${scope}/*`] }, (granted) => {
+    chrome.permissions.request({ origins: permissionOrigins(scopes) }, (granted) => {
       resolve(chrome.runtime.lastError === undefined && granted);
     });
   });

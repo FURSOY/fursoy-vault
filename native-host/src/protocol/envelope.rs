@@ -4,7 +4,12 @@ use uuid::Uuid;
 use crate::protocol::messages::{Message, Nonce32};
 use crate::{FcpError, FcpResult};
 
-pub const PROTOCOL_VERSION: u16 = 6;
+pub const LEGACY_PROTOCOL_VERSION: u16 = 6;
+pub const PROTOCOL_VERSION: u16 = 7;
+
+pub fn supported_protocol(version: u16) -> bool {
+    matches!(version, LEGACY_PROTOCOL_VERSION | PROTOCOL_VERSION)
+}
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -19,7 +24,7 @@ pub struct Envelope {
 
 impl Envelope {
     pub fn validate(&self, expected_nonce: &Nonce32, previous_sequence: u64) -> FcpResult<()> {
-        if self.v != PROTOCOL_VERSION {
+        if !supported_protocol(self.v) {
             return Err(FcpError::Protocol(format!(
                 "unsupported protocol version {}",
                 self.v

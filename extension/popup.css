@@ -255,6 +255,33 @@ body {
   padding: 0;
 }
 
+.bulk-permission {
+  align-items: center;
+  background: var(--danger-soft);
+  border: 1px solid color-mix(in srgb, var(--danger) 22%, var(--line));
+  border-radius: var(--radius-md);
+  display: flex;
+  gap: 10px;
+  justify-content: space-between;
+  margin-bottom: 10px;
+  padding: 10px 11px;
+}
+
+.bulk-permission[hidden] { display: none; }
+
+.bulk-permission span {
+  color: var(--ink-soft);
+  font-size: .69rem;
+  line-height: 1.35;
+}
+
+.bulk-permission button {
+  flex: 0 0 auto;
+  font-size: .68rem;
+  min-height: 34px;
+  padding: 0 10px;
+}
+
 .groups li {
   align-items: center;
   background: var(--surface);

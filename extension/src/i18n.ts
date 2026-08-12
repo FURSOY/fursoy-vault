@@ -7,7 +7,7 @@ import { tr } from "./locales/tr.js";
 export type Locale = "tr" | "en";
 
 export const SUPPORTED_LOCALES: readonly Locale[] = ["tr", "en"];
-export const DEFAULT_LOCALE: Locale = "tr";
+export const DEFAULT_LOCALE: Locale = "en";
 export const LOCALE_STORAGE_KEY = "fcp-locale-v1";
 
 const MESSAGES: Record<Locale, Record<string, string>> = { tr, en };

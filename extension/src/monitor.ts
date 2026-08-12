@@ -38,6 +38,19 @@ export interface NotificationDecisionState {
 export const MONITOR_OUTBOX_LIMIT = 128;
 export const MONITOR_RATE_LIMIT_MS = 10 * 60_000;
 
+export class MonitorDeliveryWindow {
+  private readonly inFlight = new Set<string>();
+
+  takeUnsent(events: readonly MonitorEvent[]): MonitorEvent[] {
+    const unsent = events.filter((event) => !this.inFlight.has(event.event_id));
+    for (const event of unsent) this.inFlight.add(event.event_id);
+    return unsent;
+  }
+
+  acknowledge(eventId: string): void { this.inFlight.delete(eventId); }
+  resetConnection(): void { this.inFlight.clear(); }
+}
+
 export function signalSeverity(signal: MonitorSignal): MonitorSeverity {
   switch (signal) {
     case "remote_debugging_port":

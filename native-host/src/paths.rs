@@ -17,6 +17,8 @@ pub struct DataPaths {
     pub account_groups_config: PathBuf,
     pub audit_directory: PathBuf,
     pub hello_credential: PathBuf,
+    pub operation_journals: PathBuf,
+    pub snapshot_integrity_key: PathBuf,
 }
 
 impl DataPaths {
@@ -59,7 +61,7 @@ impl DataPaths {
         }
     }
 
-    fn from_root(root: PathBuf) -> Self {
+    pub(crate) fn from_root(root: PathBuf) -> Self {
         Self {
             vault_groups: root.join("vault").join("groups"),
             lease_groups: root.join("leases").join("groups"),
@@ -69,8 +71,50 @@ impl DataPaths {
             account_groups_config: root.join("config").join("account-groups.json"),
             audit_directory: root.join("audit"),
             hello_credential: root.join("hello-credential.json"),
+            operation_journals: root.join("operations").join("groups"),
+            snapshot_integrity_key: root.join("operations").join("snapshot-key.dpapi"),
             root,
         }
+    }
+
+    pub fn sibling_profile(&self, profile_id: Uuid) -> FcpResult<Self> {
+        let profiles = self.root.parent().ok_or_else(|| {
+            FcpError::Protocol("profile data root has no profiles directory".into())
+        })?;
+        if profiles.file_name().and_then(|value| value.to_str()) != Some("profiles") {
+            return Err(FcpError::Protocol(
+                "profile data root is outside the profiles directory".into(),
+            ));
+        }
+        Ok(Self::from_root(profiles.join(profile_id.to_string())))
+    }
+
+    pub fn sibling_profile_roots(&self) -> FcpResult<Vec<(Uuid, PathBuf)>> {
+        let profiles = self.root.parent().ok_or_else(|| {
+            FcpError::Protocol("profile data root has no profiles directory".into())
+        })?;
+        if profiles.file_name().and_then(|value| value.to_str()) != Some("profiles") {
+            return Err(FcpError::Protocol(
+                "profile data root is outside the profiles directory".into(),
+            ));
+        }
+        if !profiles.exists() {
+            return Ok(Vec::new());
+        }
+        let mut roots = Vec::new();
+        for entry in fs::read_dir(profiles)? {
+            let entry = entry?;
+            if !entry.file_type()?.is_dir() {
+                continue;
+            }
+            let Some(name) = entry.file_name().to_str().map(str::to_owned) else {
+                continue;
+            };
+            if let Ok(profile_id) = name.parse::<Uuid>() {
+                roots.push((profile_id, entry.path()));
+            }
+        }
+        Ok(roots)
     }
 
     pub fn lease_path(&self, group_id: Uuid) -> PathBuf {
@@ -79,6 +123,37 @@ impl DataPaths {
 
     pub fn capability_path(&self, group_id: Uuid) -> PathBuf {
         self.capability_ledgers.join(format!("{group_id}.json"))
+    }
+
+    pub fn operation_journal_path(&self, group_id: Uuid) -> PathBuf {
+        self.operation_journals.join(format!("{group_id}.json"))
+    }
+
+    pub fn operation_journals_exist(&self) -> FcpResult<bool> {
+        if !self.operation_journals.exists() {
+            return Ok(false);
+        }
+        Ok(fs::read_dir(&self.operation_journals)?
+            .filter_map(Result::ok)
+            .any(|entry| entry.path().extension().and_then(|value| value.to_str()) == Some("json")))
+    }
+
+    /// Removes non-authoritative per-group projections after the authoritative config no longer
+    /// contains the group. This is intentionally idempotent so a crash after config commit can be
+    /// repaired by a retry without resurrecting an unfinished operation.
+    pub fn remove_group_projections(&self, group_id: Uuid) -> FcpResult<()> {
+        for path in [
+            self.lease_path(group_id),
+            self.capability_path(group_id),
+            self.operation_journal_path(group_id),
+        ] {
+            match fs::remove_file(path) {
+                Ok(()) => {}
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => return Err(error.into()),
+            }
+        }
+        Ok(())
     }
 
     pub fn migrate_phase5_group(&self, group_id: Uuid) -> FcpResult<()> {

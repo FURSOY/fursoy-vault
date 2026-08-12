@@ -33,6 +33,11 @@ jobs:
           node-version: 22
           cache: npm
           cache-dependency-path: extension/package-lock.json
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "8.0.x"
+      - name: Install pinned Velopack CLI
+        run: dotnet tool install --tool-path native-host/target/vpk-tool vpk --version 1.2.0
 
       - name: Validate tag and project versions
         id: version
@@ -97,27 +102,31 @@ jobs:
           working-directory: native-host
           token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Build unsigned companion package
+      - name: Build unsigned companion installer and update feed
         shell: pwsh
         working-directory: native-host
-        run: ./install/package-release.ps1
+        run: ./install/package-release.ps1 -VpkCommand (Resolve-Path ./target/vpk-tool/vpk.exe).Path
 
       - name: Assemble unsigned release assets
         shell: pwsh
         run: |
-          $unsignedZip = "native-host/target/fursoy-vault-windows.zip"
-          if (-not (Test-Path -LiteralPath $unsignedZip)) { throw "The unsigned companion ZIP was not produced." }
+          $companionRoot = "native-host/target/velopack"
+          $setup = Join-Path $companionRoot "FURSOY-Vault-Setup.exe"
+          if (-not (Test-Path -LiteralPath $setup)) { throw "The unsigned companion Setup.exe was not produced." }
+          if (-not (Test-Path -LiteralPath (Join-Path $companionRoot "releases.win.json"))) { throw "The Velopack update feed was not produced." }
 
           $releaseRoot = "release-assets"
           New-Item -ItemType Directory -Force -Path $releaseRoot | Out-Null
-          Copy-Item -LiteralPath $unsignedZip -Destination (Join-Path $releaseRoot "fursoy-vault-windows.zip")
+          Get-ChildItem -LiteralPath $companionRoot -File | ForEach-Object {
+            Copy-Item -LiteralPath $_.FullName -Destination $releaseRoot
+          }
           Copy-Item -LiteralPath "${{ steps.version.outputs.extension_zip }}" -Destination $releaseRoot
           Copy-Item -LiteralPath "${{ steps.version.outputs.extension_hash }}" -Destination $releaseRoot
 
-          $companionHash = (Get-FileHash (Join-Path $releaseRoot "fursoy-vault-windows.zip") -Algorithm SHA256).Hash.ToLowerInvariant()
+          $companionHash = (Get-FileHash (Join-Path $releaseRoot "FURSOY-Vault-Setup.exe") -Algorithm SHA256).Hash.ToLowerInvariant()
           [System.IO.File]::WriteAllText(
-            (Join-Path $releaseRoot "fursoy-vault-windows.zip.sha256"),
-            "$companionHash  fursoy-vault-windows.zip`n",
+            (Join-Path $releaseRoot "FURSOY-Vault-Setup.exe.sha256"),
+            "$companionHash  FURSOY-Vault-Setup.exe`n",
             [System.Text.UTF8Encoding]::new($false)
           )
 
@@ -145,7 +154,7 @@ jobs:
 
           ## Windows publisher notice
 
-          The Windows companion is currently unsigned and may appear as **Unknown publisher**. Verify the published SHA-256 checksum before installation. See the [project code signing policy]($policyUrl) for the current status and verification guidance.
+          The Windows companion installer is currently unsigned and may appear as **Unknown publisher**. Verify the published SHA-256 checksum before installation. See the [project code signing policy]($policyUrl) for the current status and verification guidance.
           "@
           [System.IO.File]::WriteAllText(
             (Join-Path $env:RUNNER_TEMP "release-notes.md"),

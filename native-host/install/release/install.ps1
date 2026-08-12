@@ -1,3 +1,4 @@
+param([string]$UpdaterPath = "")
 # FURSOY Vault companion app installer. This release script copies a prebuilt executable; it does
 # not require Rust or Cargo on the user's machine.
 $ErrorActionPreference = "Stop"
@@ -42,17 +43,42 @@ $manifest = [ordered]@{
 $manifestJson = $manifest | ConvertTo-Json -Depth 4
 $manifestTemp = "$manifestPath.new"
 $manifestBackup = "$manifestPath.rollback"
+$updaterPathFile = Join-Path $installRoot "updater-path.txt"
+$updaterPathTemp = "$updaterPathFile.new"
+$updaterPathBackup = "$updaterPathFile.rollback"
+if ($UpdaterPath -ne "") {
+  if (-not [System.IO.Path]::IsPathFullyQualified($UpdaterPath) -or -not (Test-Path -LiteralPath $UpdaterPath -PathType Leaf)) {
+    throw "UpdaterPath must identify the installed Velopack executable."
+  }
+}
 [System.IO.File]::WriteAllText($manifestTemp, $manifestJson, [System.Text.UTF8Encoding]::new($false))
 $registryPath = "HKCU:\Software\Google\Chrome\NativeMessagingHosts\com.fursoy.vault"
+$registryExisted = Test-Path -LiteralPath $registryPath
+$previousRegistryValue = if ($registryExisted) { (Get-Item -LiteralPath $registryPath).GetValue("") } else { $null }
 try {
   if (Test-Path -LiteralPath $manifestPath) { Copy-Item -LiteralPath $manifestPath -Destination $manifestBackup -Force }
   Move-Item -LiteralPath $manifestTemp -Destination $manifestPath -Force
   New-Item -Path $registryPath -Force | Out-Null
   Set-Item -Path $registryPath -Value $manifestPath
+  if ($UpdaterPath -ne "") {
+    if (Test-Path -LiteralPath $updaterPathFile) { Copy-Item -LiteralPath $updaterPathFile -Destination $updaterPathBackup -Force }
+    [System.IO.File]::WriteAllText($updaterPathTemp, "$UpdaterPath`n", [System.Text.UTF8Encoding]::new($false))
+    Move-Item -LiteralPath $updaterPathTemp -Destination $updaterPathFile -Force
+  }
   if (Test-Path -LiteralPath $manifestBackup) { Remove-Item -LiteralPath $manifestBackup -Force }
+  if (Test-Path -LiteralPath $updaterPathBackup) { Remove-Item -LiteralPath $updaterPathBackup -Force }
 } catch {
+  if ($registryExisted) {
+    New-Item -Path $registryPath -Force | Out-Null
+    Set-Item -Path $registryPath -Value $previousRegistryValue
+  } elseif (Test-Path -LiteralPath $registryPath) {
+    Remove-Item -LiteralPath $registryPath -Recurse -Force
+  }
   if (Test-Path -LiteralPath $manifestBackup) { Move-Item -LiteralPath $manifestBackup -Destination $manifestPath -Force }
   elseif (Test-Path -LiteralPath $manifestPath) { Remove-Item -LiteralPath $manifestPath -Force }
+  if (Test-Path -LiteralPath $updaterPathBackup) { Move-Item -LiteralPath $updaterPathBackup -Destination $updaterPathFile -Force }
+  elseif (($UpdaterPath -ne "") -and (Test-Path -LiteralPath $updaterPathFile)) { Remove-Item -LiteralPath $updaterPathFile -Force }
+  if (Test-Path -LiteralPath $updaterPathTemp) { Remove-Item -LiteralPath $updaterPathTemp -Force }
   if (Test-Path -LiteralPath $deploymentRoot) { Remove-Item -LiteralPath $deploymentRoot -Recurse -Force }
   throw
 }

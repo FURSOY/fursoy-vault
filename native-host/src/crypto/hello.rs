@@ -86,6 +86,20 @@ struct CredentialRegistry {
 }
 
 impl HelloAuthorizer {
+    /// Opens an already-enrolled credential without mutating or replacing it. Recovery must
+    /// prove access to the selected old profile; silently creating a new credential would turn
+    /// a corrupt/missing registry into an authorization bypass.
+    pub fn open_existing(credential_path: &Path) -> FcpResult<Self> {
+        let apartment = ComApartment::initialize()?;
+        let (credential_id, public_key_x, public_key_y) = load_registry(credential_path)?;
+        Ok(Self {
+            credential_id,
+            public_key_x,
+            public_key_y,
+            _apartment: apartment,
+        })
+    }
+
     pub fn open_or_create(credential_path: &Path) -> FcpResult<Self> {
         let apartment = ComApartment::initialize()?;
         if credential_path.exists() {

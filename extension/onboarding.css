@@ -427,6 +427,62 @@ main {
   padding: 10px 12px;
 }
 
+.recovery-panel {
+  margin-top: 18px;
+}
+
+.recovery-panel h3 {
+  font-size: .9rem;
+  margin: 0 0 6px;
+}
+
+.recovery-panel > p:not(.status-message) {
+  color: var(--ink-muted);
+  font-size: .72rem;
+  line-height: 1.5;
+  margin: 0 0 10px;
+}
+
+.recovery-list {
+  display: grid;
+  gap: 8px;
+}
+
+.recovery-card {
+  align-items: center;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  display: grid;
+  gap: 10px;
+  grid-template-columns: minmax(0, 1fr) auto;
+  padding: 12px;
+}
+
+.recovery-card strong,
+.recovery-card small {
+  display: block;
+}
+
+.recovery-card small {
+  color: var(--ink-muted);
+  font-size: .65rem;
+  margin-top: 4px;
+}
+
+.recovery-badge {
+  background: var(--accent-soft);
+  border-radius: 999px;
+  color: var(--accent);
+  font-size: .58rem;
+  margin-left: 6px;
+  padding: 3px 7px;
+}
+
+.recovery-card button {
+  min-height: 38px;
+}
+
 #addsite-form input,
 #addsite-form select {
   width: 100%;

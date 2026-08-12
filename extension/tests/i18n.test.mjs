@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import { DEFAULT_LOCALE, SUPPORTED_LOCALES, isLocale, resolveLocale, translate } from "../dist/i18n.js";
 
 assert.deepEqual(SUPPORTED_LOCALES, ["tr", "en"]);
-assert.equal(DEFAULT_LOCALE, "tr");
+assert.equal(DEFAULT_LOCALE, "en");
 
 assert.equal(isLocale("tr"), true);
 assert.equal(isLocale("en"), true);
@@ -15,6 +15,8 @@ assert.equal(resolveLocale("tr"), "tr");
 assert.equal(resolveLocale("en-US"), "en");
 assert.equal(resolveLocale("EN-GB"), "en");
 assert.equal(resolveLocale("fr-FR"), DEFAULT_LOCALE);
+assert.equal(resolveLocale("ru-RU"), "en");
+assert.equal(resolveLocale("de-DE"), "en");
 assert.equal(resolveLocale(""), DEFAULT_LOCALE);
 
 // No message tables are populated yet, so translate() must fall back to the raw key rather than

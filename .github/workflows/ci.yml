@@ -25,6 +25,11 @@ jobs:
           node-version: 22
           cache: npm
           cache-dependency-path: extension/package-lock.json
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "8.0.x"
+      - name: Install pinned Velopack CLI
+        run: dotnet tool install --tool-path native-host/target/vpk-tool vpk --version 1.2.0
 
       - name: Install extension dependencies
         working-directory: extension
@@ -67,7 +72,7 @@ jobs:
       - name: Build companion release package
         shell: pwsh
         working-directory: native-host
-        run: ./install/package-release.ps1
+        run: ./install/package-release.ps1 -VpkCommand (Resolve-Path ./target/vpk-tool/vpk.exe).Path
 
       - uses: actions/upload-artifact@v4
         with:
@@ -76,4 +81,4 @@ jobs:
           path: |
             extension/target/fursoy-vault-extension-v*.zip
             extension/target/fursoy-vault-extension-v*.zip.sha256
-            native-host/target/fursoy-vault-windows.zip
+            native-host/target/velopack/*
