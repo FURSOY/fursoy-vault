@@ -1,12 +1,11 @@
 # Code signing policy
 
-Free code signing provided by [SignPath.io](https://signpath.io/), certificate by
-[SignPath Foundation](https://signpath.org/).
+## Current status
 
-## Roles
-
-- Committers and reviewers: [FURSOY](https://github.com/FURSOY)
-- Approvers: [FURSOY](https://github.com/FURSOY)
+The Windows companion is currently distributed without an Authenticode signature. Windows may
+therefore display **Unknown publisher** during installation. This status is disclosed on the
+download page and in every GitHub Release. The Chrome extension package is also published with a
+SHA-256 checksum.
 
 ## Privacy
 
@@ -17,15 +16,11 @@ monitoring results to the project maintainer. See the full [privacy policy](PRIV
 
 ## Signing and release process
 
-Version `v0.4.1` is the project's sole unsigned bootstrap release. It is produced by the same
-GitHub Actions quality gates and may display **Unknown publisher** on Windows. This narrowly scoped
-exception exists because SignPath Foundation requires an already released project before accepting
-an application. All later public Windows companion releases require the signing process below.
-
 The Windows companion is built from a version tag by a GitHub-hosted Windows runner. The complete
-test and acceptance suite must pass before the unsigned release artifact is submitted to SignPath.
-Every signing request requires manual approval. The workflow verifies the returned executable's
-Authenticode signature before GitHub publishes the release and its SHA-256 checksums.
+test and acceptance suite must pass before GitHub publishes the unsigned release and its SHA-256
+checksums. Maintainers do not replace release binaries with locally built files.
 
-Only binaries built from this repository are submitted under this project. The matching Git tag is
-the complete corresponding GPL-3.0-only source for every published binary.
+The matching Git tag is the complete corresponding GPL-3.0-only source for every published binary.
+Users should download only from the project's GitHub Releases page and compare each ZIP against the
+adjacent `.sha256` file. If trusted code signing is introduced later, this policy and the release
+workflow will be updated before the first signed release.
