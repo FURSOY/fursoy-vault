@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "minimum_chrome_version": "130",
   "name": "FURSOY Vault",
-  "version": "0.5.5",
+  "version": "0.5.6",
   "description": "FURSOY Vault with multi-group protection and redacted user-mode monitoring.",
   "icons": {
     "16": "assets/fursoy-vault-extension-icon.png",
