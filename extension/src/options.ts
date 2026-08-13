@@ -117,12 +117,14 @@ const protectedCount = required<HTMLElement>("protected-count");
 const cookieCount = required<HTMLElement>("cookie-count");
 const eventCount = required<HTMLElement>("event-count");
 const companionState = required<HTMLElement>("companion-state");
+const extensionVersion = required<HTMLElement>("extension-version");
 const navElement = required<HTMLElement>("nav");
 const metricsSection = required<HTMLElement>("metrics");
 const grantAllPermissions = required<HTMLElement>("grant-all-permissions");
 const grantAllPermissionsCopy = required<HTMLElement>("grant-all-permissions-copy");
 const grantAllPermissionsButton = required<HTMLButtonElement>("grant-all-permissions-button");
 
+extensionVersion.textContent = `v${chrome.runtime.getManifest().version}`;
 enhanceSelects();
 
 const navigationItems = Array.from(document.querySelectorAll<HTMLAnchorElement>(".nav-item"));

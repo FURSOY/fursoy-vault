@@ -1,5 +1,5 @@
 import {
-  EXTENSION_VERSION, HOST_NAME, MIN_HOST_VERSION, PROTOCOL_VERSION, REQUIRED_CAPABILITIES, categorizeCookieSetFailure, cookieBelongsToGroup, compareSemanticVersions,
+  HOST_NAME, MIN_HOST_VERSION, PROTOCOL_VERSION, REQUIRED_CAPABILITIES, categorizeCookieSetFailure, cookieBelongsToGroup, compareSemanticVersions,
   cookieIdentity, cookieRecord, cookieRoundTripMatches, cookieSetDetails, cookieUrl, groupForCookie, groupForUrl,
   guessScope, navigationPatterns, policyParameters, validateConfig,
   type AccountGroup, type AccountGroupsConfig, type CookieRecord, type CookieSetFailureCategory,
@@ -16,6 +16,8 @@ import type { Locale } from "./i18n.js";
 import { ConnectionReadiness } from "./connection-readiness.js";
 import { mayAbortWithEmptySnapshot, OperationCoordinator, type OperationReference } from "./operation-coordinator.js";
 import { GuardedRemovalPlan } from "./guarded-removal.js";
+
+const EXTENSION_VERSION = chrome.runtime.getManifest().version;
 
 // Resolved once per service-worker lifetime; a restart re-resolves it from the same persisted
 // storage value, same as loadedConfig re-adopts its cache. Notifications sent before this resolves

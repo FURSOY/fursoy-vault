@@ -6,7 +6,7 @@ import subprocess
 import sys
 import tempfile
 
-EXTENSION_ID = "ikodegbaomnahbjiokfogpedaoifhbde"
+EXTENSION_ID = "ibjddphkjppgkdbegjibddbjkagdlaea"
 ORIGIN = f"chrome-extension://{EXTENSION_ID}/"
 CAPABILITIES = ["chunked_cookies", "request_correlation", "config_v3", "audit_recovery", "profile_namespace"]
 V7_CAPABILITIES = CAPABILITIES + ["durable_operations_v7", "guarded_cookie_removal", "semantic_operation_status", "profile_recovery_v1"]

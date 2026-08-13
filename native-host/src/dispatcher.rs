@@ -35,7 +35,7 @@ use crate::vault::store::VaultStore;
 use crate::{FcpError, FcpResult, WIKIPEDIA_ACCOUNT_GROUP_ID};
 
 pub const NATIVE_HOST_NAME: &str = "com.fursoy.vault";
-pub const PRODUCT_EXTENSION_ID: &str = "ikodegbaomnahbjiokfogpedaoifhbde";
+pub const PRODUCT_EXTENSION_ID: &str = "ibjddphkjppgkdbegjibddbjkagdlaea";
 const MIN_EXTENSION_VERSION: &str = "0.4.1";
 const PROTOCOL_CAPABILITIES: &[&str] = &[
     "chunked_cookies",
@@ -328,7 +328,7 @@ impl NativeHostApp {
     }
 
     fn handle_handshake(&mut self, handshake: Handshake) -> FcpResult<Vec<Message>> {
-        let extension_build_detail = if handshake.extension_version == "0.5.5" {
+        let extension_build_detail = if handshake.extension_version == env!("CARGO_PKG_VERSION") {
             "extension_current"
         } else {
             "extension_legacy"

@@ -65,6 +65,8 @@ jobs:
           "version=$tagVersion" >> $env:GITHUB_OUTPUT
           "extension_zip=extension/target/fursoy-vault-extension-v$tagVersion.zip" >> $env:GITHUB_OUTPUT
           "extension_hash=extension/target/fursoy-vault-extension-v$tagVersion.zip.sha256" >> $env:GITHUB_OUTPUT
+          "store_zip=extension/target/fursoy-vault-extension-v$tagVersion-chrome-web-store.zip" >> $env:GITHUB_OUTPUT
+          "store_hash=extension/target/fursoy-vault-extension-v$tagVersion-chrome-web-store.zip.sha256" >> $env:GITHUB_OUTPUT
 
       - name: Install extension dependencies
         working-directory: extension
@@ -123,6 +125,8 @@ jobs:
           }
           Copy-Item -LiteralPath "${{ steps.version.outputs.extension_zip }}" -Destination $releaseRoot
           Copy-Item -LiteralPath "${{ steps.version.outputs.extension_hash }}" -Destination $releaseRoot
+          Copy-Item -LiteralPath "${{ steps.version.outputs.store_zip }}" -Destination $releaseRoot
+          Copy-Item -LiteralPath "${{ steps.version.outputs.store_hash }}" -Destination $releaseRoot
 
           $companionHash = (Get-FileHash (Join-Path $releaseRoot "FURSOY-Vault-Setup.exe") -Algorithm SHA256).Hash.ToLowerInvariant()
           [System.IO.File]::WriteAllText(

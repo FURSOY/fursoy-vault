@@ -2,6 +2,8 @@ declare namespace chrome {
   namespace runtime {
     const id: string;
     const lastError: { message?: string } | undefined;
+    interface Manifest { version: string }
+    function getManifest(): Manifest;
     function getURL(path: string): string;
     interface Port { postMessage(message: unknown): void; disconnect(): void;
       onMessage: { addListener(callback: (message: unknown) => void): void };

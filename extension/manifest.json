@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "minimum_chrome_version": "130",
   "name": "FURSOY Vault",
-  "version": "0.5.6",
+  "version": "0.5.7",
   "description": "FURSOY Vault with multi-group protection and redacted user-mode monitoring.",
   "icons": {
     "16": "assets/fursoy-vault-extension-icon.png",
@@ -10,7 +10,7 @@
     "48": "assets/fursoy-vault-extension-icon.png",
     "128": "assets/fursoy-vault-extension-icon.png"
   },
-  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAudTNjBf91r1PbVuve4P5R6TA4PuWaRuQ6xOkk0bkPj44i3uoIezAc3nPyEnhPHtt7bzOTOoRak/7/DF1qHZh9hZ0FefApEqeO1W6+fyXsVtraIiLnnNZ2jZE4xijZ+RPgthkbaGg5DA3oU4Dba0x8OWHuaEQC/kkc0NHVYBN/rtBioSmINdfgBxSv9knMj9BblL0nSghw03+0IUuM/gQJ9xE9hCp4JAv0A2PsxEtALswuKOs3Ru8cMvAtxjijfSGjQYuNHHzboDqDOegNIu/c/Dspksc1R2eDK/z4zVJ3D91V5NB/ydXSy2kwbhkPFXqxHN9LqBdGjNTPsTT8LHvqQIDAQAB",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA5E7LIVJ17CBrKJPApKeIju57xg9/kpXbMpRIhosE1CavJj21AC5oQzbEnbQzyEOUMBBV9YgqvN96XCyJPKwvKMW5EFTL8FivKplhqe+5dSKMBMX+GQ/KqNF8AoELu2uo5fDPLnUkCOQ9SNBTGvOScZ7W+hNWxO5JnI6cnO15eP+L566Qf4I47HsWmYCe1k0rT0F3mpS3C7Txqk33wV8+aSPvMuW9vaGSeP8f0Ek9uFaZ60jxncvRzKfi1OoL04PD8yhXjHXTXthdcfGdA23XoK45gns1WZBtBPlu8ndm2e8oiYXMrLgaIMXcU+0+/V8IvW+4Idp0kVRTQNok2Lr6sQIDAQAB",
   "permissions": [
     "nativeMessaging",
     "cookies",

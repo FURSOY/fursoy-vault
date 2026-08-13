@@ -1,6 +1,5 @@
 export const HOST_NAME = "com.fursoy.vault";
 export const PROTOCOL_VERSION = 7;
-export const EXTENSION_VERSION = "0.5.5";
 export const MIN_HOST_VERSION = "0.5.0";
 export const REQUIRED_CAPABILITIES = ["chunked_cookies", "request_correlation", "config_v3", "audit_recovery", "profile_namespace", "durable_operations_v7", "guarded_cookie_removal", "semantic_operation_status", "profile_recovery_v1"] as const;
 

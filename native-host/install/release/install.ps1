@@ -38,7 +38,7 @@ $manifest = [ordered]@{
   description = "FURSOY Vault native host"
   path = $installedExe
   type = "stdio"
-  allowed_origins = @("chrome-extension://ikodegbaomnahbjiokfogpedaoifhbde/")
+  allowed_origins = @("chrome-extension://ibjddphkjppgkdbegjibddbjkagdlaea/")
 }
 $manifestJson = $manifest | ConvertTo-Json -Depth 4
 $manifestTemp = "$manifestPath.new"
