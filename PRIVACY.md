@@ -1,9 +1,13 @@
 # Privacy policy
 
-Effective date: August 11, 2026
+Effective date: August 13, 2026
 
 FURSOY Vault is designed to operate locally. It does not collect telemetry, create an online
 account, sell personal information, or send vault contents to the project maintainer.
+
+FURSOY Vault's use of information received from Chrome APIs adheres to the Chrome Web Store User
+Data Policy, including the Limited Use requirements. It uses this information only to provide the
+user-requested local session-protection feature.
 
 ## Data processed on the device
 
@@ -13,6 +17,7 @@ FURSOY Vault processes only the information needed to protect sites selected by 
 - cookies belonging to those domains, including cookie values and browser cookie attributes;
 - a random identifier for each regular Chrome profile so profiles remain isolated;
 - local controller state such as lease status, permission status, and timestamps;
+- the browser's active, idle, or locked state used to apply the selected locking policy;
 - redacted security and reliability audit events; and
 - local Chrome process command lines only long enough to detect supported risk indicators such as
   a remote-debugging launch. Raw command lines are not written to the audit log.
@@ -63,9 +68,9 @@ companion and all FURSOY Vault data under `%LOCALAPPDATA%\FursoyVault`.
 
 ## Sharing and third parties
 
-FURSOY Vault does not share user data with advertisers, analytics providers, data brokers, or the
-project maintainer. SignPath receives build artifacts during the release-signing process; those
-artifacts are produced by GitHub Actions and do not contain any user's vault or browser data.
+FURSOY Vault does not share user data with advertisers, analytics providers, data brokers, the
+project maintainer, or any other third party. Published build artifacts do not contain any user's
+vault or browser data.
 
 ## Changes and contact
 
