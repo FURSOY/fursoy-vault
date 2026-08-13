@@ -286,7 +286,7 @@ dependencies = [
 
 [[package]]
 name = "fursoy-native-host"
-version = "0.5.7"
+version = "0.5.8"
 dependencies = [
  "aes-gcm",
  "psl",

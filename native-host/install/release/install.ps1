@@ -47,7 +47,14 @@ $updaterPathFile = Join-Path $installRoot "updater-path.txt"
 $updaterPathTemp = "$updaterPathFile.new"
 $updaterPathBackup = "$updaterPathFile.rollback"
 if ($UpdaterPath -ne "") {
-  if (-not [System.IO.Path]::IsPathFullyQualified($UpdaterPath) -or -not (Test-Path -LiteralPath $UpdaterPath -PathType Leaf)) {
+  try {
+    $UpdaterPath = (Resolve-Path -LiteralPath $UpdaterPath -ErrorAction Stop).Path
+  } catch {
+    throw "UpdaterPath must identify the installed Velopack executable."
+  }
+  $localAppDataRoot = [System.IO.Path]::GetFullPath($env:LOCALAPPDATA).TrimEnd('\') + '\'
+  if (-not $UpdaterPath.StartsWith($localAppDataRoot, [System.StringComparison]::OrdinalIgnoreCase) -or
+      -not (Test-Path -LiteralPath $UpdaterPath -PathType Leaf)) {
     throw "UpdaterPath must identify the installed Velopack executable."
   }
 }
