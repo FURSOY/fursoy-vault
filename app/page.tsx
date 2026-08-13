@@ -2,7 +2,7 @@ import Image from "next/image";
 
 const github = "https://github.com/FURSOY/fursoy-vault";
 const releases = `${github}/releases`;
-const downloadUrl = `${releases}/latest/download/fursoy-vault-windows.zip`;
+const downloadUrl = `${releases}/latest/download/FURSOY-Vault-Setup.exe`;
 
 const softwareApplicationSchema = {
   "@context": "https://schema.org",
@@ -11,7 +11,7 @@ const softwareApplicationSchema = {
   description: "A local Windows and Chrome vault that restores protected session cookies only after Windows Hello approval.",
   applicationCategory: "SecurityApplication",
   operatingSystem: "Windows 10, Windows 11",
-  softwareVersion: "0.4.1",
+  softwareVersion: "0.5.6",
   downloadUrl,
   installUrl: downloadUrl,
   image: "https://fursoy.com/app-icon.png",
