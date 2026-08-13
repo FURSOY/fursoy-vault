@@ -29,6 +29,9 @@ test("renders the privacy policy", async () => {
   const html = await response.text();
   assert.match(html, /Privacy without fine print/);
   assert.match(html, /does not include product analytics or telemetry/);
+  assert.match(html, /Chrome Web Store User Data Policy/);
+  assert.match(html, /Limited Use requirements/);
+  assert.doesNotMatch(html, /SignPath|code-signing providers/);
 });
 
 test("serves search discovery files", async () => {
