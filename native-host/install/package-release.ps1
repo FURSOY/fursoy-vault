@@ -37,6 +37,7 @@ Copy-Item -LiteralPath (Join-Path $repoRoot "SOURCE.txt") -Destination $stagingR
   --mainExe "fursoy-vault-host.exe" `
   --packTitle "FURSOY Vault" `
   --packAuthors "FURSOY" `
+  --shortcuts "None" `
   --channel "win" `
   --outputDir $outputRoot `
   --delta "None" `
