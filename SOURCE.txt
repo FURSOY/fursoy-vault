@@ -13,11 +13,17 @@ Reproducible extension build (Node.js 22):
   npm ci
   npm run package
 
-Windows companion build (stable Rust toolchain):
+Windows companion build:
   cd native-host
   cargo build --release --locked
   dotnet tool install --global vpk --version 1.2.0
   powershell -File install/package-release.ps1
+
+The compiler is not "whatever stable is current": native-host/rust-toolchain.toml names the exact
+Rust version, and rustup installs it automatically for any cargo command run in that directory.
+Together with the committed Cargo.lock and the pinned Velopack version, that is what makes a build
+of a given tag reproducible rather than dependent on the day it was built. Read that file to see
+which compiler produced a given release.
 
 CI repeats the extension packaging and compares SHA-256 hashes, runs all Rust/TypeScript checks,
 and publishes the resulting hashes/artifacts for comparison.

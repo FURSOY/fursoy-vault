@@ -1,0 +1,18 @@
+# Pins the compiler for everyone: rustup reads this file for any cargo command run inside
+# native-host/, so a local check uses the same toolchain CI does.
+#
+# Two reasons this is pinned rather than tracking "stable":
+#
+#   * A new stable can fail the build with no code change. `cargo clippy -- -D warnings` treats a
+#     newly introduced lint as an error, so the day a Rust release lands, every push starts failing
+#     for a reason nobody in the project caused. Pinning makes that a deliberate upgrade instead.
+#   * Release binaries have to be reproducible. SOURCE.txt promises that the tagged tree is the
+#     complete corresponding source for a published binary; that promise is only meaningful if the
+#     compiler is named too, or the same tag built later yields a different artifact.
+#
+# Raising this is a normal change: bump the version, run the gates, and fix whatever new lints
+# appear in the same commit. Keep the version in the workflows' dtolnay/rust-toolchain ref in step
+# with it.
+[toolchain]
+channel = "1.98.0"
+components = ["rustfmt", "clippy"]

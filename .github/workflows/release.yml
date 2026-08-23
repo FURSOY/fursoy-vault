@@ -23,7 +23,10 @@ jobs:
         with:
           fetch-depth: 0
 
-      - uses: dtolnay/rust-toolchain@stable
+      # Must match native-host/rust-toolchain.toml, which is what a local build reads. Cargo
+      # commands inside native-host/ honour that file regardless of what is installed here; the
+      # ref is pinned too so the runner does not download a second toolchain it never uses.
+      - uses: dtolnay/rust-toolchain@1.98.0
         with:
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
