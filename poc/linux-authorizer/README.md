@@ -17,6 +17,12 @@ PASS  tampered payload is rejected
 PASS  wrong PIN is refused
 ```
 
+Verified twice: against the `swtpm` simulator, and against a real TPM 2.0 stack — a vTPM exposed
+as `/dev/tpmrm0` inside a CachyOS guest. The two runs are identical, down to the wrong-PIN
+rejection arriving as `TPM_RC_AUTH_FAIL` (`0x98e`) from both. That matters because a simulator
+proves only that the code is well-formed; the templates, the slot budget and the lockout behaviour
+are where real hardware is free to disagree, and here it did not.
+
 ## What this settles about the abstraction
 
 `SignedCapability` has three fields. Comparing the two backends:
@@ -78,6 +84,25 @@ hardware, so a real-TPM run is what actually validates this.
 
 Individual commands: `enroll <pin>`, `sign <pin> <payload>`, `verify <payload> <signature-hex>`.
 `LINUX_AUTHORIZER_REGISTRY` overrides where the credential registry is written.
+
+### If the build fails with a missing linker
+
+On CachyOS (Arch, distro `rust` 1.98) the build stops on the first build script with:
+
+```
+error: linker `x86_64-linux-gnu-gcc` not found
+```
+
+despite `gcc`, `cc` and `ld` all being present, no cargo configuration file existing anywhere on
+the machine, and no relevant environment variable being set. Naming the linker explicitly works:
+
+```bash
+RUSTFLAGS="-C linker=cc" cargo run
+```
+
+The root cause was not established — it is recorded here because the symptom is misleading (it
+points at a missing toolchain that is in fact installed) and because a shipped Linux build will
+meet the same distributions.
 
 The expected-failure case logs a `tss2` error to stderr on its way to passing; that is the library
 reporting `TPM_RC_AUTH_FAIL`, not a fault. `export TSS2_LOG=all+NONE` silences it.
