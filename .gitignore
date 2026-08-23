@@ -1,5 +1,6 @@
 /poc/tpm-probe/target/
 /poc/webauthn-probe/target/
+/poc/linux-authorizer/target/
 /native-host/target/
 /extension/node_modules/
 /extension/dist/

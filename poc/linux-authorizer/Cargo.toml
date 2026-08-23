@@ -1,0 +1,16 @@
+[package]
+name = "linux-authorizer"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+# Prototype only (Faz L0): answers whether a TPM 2.0 key gated by a PIN can stand in for the
+# Windows Hello authorizer, and what shape its proof has to take. Deliberately standalone — it
+# does not depend on the native host and nothing in the host depends on it.
+
+[dependencies]
+tss-esapi = "7"
+p256 = { version = "0.13", features = ["ecdsa"] }
+sha2 = "0.10"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
