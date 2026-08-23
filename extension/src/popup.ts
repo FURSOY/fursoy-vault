@@ -397,6 +397,7 @@ function describeError(code: string | undefined): string {
     case "native_host_not_connected": return t("common.error.hostNotConnected");
     case "upgrade_required": return t("common.error.upgradeRequired");
     case "unknown_group": return t("common.error.unknownGroup");
+    case "hello_not_configured": return t("common.error.helloNotConfigured");
     default: return t("common.error.generic");
   }
 }

@@ -42,6 +42,11 @@ pub enum PolicyLevel {
     Monitor,
 }
 
+/// Upper bound on a single lease, shared by every non-monitor policy. Long enough that active
+/// use never hits it; short enough that a session cannot stay exposed indefinitely if every
+/// other eviction trigger is missed. Mirrored in the extension (see `policyParameters`).
+const LEASE_BACKSTOP_MS: u64 = 12 * 60 * 60_000;
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct PolicyParameters {
     pub hello_cache_ms: Option<u64>,
@@ -54,24 +59,28 @@ pub struct PolicyParameters {
 impl PolicyLevel {
     pub fn parameters(self) -> PolicyParameters {
         match self {
+            // The lease no longer paces normal use: a session that is actively being used must
+            // not be torn down mid-task, so what a policy really chooses is how long you may be
+            // away before it re-locks. The shared 12-hour lease is a backstop, not a schedule —
+            // it bounds exposure if idle detection never fires (a suspended service worker, an
+            // unreliable chrome.idle signal) instead of interrupting anyone in practice.
             Self::Critical => PolicyParameters {
                 hello_cache_ms: Some(0),
-                lease_duration_ms: 5 * 60_000,
-                idle_threshold_seconds: 60,
+                lease_duration_ms: LEASE_BACKSTOP_MS,
+                idle_threshold_seconds: 5 * 60,
                 last_tab_grace_ms: 0,
                 monitoring_only: false,
             },
             Self::Balanced => PolicyParameters {
                 hello_cache_ms: Some(10 * 60_000),
-                lease_duration_ms: 10 * 60_000,
-                idle_threshold_seconds: 5 * 60,
+                lease_duration_ms: LEASE_BACKSTOP_MS,
+                idle_threshold_seconds: 15 * 60,
                 last_tab_grace_ms: 2 * 60_000,
                 monitoring_only: false,
             },
             Self::Convenient => PolicyParameters {
-                // Cleared on lock/disconnect; the four-hour bound prevents an unbounded grant.
                 hello_cache_ms: Some(4 * 60 * 60_000),
-                lease_duration_ms: 4 * 60 * 60_000,
+                lease_duration_ms: LEASE_BACKSTOP_MS,
                 idle_threshold_seconds: 60 * 60,
                 last_tab_grace_ms: 15 * 60_000,
                 monitoring_only: false,
@@ -284,16 +293,31 @@ mod tests {
     fn policy_idle_thresholds_replace_the_test_constant() {
         assert_eq!(
             PolicyLevel::Critical.parameters().idle_threshold_seconds,
-            60
+            300
         );
         assert_eq!(
             PolicyLevel::Balanced.parameters().idle_threshold_seconds,
-            300
+            900
         );
         assert_eq!(
             PolicyLevel::Convenient.parameters().idle_threshold_seconds,
             3600
         );
+    }
+
+    /// The extension duplicates these numbers in `policyParameters` and drives the eviction
+    /// alarms from its own copy, so a change here that is not mirrored there silently makes the
+    /// two sides disagree about when a session ends. These assertions are the tripwire.
+    #[test]
+    fn every_protecting_policy_shares_the_lease_backstop() {
+        for level in [
+            PolicyLevel::Critical,
+            PolicyLevel::Balanced,
+            PolicyLevel::Convenient,
+        ] {
+            assert_eq!(level.parameters().lease_duration_ms, 43_200_000);
+        }
+        assert_eq!(PolicyLevel::Monitor.parameters().lease_duration_ms, 0);
     }
 
     #[test]

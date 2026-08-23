@@ -800,6 +800,21 @@ Takas **jest cache süresinde** yapılır; DEK cache'i hiçbir seviyede yoktur.
 > pencere içinde host audit'inde `hello_cached` yolunu kullandığı halde Windows yeniden prompt
 > gösterdi. Last-tab eviction cache'i temizlememiştir; OS credential/UI cache ömrü ayrıca ölçülecektir.
 
+> **ADR-030 notu (2026-08-23) — yürürlükteki davranış budur:** Yukarıdaki tablo tarihseldir.
+> Lease süresi artık bir zamanlayıcı değil; koruma yapan üç seviye de **12 saatlik ortak bir
+> emniyet freni** paylaşır ve aktif kullanım hiçbir zaman kesilmez. Bir seviyenin gerçekte
+> belirlediği şey **uzaklaşma toleransıdır**:
+>
+> | Seviye | Uzaklaşma (idle) | Son sekme kapanınca | Lease üst sınırı |
+> |--------|------------------|---------------------|------------------|
+> | **Kritik** | 5 dk | anında | 12 sa (emniyet freni) |
+> | **Dengeli** | 15 dk | 2 dk sonra | 12 sa (emniyet freni) |
+> | **Kullanışlı** | 1 sa | 15 dk sonra | 12 sa (emniyet freni) |
+> | **İzleme** | — | — | — (kasalama yok) |
+>
+> Windows kilidinde anında tahliye politikadan bağımsız olarak her seviyede geçerlidir.
+> Bkz. [ADR-030](#adr-030--lease-süresi-zamanlayıcı-olmaktan-çıkıp-emniyet-frenine-dönüştü).
+
 > **ADR-021 notu (2026-08-08):** Yukarıdaki tablo, artık kullanılmayan `KeyCredentialManager`
 > arka ucunun davranışını tarihsel olarak yansıtır. Yeni `webauthn.dll` arka ucu durum tutmuyor
 > (stateless); jest cache süresi **fiilen etkisiz**, tüm seviyeler her yeniden girişte Hello
@@ -3656,3 +3671,52 @@ deterministic event ID ile idempotent kaydedilir ve audit hatası core transacti
 - Rollout is host-first: publish the GitHub companion assets before submitting the matching
   extension package to the Chrome Web Store. Protocol minimum-version and capability checks remain
   fail-closed; an updater failure never relaxes compatibility requirements.
+
+---
+
+### ADR-030 — Lease süresi zamanlayıcı olmaktan çıkıp emniyet frenine dönüştü
+
+**Tarih:** 2026-08-23 · **Durum:** Kabul edildi · **Etkilenen:** [§13](#13-lease-modeli), [§14](#14-policy-seviyeleri)
+
+**Bağlam.** Politika seviyeleri üç ayrı süre taşıyordu: lease süresi (5 dk / 10 dk / 4 sa), idle
+eşiği (1 dk / 5 dk / 1 sa) ve last-tab grace (0 / 2 dk / 15 dk). Lease süresi, kullanıcı siteyi
+**aktif kullanırken bile** dolduğunda tahliye tetikliyordu; Kritik profilde bu, kesintisiz çalışan
+bir kullanıcıya her beş dakikada bir Hello jesti yaptırmak demekti. ADR-021 ile jest cache'i
+fiilen ortadan kalktığı için bu maliyet, tasarım sırasında varsayıldığından belirgin biçimde
+yüksekti — her sona eren lease gerçek bir Hello penceresi anlamına geliyordu.
+
+Ayrıca üç sürenin kullanıcıya sunumu anlaşılmazdı: arayüz etiketleri `lease`/`evict` terimlerinin
+birebir çevirisiydi ("5 dk kira · 1 dk boşta · anında tahliye"). Kullanıcı, seçtiği şeyin ne
+olduğunu okuyarak anlayamıyordu.
+
+**Karar.**
+
+- Lease süresi bir **zamanlayıcı** değil, **emniyet frenidir**. Koruma yapan üç seviyenin üçü de
+  aynı 12 saatlik üst sınırı paylaşır (`LEASE_BACKSTOP_MS`). Pratikte aktif kullanım bu sınıra
+  hiçbir zaman ulaşmaz; sınır yalnızca diğer tüm tahliye tetikleyicileri kaçırıldığında
+  (askıya alınmış service worker, güvenilmez `chrome.idle` sinyali) maruziyeti sınırlamak için
+  vardır.
+- Bir politikanın gerçekte seçtiği şey, **kullanıcının ne kadar süre uzaklaşabileceğidir**. Idle
+  eşikleri buna göre yeniden belirlendi: Kritik 5 dk, Dengeli 15 dk, Kullanışlı 1 sa.
+- Last-tab grace değişmedi (0 / 2 dk / 15 dk). Windows kilidinde anında tahliye de değişmedi ve
+  politikadan bağımsız kalmaya devam ediyor.
+- Kullanıcıya görünen etiketler tek bir davranış cümlesine indirildi ("5 dakika bilgisayarına
+  dokunmazsan kilitlenir"). `lease`, `evict`, `idle`, `grace` terimleri arayüzden kaldırıldı;
+  bunlar kod terimleridir, ürün terimleri değil.
+
+**Kabul edilen sınırlar.** Bu, ölçülebilir bir koruma gevşemesidir ve bilinçlidir. Önceden Kritik
+bir sitenin tarayıcıda açık kalabileceği süre 5 dakikayla sınırlıydı; artık kullanıcı aktif olduğu
+sürece sınırsızdır. Ekranını kilitlemeden masasından kalkan bir kullanıcı, eski davranışta 1
+dakika sonra, yeni davranışta 5 dakika sonra korunur. Ürünün "maruziyeti asgariye indirme" iddiası
+geçerliliğini korur ama ölçüsü değişmiştir: **maruziyet artık kullanım süresine değil,
+uzaklaşma süresine bağlıdır.**
+
+**Reddedilen alternatif.** Lease kavramını tamamen kaldırmak — `expiry_unix_ms` alanını protokolden,
+[lease/state_machine.rs](native-host/src/lease/state_machine.rs)'ten ve kurtarma/uzlaştırma
+mantığından sökmek — değerlendirildi ve reddedildi. En kritik kodda geniş bir değişiklik gerektirir
+ve karşılığında yedek güvenlik ağını tamamen ortadan kaldırırdı.
+
+**Bakım notu.** Bu sayılar **iki yerde** tanımlıdır: [native-host/src/config.rs](native-host/src/config.rs)
+(`LEASE_BACKSTOP_MS`, `PolicyLevel::parameters`) ve [extension/src/protocol.ts](extension/src/protocol.ts)
+(`policyParameters`). Eklenti tahliye alarmlarını kendi kopyasından sürdüğü için ikisi kaymamalıdır;
+her iki tarafta da değerleri sabitleyen testler eklendi.

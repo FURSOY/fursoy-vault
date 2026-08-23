@@ -24,7 +24,7 @@
         <div class="story-copy">
           <span class="eyebrow" data-i18n="onboarding.chrome.storyKicker">Oturum kasası</span>
           <h1><span data-i18n="onboarding.chrome.storyLine1">Hesabın açık kalmasın.</span><br /><span data-i18n="onboarding.chrome.storyLine2">Sen açtığında açılsın.</span></h1>
-          <p data-i18n="onboarding.chrome.storyBody">Cookie oturumlarını cihazında tut, Windows Hello ile geri çağır.</p>
+          <p data-i18n="onboarding.chrome.storyBody">Oturumların bilgisayarında kilitli dursun, sen açtığında gelsin.</p>
         </div>
         <div class="vault-visual">
           <span class="orbit orbit-a"></span>
@@ -44,7 +44,7 @@
         <ol class="step-progress" aria-label="Kurulum ilerlemesi">
           <li class="step-dot active" data-step-name="welcome"><span>1</span><small data-i18n="onboarding.chrome.stepWelcome">Başlangıç</small></li>
           <li class="step-line"></li>
-          <li class="step-dot" data-step-name="install"><span>2</span><small data-i18n="onboarding.chrome.stepInstall">Companion</small></li>
+          <li class="step-dot" data-step-name="install"><span>2</span><small data-i18n="onboarding.chrome.stepInstall">Yardımcı uygulama</small></li>
           <li class="step-line"></li>
           <li class="step-dot" data-step-name="addsite"><span>3</span><small data-i18n="onboarding.chrome.stepSite">İlk site</small></li>
           <li class="step-line"></li>
@@ -55,25 +55,27 @@
           <section id="step-welcome" class="setup-step">
             <span class="step-number">01</span>
             <h2 id="welcome-title">FURSOY Vault’a hoş geldin</h2>
-            <p id="welcome-body" class="step-body">Önemli hesaplarının cookie oturumlarını kullanmadığın zaman cihazındaki güvenli kasada sakla.</p>
+            <p id="welcome-body" class="step-body">Bilgisayarına bulaşan bir zararlı, şifreni hiç bilmeden hesaplarına girebilir.</p>
             <div class="feature-list">
-              <div><span class="feature-check" aria-hidden="true"></span><p><strong data-i18n="onboarding.chrome.localTitle">Yerel kasa</strong><small data-i18n="onboarding.chrome.localBody">Oturum verisi bu cihazda kalır.</small></p></div>
-              <div><span class="feature-check" aria-hidden="true"></span><p><strong data-i18n="onboarding.chrome.accessTitle">Kontrollü erişim</strong><small data-i18n="onboarding.chrome.accessBody">Geri yükleme Windows Hello onayı ister.</small></p></div>
+              <div><span class="feature-check" aria-hidden="true"></span><p><strong data-i18n="onboarding.chrome.localTitle">Her şey burada kalır</strong><small data-i18n="onboarding.chrome.localBody">Oturumların bu bilgisayardan hiç çıkmaz.</small></p></div>
+              <div><span class="feature-check" aria-hidden="true"></span><p><strong data-i18n="onboarding.chrome.accessTitle">Sadece sen açabilirsin</strong><small data-i18n="onboarding.chrome.accessBody">Geri açmak için yüzün, parmak izin ya da PIN'in gerekir.</small></p></div>
             </div>
             <button id="welcome-next" type="button" class="primary step-primary">Devam et</button>
           </section>
 
           <section id="step-install" class="setup-step" hidden>
             <span class="step-number">02</span>
-            <h2 id="install-title">Companion uygulamayı kur</h2>
-            <p id="install-body" class="step-body">Güvenli kasayı Windows Hello ve TPM ile bağlamak için yerel companion uygulamayı kur.</p>
+            <h2 id="install-title">Yardımcı uygulamayı kur</h2>
+            <p id="install-body" class="step-body">Kasayı açıp kapatan küçük bir Windows programı gerekiyor.</p>
             <div class="download-card">
               <span class="download-icon" aria-hidden="true">
                 <svg viewBox="0 0 24 24"><path d="M12 5v10m-4-4 4 4 4-4" /></svg>
               </span>
-              <div><strong>FURSOY Vault Companion</strong><small data-i18n="onboarding.chrome.companionMeta">Windows · x64 · Yerel servis</small></div>
+              <div><strong>FURSOY Vault Companion</strong><small data-i18n="onboarding.chrome.companionMeta">Windows 10/11 · 64 bit</small></div>
               <a id="install-download" class="primary button-link" href="#" target="_blank" download rel="noopener">İndir</a>
             </div>
+            <p id="install-hello-notice" class="setup-hint"></p>
+            <p id="install-signing-notice" class="setup-hint"></p>
             <button id="install-check" type="button" class="step-primary">Bağlantıyı kontrol et</button>
             <p id="install-status" class="status-message" role="status" hidden></p>
             <section id="recovery-panel" class="recovery-panel" hidden>
@@ -88,9 +90,9 @@
           <section id="step-addsite" class="setup-step" hidden>
             <span class="step-number">03</span>
             <h2 id="addsite-title">İlk siteni koru</h2>
-            <p id="addsite-body" class="step-body">Koruma döngüsünü başlatmak için önemli bir hesabın alan adını ekle.</p>
+            <p id="addsite-body" class="step-body">Hangi sitenin oturumunu korumak istersin?</p>
             <form id="addsite-form" autocomplete="off">
-              <label id="addsite-scope-label" class="field-label" for="addsite-scope">Alan adı</label>
+              <label id="addsite-scope-label" class="field-label" for="addsite-scope">Site adresi</label>
               <div id="addsite-domain-input" class="domain-input">
                 <span aria-hidden="true">https://</span>
                 <input id="addsite-scope" type="text" spellcheck="false" autocomplete="off" />
@@ -114,9 +116,9 @@
             <h2 id="done-title">Hazırsın</h2>
             <p id="done-body" class="step-body">FURSOY Vault artık önemli oturumlarını korumaya hazır.</p>
             <div class="done-summary">
-              <span><i></i><b data-i18n="onboarding.chrome.doneCompanion">Companion bağlantısı</b></span>
-              <span><i></i><b data-i18n="onboarding.chrome.doneVault">Yerel şifreli kasa</b></span>
-              <span><i></i><b data-i18n="onboarding.chrome.doneCycle">Otomatik koruma döngüsü</b></span>
+              <span><i></i><b data-i18n="onboarding.chrome.doneCompanion">Yardımcı uygulama bağlandı</b></span>
+              <span><i></i><b data-i18n="onboarding.chrome.doneVault">Bilgisayarında şifreli kasa</b></span>
+              <span><i></i><b data-i18n="onboarding.chrome.doneCycle">Kullanmadığında kendiliğinden kilitlenir</b></span>
             </div>
             <button id="done-finish" type="button" class="primary step-primary">Bitir</button>
           </section>

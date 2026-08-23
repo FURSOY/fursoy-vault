@@ -12,6 +12,7 @@ pub enum FcpError {
     Format(String),
     Protocol(String),
     Capability(String),
+    HelloNotConfigured,
 }
 
 impl Display for FcpError {
@@ -24,6 +25,10 @@ impl Display for FcpError {
             Self::Format(message) => write!(formatter, "vault format error: {message}"),
             Self::Protocol(message) => write!(formatter, "protocol error: {message}"),
             Self::Capability(message) => write!(formatter, "capability rejected: {message}"),
+            Self::HelloNotConfigured => write!(
+                formatter,
+                "Windows Hello is not set up for this Windows account"
+            ),
         }
     }
 }
@@ -34,7 +39,11 @@ impl Error for FcpError {
             Self::Io(error) => Some(error),
             Self::Json(error) => Some(error),
             Self::Windows(error) => Some(error),
-            Self::Crypto(_) | Self::Format(_) | Self::Protocol(_) | Self::Capability(_) => None,
+            Self::Crypto(_)
+            | Self::Format(_)
+            | Self::Protocol(_)
+            | Self::Capability(_)
+            | Self::HelloNotConfigured => None,
         }
     }
 }

@@ -59,14 +59,34 @@ if ($UpdaterPath -ne "") {
   }
 }
 [System.IO.File]::WriteAllText($manifestTemp, $manifestJson, [System.Text.UTF8Encoding]::new($false))
-$registryPath = "HKCU:\Software\Google\Chrome\NativeMessagingHosts\com.fursoy.vault"
-$registryExisted = Test-Path -LiteralPath $registryPath
-$previousRegistryValue = if ($registryExisted) { (Get-Item -LiteralPath $registryPath).GetValue("") } else { $null }
+# Every Chromium browser reads Native Messaging manifests from its own HKCU key, and that is the
+# only thing that differs between them: the extension ships a fixed id (see "key" in the
+# manifest), so one Chrome Web Store install carries the same id into Edge, Brave and the rest,
+# and the host's origin check accepts it unchanged. Registering a browser that is not installed
+# writes an inert key nobody reads, and means a browser installed later works without re-running
+# Setup — cheaper and more reliable than detecting what is on the machine.
+$registryPaths = @(
+  "HKCU:\Software\Google\Chrome\NativeMessagingHosts\com.fursoy.vault"
+  "HKCU:\Software\Microsoft\Edge\NativeMessagingHosts\com.fursoy.vault"
+  "HKCU:\Software\BraveSoftware\Brave-Browser\NativeMessagingHosts\com.fursoy.vault"
+  "HKCU:\Software\Vivaldi\NativeMessagingHosts\com.fursoy.vault"
+  "HKCU:\Software\Opera Software\Opera Stable\NativeMessagingHosts\com.fursoy.vault"
+  "HKCU:\Software\Chromium\NativeMessagingHosts\com.fursoy.vault"
+)
+$previousRegistryState = @()
+foreach ($path in $registryPaths) {
+  $existed = Test-Path -LiteralPath $path
+  $value = $null
+  if ($existed) { $value = (Get-Item -LiteralPath $path).GetValue("") }
+  $previousRegistryState += [pscustomobject]@{ Path = $path; Existed = $existed; Value = $value }
+}
 try {
   if (Test-Path -LiteralPath $manifestPath) { Copy-Item -LiteralPath $manifestPath -Destination $manifestBackup -Force }
   Move-Item -LiteralPath $manifestTemp -Destination $manifestPath -Force
-  New-Item -Path $registryPath -Force | Out-Null
-  Set-Item -Path $registryPath -Value $manifestPath
+  foreach ($path in $registryPaths) {
+    New-Item -Path $path -Force | Out-Null
+    Set-Item -Path $path -Value $manifestPath
+  }
   if ($UpdaterPath -ne "") {
     if (Test-Path -LiteralPath $updaterPathFile) { Copy-Item -LiteralPath $updaterPathFile -Destination $updaterPathBackup -Force }
     [System.IO.File]::WriteAllText($updaterPathTemp, "$UpdaterPath`n", [System.Text.UTF8Encoding]::new($false))
@@ -75,11 +95,13 @@ try {
   if (Test-Path -LiteralPath $manifestBackup) { Remove-Item -LiteralPath $manifestBackup -Force }
   if (Test-Path -LiteralPath $updaterPathBackup) { Remove-Item -LiteralPath $updaterPathBackup -Force }
 } catch {
-  if ($registryExisted) {
-    New-Item -Path $registryPath -Force | Out-Null
-    Set-Item -Path $registryPath -Value $previousRegistryValue
-  } elseif (Test-Path -LiteralPath $registryPath) {
-    Remove-Item -LiteralPath $registryPath -Recurse -Force
+  foreach ($state in $previousRegistryState) {
+    if ($state.Existed) {
+      New-Item -Path $state.Path -Force | Out-Null
+      Set-Item -Path $state.Path -Value $state.Value
+    } elseif (Test-Path -LiteralPath $state.Path) {
+      Remove-Item -LiteralPath $state.Path -Recurse -Force
+    }
   }
   if (Test-Path -LiteralPath $manifestBackup) { Move-Item -LiteralPath $manifestBackup -Destination $manifestPath -Force }
   elseif (Test-Path -LiteralPath $manifestPath) { Remove-Item -LiteralPath $manifestPath -Force }

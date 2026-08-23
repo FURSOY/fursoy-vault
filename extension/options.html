@@ -34,7 +34,7 @@
         <span class="proof-icon" aria-hidden="true"></span>
         <div>
           <strong>Local-first</strong>
-          <p data-i18n="options.sidebar.localFirstBody">Cookie değerleri uzantı depolamasına veya buluta yazılmaz.</p>
+          <p data-i18n="options.sidebar.localFirstBody">Çerezlerin ne tarayıcı deposuna ne de buluta yazılır.</p>
         </div>
       </div>
       <div class="sidebar-footer">
@@ -54,7 +54,7 @@
 
       <main>
         <div class="message-stack" aria-live="polite">
-          <p id="connection" class="notice" data-i18n="common.connectionWarning" hidden>Companion uygulama bağlı değil. Koruma değişiklikleri geçici olarak kullanılamıyor.</p>
+          <p id="connection" class="notice" data-i18n="common.connectionWarning" hidden>Yardımcı uygulama bağlı değil. Koruma ayarları şimdilik değiştirilemiyor.</p>
           <p id="error" class="notice notice-danger" role="alert" hidden></p>
         </div>
 
@@ -62,7 +62,7 @@
           <div class="hero-copy">
             <span class="eyebrow" data-i18n="options.hero.eyebrow">Durum özeti</span>
             <h2><span data-i18n="options.hero.titleLine1">Önemli oturumların,</span><br /><span data-i18n="options.hero.titleLine2">yalnızca sen açtığında açık.</span></h2>
-            <p data-i18n="options.hero.body">Korunan alan adlarını, cookie kasalarının durumunu ve cihazdaki güvenlik sinyallerini tek yerden yönet.</p>
+            <p data-i18n="options.hero.body">Korunan siteleri, kasalarının durumunu ve bilgisayarındaki güvenlik uyarılarını tek yerden yönet.</p>
           </div>
           <div class="hero-seal" aria-hidden="true">
             <span class="seal-ring ring-one"></span>
@@ -83,7 +83,7 @@
             <span class="metric-note" data-i18n="options.metrics.accessibleNote">İzni eksiksiz</span>
           </article>
           <article class="metric-card">
-            <span class="metric-label" data-i18n="options.metrics.activeCookies">Tarayıcıdaki cookie</span>
+            <span class="metric-label" data-i18n="options.metrics.activeCookies">Tarayıcıdaki çerez</span>
             <strong id="cookie-count">0</strong>
             <span class="metric-note" data-i18n="options.metrics.activeCookiesNote">Şu anda etkin</span>
           </article>
@@ -111,10 +111,10 @@
               <table id="groups-table">
                 <thead>
                   <tr>
-                    <th data-i18n="options.sites.tableDomain">Alan adı</th>
+                    <th data-i18n="options.sites.tableDomain">Site adresi</th>
                     <th data-i18n="options.sites.tableProfile">Koruma profili</th>
                     <th data-i18n="options.sites.tableStatus">Durum</th>
-                    <th data-i18n="options.sites.tableCookie">Etkin cookie</th>
+                    <th data-i18n="options.sites.tableCookie">Açık çerez</th>
                     <th><span class="sr-only" data-i18n="options.sites.tableActions">Eylemler</span></th>
                   </tr>
                 </thead>
@@ -124,7 +124,7 @@
             <div id="groups-empty" class="large-empty" hidden>
               <span class="empty-orbit" aria-hidden="true"></span>
               <strong data-i18n="options.sites.emptyTitle">Henüz korunan bir site yok</strong>
-              <p data-i18n="options.sites.emptyBody">Aşağıdaki formdan ilk alan adını ekleyebilirsin.</p>
+              <p data-i18n="options.sites.emptyBody">Aşağıdaki formdan ilk siteni ekleyebilirsin.</p>
             </div>
           </div>
 
@@ -133,27 +133,27 @@
               <span class="plus-mark" aria-hidden="true"></span>
               <div>
                 <h3 data-i18n="options.addCard.title">Yeni site ekle</h3>
-                <p data-i18n="options.addCard.body">Alan adı ve tüm alt alan adlarındaki cookie’ler kapsanır.</p>
+                <p data-i18n="options.addCard.body">Site ve tüm alt adresleri birlikte korunur.</p>
               </div>
             </div>
             <form id="add-form" autocomplete="off">
               <div class="form-field domain-field">
-                <label class="field-label" for="scope" data-i18n="options.sites.tableDomain">Alan adı</label>
+                <label class="field-label" for="scope" data-i18n="options.sites.tableDomain">Site adresi</label>
                 <input id="scope" type="text" spellcheck="false" placeholder="ornek.com" required />
                 <p id="add-error" class="field-error" role="alert" hidden></p>
               </div>
               <div class="form-field policy-field">
                 <label class="field-label" for="policy" data-i18n="options.sites.tableProfile">Koruma profili</label>
                 <select id="policy">
-                  <option value="critical" data-i18n="options.addCard.policyOption.critical">Kritik · 5 dk oturum · 1 dk boşta</option>
-                  <option value="balanced" selected data-i18n="options.addCard.policyOption.balanced">Dengeli · 10 dk oturum · 5 dk boşta</option>
-                  <option value="convenient" data-i18n="options.addCard.policyOption.convenient">Rahat · 4 sa oturum · 1 sa boşta</option>
-                  <option value="monitor" data-i18n="options.addCard.policyOption.monitor">Yalnız izle</option>
+                  <option value="critical" data-i18n="options.addCard.policyOption.critical">Kritik · 5 dakika bilgisayarına dokunmazsan kilitlenir</option>
+                  <option value="balanced" selected data-i18n="options.addCard.policyOption.balanced">Dengeli · 15 dakika bilgisayarına dokunmazsan kilitlenir</option>
+                  <option value="convenient" data-i18n="options.addCard.policyOption.convenient">Rahat · 1 saat bilgisayarına dokunmazsan kilitlenir</option>
+                  <option value="monitor" data-i18n="options.addCard.policyOption.monitor">Yalnız izle · Hiç kilitlemez, yalnızca uyarır</option>
                 </select>
               </div>
               <button id="add" type="submit" class="primary" data-i18n="options.addCard.submit">Siteyi koru</button>
             </form>
-            <p class="permission-note"><span aria-hidden="true">i</span> <span class="permission-note-text" data-i18n="options.addCard.permissionNote">Chrome, site verisine erişmek için ayrıca kendi izin penceresini gösterir.</span></p>
+            <p class="permission-note"><span aria-hidden="true">i</span> <span class="permission-note-text" data-i18n="options.addCard.permissionNote">Tarayıcı, site verisine erişmek için ayrıca kendi izin penceresini gösterir.</span></p>
           </div>
         </section>
 
@@ -162,7 +162,7 @@
             <div>
               <span class="eyebrow" data-i18n="options.events.eyebrow">Güvenlik sinyalleri</span>
               <h2 data-i18n="options.events.title">Olay günlüğü</h2>
-              <p data-i18n="options.events.body">Kullanıcıya gösterilen önemli uyarılar. Ayrıntılı audit zinciri companion uygulamada tutulur.</p>
+              <p data-i18n="options.events.body">Sana gösterilen önemli uyarılar. Ayrıntılı güvenlik kaydı yardımcı uygulamada tutulur.</p>
             </div>
             <button id="clear-log" class="danger-button" type="button" data-i18n="options.events.clearButton">Günlüğü temizle</button>
           </div>

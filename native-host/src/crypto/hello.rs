@@ -17,6 +17,7 @@ use windows::Win32::Networking::WindowsWebServices::{
     WEBAUTHN_USER_ENTITY_INFORMATION_CURRENT_VERSION,
     WEBAUTHN_USER_VERIFICATION_REQUIREMENT_REQUIRED, WebAuthNAuthenticatorGetAssertion,
     WebAuthNAuthenticatorMakeCredential, WebAuthNFreeAssertion, WebAuthNFreeCredentialAttestation,
+    WebAuthNIsUserVerifyingPlatformAuthenticatorAvailable,
 };
 use windows::Win32::Security::Cryptography::{
     BCRYPT_ALG_HANDLE, BCRYPT_ECCPUBLIC_BLOB, BCRYPT_ECDSA_P256_ALGORITHM,
@@ -325,6 +326,18 @@ fn create_authorizer(apartment: ComApartment, registry_path: &Path) -> FcpResult
 }
 
 fn create_credential(mut user_id: [u8; 16]) -> FcpResult<(Vec<u8>, [u8; 32], [u8; 32])> {
+    // Without an enrolled Hello gesture (PIN/biometric) on this Windows account,
+    // WebAuthNAuthenticatorMakeCredential still opens a native dialog but fails inside it with an
+    // opaque OS error ("there was a problem saving your shared secret"), because there is no
+    // platform authenticator to complete the ceremony with. Checking first skips that confusing
+    // dialog entirely and reports a specific, actionable error instead.
+    if !unsafe { WebAuthNIsUserVerifyingPlatformAuthenticatorAvailable() }
+        .map_err(FcpError::from)?
+        .as_bool()
+    {
+        return Err(FcpError::HelloNotConfigured);
+    }
+
     let hwnd = unsafe { GetForegroundWindow() };
 
     let rp_id = widen(RP_ID);

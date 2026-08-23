@@ -7,6 +7,13 @@ therefore display **Unknown publisher** during installation. This status is disc
 download page and in every GitHub Release. The Chrome extension package is also published with a
 SHA-256 checksum.
 
+The reason is cost, not policy: an Authenticode certificate carries a recurring annual fee that
+this single-maintainer project does not currently cover. Signing is the first thing project
+[sponsorship](https://github.com/sponsors/FURSOY) is spent on. Until then, the checksum and
+reproducible-source guarantees below are what the project offers in its place — they let a user
+verify *what* they installed, which a signature does not, while a signature attests to *who*
+published it, which the checksums cannot.
+
 ## Privacy
 
 This program will not transfer any information to other networked systems unless specifically

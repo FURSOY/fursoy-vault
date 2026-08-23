@@ -41,12 +41,22 @@ $manifestJson = $manifest | ConvertTo-Json -Depth 4
 $manifestTemp = "$manifestPath.new"
 $manifestBackup = "$manifestPath.rollback"
 [System.IO.File]::WriteAllText($manifestTemp, $manifestJson, [System.Text.UTF8Encoding]::new($false))
-$registryPath = "HKCU:\Software\Google\Chrome\NativeMessagingHosts\com.fursoy.vault"
+# Must mirror the browser list in install.ps1 / unregister.ps1.
+$registryPaths = @(
+  "HKCU:\Software\Google\Chrome\NativeMessagingHosts\com.fursoy.vault"
+  "HKCU:\Software\Microsoft\Edge\NativeMessagingHosts\com.fursoy.vault"
+  "HKCU:\Software\BraveSoftware\Brave-Browser\NativeMessagingHosts\com.fursoy.vault"
+  "HKCU:\Software\Vivaldi\NativeMessagingHosts\com.fursoy.vault"
+  "HKCU:\Software\Opera Software\Opera Stable\NativeMessagingHosts\com.fursoy.vault"
+  "HKCU:\Software\Chromium\NativeMessagingHosts\com.fursoy.vault"
+)
 try {
   if (Test-Path -LiteralPath $manifestPath) { Copy-Item -LiteralPath $manifestPath -Destination $manifestBackup -Force }
   Move-Item -LiteralPath $manifestTemp -Destination $manifestPath -Force
-  New-Item -Path $registryPath -Force | Out-Null
-  Set-Item -Path $registryPath -Value $manifestPath
+  foreach ($registryPath in $registryPaths) {
+    New-Item -Path $registryPath -Force | Out-Null
+    Set-Item -Path $registryPath -Value $manifestPath
+  }
   if (Test-Path -LiteralPath $manifestBackup) { Remove-Item -LiteralPath $manifestBackup -Force }
 } catch {
   if (Test-Path -LiteralPath $manifestBackup) { Move-Item -LiteralPath $manifestBackup -Destination $manifestPath -Force }

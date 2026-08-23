@@ -74,11 +74,17 @@ for (const scope of ["example", "example.com.evil", "co.uk", "github.io", "999.1
 }
 assert.equal(normalizeProtectionScopeInput(" HTTPS://WWW.Example.COM/login?q=1 "), "example.com");
 assert.deepEqual(policyParameters("convenient"), {
-  leaseDurationMs: 14_400_000,
+  leaseDurationMs: 43_200_000,
   idleThresholdSeconds: 3_600,
   lastTabGraceMs: 900_000,
   monitoringOnly: false,
 });
+// Every non-monitor policy shares the lease backstop; what differs between them is how long you
+// may be away. Guards against the host and the extension drifting apart on either number.
+assert.equal(policyParameters("critical").leaseDurationMs, 43_200_000);
+assert.equal(policyParameters("balanced").leaseDurationMs, 43_200_000);
+assert.equal(policyParameters("critical").idleThresholdSeconds, 300);
+assert.equal(policyParameters("balanced").idleThresholdSeconds, 900);
 
 validateConfig(config([group()]));
 

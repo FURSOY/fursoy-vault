@@ -120,6 +120,7 @@ fn error_category(error: &FcpError) -> &'static str {
         FcpError::Format(_) => "vault_format",
         FcpError::Protocol(_) => "protocol",
         FcpError::Capability(_) => "capability",
+        FcpError::HelloNotConfigured => "hello_not_configured",
     }
 }
 

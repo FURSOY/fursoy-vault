@@ -93,6 +93,8 @@ function applyTranslations(locale: Locale): void {
   required<HTMLElement>("install-body").textContent = t(locale, "onboarding.install.body");
   installDownload.textContent = t(locale, "onboarding.install.downloadButton");
   installDownload.href = INSTALLER_DOWNLOAD_URL;
+  required<HTMLElement>("install-hello-notice").textContent = t(locale, "onboarding.install.helloNotice");
+  required<HTMLElement>("install-signing-notice").textContent = t(locale, "onboarding.install.signingNotice");
   installCheck.textContent = t(locale, "onboarding.install.checkButton");
   installSkip.textContent = t(locale, "onboarding.install.skip");
   required<HTMLElement>("recovery-title").textContent = t(locale, "onboarding.recovery.title");

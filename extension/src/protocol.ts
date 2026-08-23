@@ -44,11 +44,18 @@ export interface PolicyParameters {
   monitoringOnly: boolean;
 }
 
+/// Upper bound on a single lease, shared by every non-monitor policy. Long enough that active
+/// use never hits it; short enough that a session cannot stay exposed indefinitely if every
+/// other eviction trigger is missed. Must stay equal to LEASE_BACKSTOP_MS in the host's config.rs.
+const LEASE_BACKSTOP_MS = 43_200_000;
+
 export function policyParameters(level: PolicyLevel): PolicyParameters {
+  // What a policy really chooses is how long you may be away before the session re-locks; the
+  // lease is a backstop shared by all three rather than a schedule that interrupts active use.
   switch (level) {
-    case "critical": return { leaseDurationMs: 300_000, idleThresholdSeconds: 60, lastTabGraceMs: 0, monitoringOnly: false };
-    case "balanced": return { leaseDurationMs: 600_000, idleThresholdSeconds: 300, lastTabGraceMs: 120_000, monitoringOnly: false };
-    case "convenient": return { leaseDurationMs: 14_400_000, idleThresholdSeconds: 3_600, lastTabGraceMs: 900_000, monitoringOnly: false };
+    case "critical": return { leaseDurationMs: LEASE_BACKSTOP_MS, idleThresholdSeconds: 300, lastTabGraceMs: 0, monitoringOnly: false };
+    case "balanced": return { leaseDurationMs: LEASE_BACKSTOP_MS, idleThresholdSeconds: 900, lastTabGraceMs: 120_000, monitoringOnly: false };
+    case "convenient": return { leaseDurationMs: LEASE_BACKSTOP_MS, idleThresholdSeconds: 3_600, lastTabGraceMs: 900_000, monitoringOnly: false };
     case "monitor": return { leaseDurationMs: 0, idleThresholdSeconds: 0, lastTabGraceMs: 0, monitoringOnly: true };
   }
 }

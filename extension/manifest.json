@@ -3,7 +3,7 @@
   "minimum_chrome_version": "130",
   "name": "FURSOY Vault",
   "version": "0.5.9",
-  "description": "FURSOY Vault with multi-group protection and redacted user-mode monitoring.",
+  "description": "Malware doesn't need your password. It needs the cookies in your browser. Lock them away until your face or PIN opens them.",
   "icons": {
     "16": "assets/fursoy-vault-extension-icon.png",
     "32": "assets/fursoy-vault-extension-icon.png",

@@ -1,0 +1,5 @@
+# Renders the "Sponsor" button on the repository page. The GitHub Sponsors entry only works once
+# the account is enrolled and approved at github.com/sponsors; until then, keep it commented out
+# and use custom: so the button still points somewhere that works.
+github: [FURSOY]
+# custom: ["https://fursoy.com/support"]

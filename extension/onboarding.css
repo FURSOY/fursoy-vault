@@ -427,6 +427,28 @@ main {
   padding: 10px 12px;
 }
 
+/* Heads-up notes on the install step: prerequisites and the unsigned-installer warning, shown
+   before the user runs Setup rather than after they hit them. */
+.setup-hint {
+  color: var(--ink-muted);
+  font-size: .74rem;
+  line-height: 1.5;
+  margin: 10px 0 0;
+  padding-left: 14px;
+  position: relative;
+}
+
+.setup-hint::before {
+  background: var(--accent);
+  border-radius: 999px;
+  content: "";
+  height: 5px;
+  left: 2px;
+  position: absolute;
+  top: .5em;
+  width: 5px;
+}
+
 .recovery-panel {
   margin-top: 18px;
 }
