@@ -4,3 +4,6 @@
 /extension/node_modules/
 /extension/dist/
 /extension/target/
+# Store listing artwork: regenerated for each submission and uploaded to the dashboard by hand.
+# It takes no part in the build or the tests, so it stays out of the source history.
+/extension/store-assets/
