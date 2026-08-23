@@ -275,7 +275,8 @@ pub fn hex_decode(text: &str) -> FcpResult<Vec<u8>> {
         return Err(FcpError::Capability("hex string has odd length".into()));
     }
     let mut out = Vec::with_capacity(text.len() / 2);
-    for pair in text.chunks_exact(2) {
+    // The odd-length case was already rejected above, so `as_chunks` leaves no remainder.
+    for pair in text.as_chunks::<2>().0 {
         let high = hex_nibble(pair[0])?;
         let low = hex_nibble(pair[1])?;
         out.push((high << 4) | low);

@@ -243,9 +243,14 @@ fn get_u32(handle: NCRYPT_HANDLE, property: PCWSTR) -> FcpResult<u32> {
 
 fn get_utf16(handle: NCRYPT_HANDLE, property: PCWSTR) -> FcpResult<String> {
     let bytes = get_property(handle, property)?;
+    // `as_chunks` yields fixed-size arrays, so the pair goes straight into `from_ne_bytes` with no
+    // indexing. A trailing odd byte would be in `.1` and is dropped, which is correct here: a
+    // half code unit cannot be part of valid UTF-16.
     let units = bytes
-        .chunks_exact(2)
-        .map(|pair| u16::from_ne_bytes([pair[0], pair[1]]))
+        .as_chunks::<2>()
+        .0
+        .iter()
+        .map(|pair| u16::from_ne_bytes(*pair))
         .take_while(|unit| *unit != 0)
         .collect::<Vec<_>>();
     String::from_utf16(&units).map_err(|_| FcpError::Crypto("CNG UTF-16 property is invalid"))
