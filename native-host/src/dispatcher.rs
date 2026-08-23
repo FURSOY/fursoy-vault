@@ -10,6 +10,7 @@ use sha2::{Digest, Sha256};
 use crate::atomic_file::write_verified;
 use crate::audit::{AuditLogger, unix_ms};
 use crate::config::{AccountGroup, AccountGroupsConfig, LoadedConfig, PolicyLevel, StorePolicy};
+use crate::crypto::capability::{CapabilitySigner, PlatformAuthorizer};
 use crate::crypto::fill_random;
 use crate::crypto::hello::HelloAuthorizer;
 use crate::lease::metadata::{LeaseMetadata, LeaseMetadataStore};
@@ -100,7 +101,6 @@ struct GroupRuntime {
     lease: LeaseMetadata,
     operation_coordinator: OperationCoordinator,
     pending: Option<PendingOperation>,
-    hello_cache_expires_at: Option<u64>,
 }
 
 pub struct NativeHostApp {
@@ -141,7 +141,6 @@ fn build_group_runtime(paths: &DataPaths, definition: &AccountGroup) -> FcpResul
         lease,
         operation_coordinator,
         pending: None,
-        hello_cache_expires_at: None,
     })
 }
 
@@ -497,7 +496,7 @@ impl NativeHostApp {
         fill_random(&mut nonce)?;
         // The signed capability is deliberately not sent to the extension. Successful signing
         // is the local proof; only the selected opaque profile id crosses the protocol boundary.
-        authorizer.sign_fresh(CapabilityPayload {
+        authorizer.sign(CapabilityPayload {
             account_group_id: request.profile_id,
             operation: CapabilityOperation::RecoverProfile,
             expiry_unix_ms: now.saturating_add(60_000),
@@ -702,7 +701,6 @@ impl NativeHostApp {
         // persisted config; otherwise lease durations would keep following the old level.
         if let Some(runtime) = self.groups.get_mut(&request.account_group_id) {
             runtime.policy = request.policy_level;
-            runtime.hello_cache_expires_at = None;
             if entering_monitor {
                 runtime.transactions.commit_staged_invalidation()?;
                 runtime.lease.state = GroupState::Uninitialized;
@@ -832,9 +830,7 @@ impl GroupRuntime {
                 negotiated_protocol,
             ),
             Message::InjectResult(result) => self.handle_inject_result(result, audit),
-            Message::EvictRequest(request) => {
-                self.handle_evict_begin(request, audit, hello_authorizer)
-            }
+            Message::EvictRequest(request) => self.handle_evict_begin(request, audit),
             Message::CookiesSnapshotChunk(snapshot) if negotiated_protocol == PROTOCOL_VERSION => {
                 let sequence = snapshot.operation_sequence.ok_or_else(|| {
                     FcpError::Protocol("v7 snapshot lacks operation sequence".into())
@@ -889,9 +885,7 @@ impl GroupRuntime {
                 self.handle_remove_prepare(request)
             }
             Message::SessionInvalidate(request) => self.handle_session_invalidate(request, audit),
-            Message::AuthCacheClear(request) => {
-                self.handle_auth_cache_clear(request, audit, hello_authorizer)
-            }
+            Message::AuthCacheClear(request) => self.handle_auth_cache_clear(request, audit),
             _ => Err(FcpError::Protocol(
                 "message direction is host-to-extension only".into(),
             )),
@@ -1023,50 +1017,27 @@ impl GroupRuntime {
             return Ok(vec![self.lease_deny("group_not_sealed")]);
         }
         let now = unix_ms()?;
-        let cache_duration = self.policy.parameters().hello_cache_ms.unwrap_or(0);
         if hello_authorizer.is_none() {
-            *hello_authorizer = Some(HelloAuthorizer::open_or_create(hello_credential)?);
+            *hello_authorizer = Some(PlatformAuthorizer::open_or_create(hello_credential)?);
         }
-        let mut use_cached = cache_duration > 0
-            && self
-                .hello_cache_expires_at
-                .is_some_and(|expiry| expiry > now)
-            && hello_authorizer
-                .as_ref()
-                .is_some_and(|value| value.has_cached_handle(self.id));
-        let authorization = match self.transactions.authorize_inject(
-            hello_authorizer.as_ref().ok_or_else(|| {
-                FcpError::Capability("Windows Hello authorizer was not initialized".into())
-            })?,
-            use_cached,
-        ) {
+        let authorizer = hello_authorizer.as_mut().ok_or_else(|| {
+            FcpError::Capability("platform authorizer was not initialized".into())
+        })?;
+        let authorization = match self.transactions.authorize_inject(authorizer) {
             Ok(value) => value,
-            Err(error) if HelloAuthorizer::is_missing_credential_error(&error) => {
-                // Windows can remove a platform credential independently (Hello reset, account
-                // recovery, TPM maintenance). Re-enroll only for the provider's not-found code;
-                // user cancellation and verification failures remain hard failures.
-                *hello_authorizer = Some(HelloAuthorizer::recreate(hello_credential)?);
-                use_cached = false;
-                self.transactions.authorize_inject(
-                    hello_authorizer
-                        .as_ref()
-                        .expect("recreated Hello authorizer"),
-                    false,
-                )?
+            Err(error) => {
+                // Whether this error means the platform discarded our credential — and so whether
+                // re-enrolling is safe — is the backend's judgement, not the dispatcher's. Retry
+                // exactly once, and only when the backend actually re-enrolled.
+                if authorizer.recover_if_credential_vanished(&error, hello_credential)? {
+                    self.transactions.authorize_inject(authorizer)?
+                } else {
+                    return Err(error);
+                }
             }
-            Err(error) => return Err(error),
         };
         let capability_sequence = authorization.monotonic_sequence();
         let payload = self.transactions.read_for_inject(authorization)?;
-        if cache_duration > 0 {
-            self.hello_cache_expires_at = now.checked_add(cache_duration);
-        } else {
-            self.hello_cache_expires_at = None;
-            hello_authorizer
-                .as_ref()
-                .expect("Hello authorizer exists")
-                .clear_cached_handle(self.id);
-        }
         let expiry = now
             .checked_add(duration_ms)
             .ok_or_else(|| FcpError::Protocol("lease expiry overflow".into()))?;
@@ -1084,11 +1055,9 @@ impl GroupRuntime {
             "inject",
             "authorized",
             None,
-            Some(if use_cached {
-                "hello_cached"
-            } else {
-                "hello_fresh"
-            }),
+            // Platform-neutral: every authorization is a fresh user verification since the
+            // gesture-cache path was removed (ADR-021 made it inert, ADR-031 deleted it).
+            Some("user_verified"),
         )?;
         let cookie_count = u32::try_from(payload.cookies.len())
             .map_err(|_| FcpError::Protocol("inject cookie count exceeds u32".into()))?;
@@ -1166,17 +1135,15 @@ impl GroupRuntime {
         &mut self,
         request: AuthCacheClear,
         audit: &AuditLogger,
-        hello_authorizer: &mut Option<HelloAuthorizer>,
     ) -> FcpResult<Vec<Message>> {
         if request.reason != "locked" && request.reason != "policy_changed" {
             return Err(FcpError::Protocol(
                 "unsupported auth cache clear reason".into(),
             ));
         }
-        self.hello_cache_expires_at = None;
-        if let Some(authorizer) = hello_authorizer.as_ref() {
-            authorizer.clear_cached_handle(self.id);
-        }
+        // There is no gesture cache left to clear (ADR-031). The message is still handled
+        // because the extension sends it on lock and the audit entry records that the session was
+        // locked, which is worth keeping.
         audit.record(
             self.id,
             "auth_cache",
@@ -1223,18 +1190,11 @@ impl GroupRuntime {
         &mut self,
         request: EvictRequest,
         audit: &AuditLogger,
-        hello_authorizer: &mut Option<HelloAuthorizer>,
     ) -> FcpResult<Vec<Message>> {
         if request.phase != EvictPhase::Begin {
             return Err(FcpError::Protocol(
                 "extension may send only evict.request phase=begin".into(),
             ));
-        }
-        if request.reason == "locked" {
-            self.hello_cache_expires_at = None;
-            if let Some(authorizer) = hello_authorizer.as_ref() {
-                authorizer.clear_cached_handle(self.id);
-            }
         }
         if self.pending.is_some() {
             return Err(FcpError::Protocol(

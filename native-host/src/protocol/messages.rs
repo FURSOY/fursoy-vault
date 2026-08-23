@@ -86,13 +86,22 @@ impl CapabilityPayload {
 #[serde(deny_unknown_fields)]
 pub struct SignedCapability {
     pub payload: CapabilityPayload,
-    /// Raw (r||s) ECDSA P-256 signature produced by WebAuthNAuthenticatorGetAssertion.
+    /// Raw (r||s) ECDSA P-256 signature. Both platform backends produce this same 64-byte form.
     pub signature: Vec<u8>,
-    /// The authenticatorData bytes returned alongside `signature`. Verification needs these
-    /// because the WebAuthn assertion signs `authenticatorData || SHA-256(clientDataJSON)`, not
-    /// the payload bytes directly, and `authenticatorData` carries a signCount that cannot be
-    /// recomputed from the payload alone.
-    pub authenticator_data: Vec<u8>,
+    /// Backend-defined material that the signature covers in addition to the payload, and that
+    /// cannot be recomputed from the payload alone. Only the backend that produced it knows how to
+    /// interpret it, so only the backend's own `verify_signature` reads it.
+    ///
+    /// The Windows Hello backend puts WebAuthn `authenticatorData` here: the assertion signs
+    /// `authenticatorData || SHA-256(clientDataJSON)` rather than the payload bytes, and the RP-id
+    /// hash and user-verified flag it carries are what prove a user was actually verified. A
+    /// TPM-backed authorizer leaves this empty and has nothing to check, because a key created
+    /// with an authValue cannot sign at all unless the PIN was supplied — verification is
+    /// structural there rather than asserted in the signed bytes.
+    ///
+    /// This never leaves the host process: it is not persisted (`CapabilityLedger` stores the
+    /// unsigned payload) and never crosses the protocol, so backends may define it freely.
+    pub proof_context: Vec<u8>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]

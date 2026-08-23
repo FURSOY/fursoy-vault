@@ -29,7 +29,7 @@ use windows::Win32::UI::WindowsAndMessaging::GetForegroundWindow;
 use windows::core::PCWSTR;
 
 use crate::atomic_file::write_verified;
-use crate::crypto::capability::{CapabilitySigner, CapabilityVerifier};
+use crate::crypto::capability::{CapabilitySigner, CapabilityVerifier, PlatformAuthorizer};
 use crate::crypto::fill_random;
 use crate::crypto::webauthn_codec::{
     der_ecdsa_signature_to_raw, hex_decode, hex_encode, parse_attested_credential,
@@ -86,11 +86,9 @@ struct CredentialRegistry {
     public_key_y_hex: String,
 }
 
-impl HelloAuthorizer {
-    /// Opens an already-enrolled credential without mutating or replacing it. Recovery must
-    /// prove access to the selected old profile; silently creating a new credential would turn
-    /// a corrupt/missing registry into an authorization bypass.
-    pub fn open_existing(credential_path: &Path) -> FcpResult<Self> {
+impl PlatformAuthorizer for HelloAuthorizer {
+    /// Opens an already-enrolled credential without mutating or replacing it.
+    fn open_existing(credential_path: &Path) -> FcpResult<Self> {
         let apartment = ComApartment::initialize()?;
         let (credential_id, public_key_x, public_key_y) = load_registry(credential_path)?;
         Ok(Self {
@@ -101,7 +99,7 @@ impl HelloAuthorizer {
         })
     }
 
-    pub fn open_or_create(credential_path: &Path) -> FcpResult<Self> {
+    fn open_or_create(credential_path: &Path) -> FcpResult<Self> {
         let apartment = ComApartment::initialize()?;
         if credential_path.exists() {
             match load_registry(credential_path) {
@@ -123,7 +121,26 @@ impl HelloAuthorizer {
         create_authorizer(apartment, credential_path)
     }
 
-    pub fn recreate(credential_path: &Path) -> FcpResult<Self> {
+    /// Windows can remove a platform credential independently of this app (Hello reset, account
+    /// recovery, TPM maintenance). `hello_credential_missing` is the only signal that means that;
+    /// a user cancelling the prompt or failing verification produces a different error and must
+    /// stay a hard failure, or a refused check could be retried into a fresh credential.
+    fn recover_if_credential_vanished(
+        &mut self,
+        error: &FcpError,
+        credential_path: &Path,
+    ) -> FcpResult<bool> {
+        if !matches!(error, FcpError::Capability(message) if message == "hello_credential_missing")
+        {
+            return Ok(false);
+        }
+        *self = Self::recreate(credential_path)?;
+        Ok(true)
+    }
+}
+
+impl HelloAuthorizer {
+    fn recreate(credential_path: &Path) -> FcpResult<Self> {
         let apartment = ComApartment::initialize()?;
         if credential_path.exists() {
             quarantine_registry(credential_path)?;
@@ -131,30 +148,11 @@ impl HelloAuthorizer {
         create_authorizer(apartment, credential_path)
     }
 
-    pub fn is_missing_credential_error(error: &FcpError) -> bool {
-        matches!(error, FcpError::Capability(message) if message == "hello_credential_missing")
-    }
-
     /// Signs `payload` with a fresh Windows Hello gesture. `WebAuthNAuthenticatorGetAssertion` is
-    /// stateless — unlike the WinRT `KeyCredentialManager` handle this replaced, there is no
-    /// short window in which a repeat call skips the prompt, so every call here shows UI. Kept as
-    /// two names (`sign_fresh`/`sign_cached`) purely so call sites that predate this — and that
-    /// may one day gain a real app-level caching layer — do not need to change.
-    pub fn sign_fresh(&self, payload: CapabilityPayload) -> FcpResult<SignedCapability> {
-        self.sign(payload)
-    }
-
-    pub fn sign_cached(&self, payload: CapabilityPayload) -> FcpResult<SignedCapability> {
-        self.sign(payload)
-    }
-
-    pub fn has_cached_handle(&self, _group_id: uuid::Uuid) -> bool {
-        false
-    }
-
-    pub fn clear_cached_handle(&self, _group_id: uuid::Uuid) {}
-
-    fn sign(&self, payload: CapabilityPayload) -> FcpResult<SignedCapability> {
+    /// stateless — unlike the WinRT `KeyCredentialManager` backend this replaced, there is no
+    /// short window in which a repeat call skips the prompt, so every call here shows UI
+    /// (see ADR-021).
+    fn sign_assertion(&self, payload: CapabilityPayload) -> FcpResult<SignedCapability> {
         payload.validate_shape()?;
         let canonical = payload.canonical_bytes();
         let client_data_json = client_data_json(&canonical, "webauthn.get");
@@ -255,7 +253,7 @@ impl HelloAuthorizer {
         let signed = SignedCapability {
             payload,
             signature: signature.to_vec(),
-            authenticator_data,
+            proof_context: authenticator_data,
         };
         // Immediate self-check: catches an encoding mistake here rather than at consume time.
         self.verify_signature(&signed)?;
@@ -430,14 +428,14 @@ fn hello_user_id(registry_path: &Path) -> FcpResult<[u8; 16]> {
 
 impl CapabilitySigner for HelloAuthorizer {
     fn sign(&self, payload: CapabilityPayload) -> FcpResult<SignedCapability> {
-        self.sign_fresh(payload)
+        self.sign_assertion(payload)
     }
 }
 
 impl CapabilityVerifier for HelloAuthorizer {
     fn verify_signature(&self, capability: &SignedCapability) -> FcpResult<()> {
         capability.payload.validate_shape()?;
-        validate_authenticator_context(&capability.authenticator_data)?;
+        validate_authenticator_context(&capability.proof_context)?;
         let signature: &[u8; 64] = capability
             .signature
             .as_slice()
@@ -446,7 +444,7 @@ impl CapabilityVerifier for HelloAuthorizer {
         let client_data_json =
             client_data_json(&capability.payload.canonical_bytes(), "webauthn.get");
         let client_data_hash = Sha256::digest(&client_data_json);
-        let mut message = capability.authenticator_data.clone();
+        let mut message = capability.proof_context.clone();
         message.extend_from_slice(&client_data_hash);
         let digest = Sha256::digest(&message);
         verify_ecdsa_p256(&self.public_key_x, &self.public_key_y, &digest, signature)

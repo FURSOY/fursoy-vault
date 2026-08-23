@@ -1,4 +1,6 @@
-name: release-quality
+# Quality gates only: this workflow never publishes anything. Releasing is publish-release.yml,
+# which runs on a version tag and nothing else.
+name: quality-gates
 
 on:
   push:

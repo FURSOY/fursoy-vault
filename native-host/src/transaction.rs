@@ -3,7 +3,7 @@ use uuid::Uuid;
 use crate::atomic_file::{DurableWriteFailure, DurableWriteResult};
 use crate::audit::unix_ms;
 use crate::crypto::aead::SecretDek;
-use crate::crypto::hello::HelloAuthorizer;
+use crate::crypto::capability::PlatformAuthorizer;
 use crate::crypto::platform_kek::{KEK_KEY_ID, PlatformKek};
 use crate::lease::state_machine::{CapabilityLedger, ConsumedCapability};
 use crate::lease::store::FileCapabilityLedgerStore;
@@ -87,12 +87,11 @@ impl VaultTransactions {
         })
     }
 
-    /// Displays/obtains Windows Hello authorization, verifies all five bound fields, and durably
+    /// Obtains platform authorization from the user, verifies all five bound fields, and durably
     /// consumes sequence+nonce. Only the returned linear token can enter an inject vault read.
     pub fn authorize_inject(
         &mut self,
-        authorizer: &HelloAuthorizer,
-        use_cached_hello: bool,
+        authorizer: &impl PlatformAuthorizer,
     ) -> FcpResult<ConsumedCapability> {
         let now = unix_ms()?;
         let payload = self.capability_ledger.reserve(
@@ -101,11 +100,7 @@ impl VaultTransactions {
             CAPABILITY_LIFETIME_MS,
             &mut self.capability_store,
         )?;
-        let signed = match if use_cached_hello && authorizer.has_cached_handle(self.group_id) {
-            authorizer.sign_cached(payload)
-        } else {
-            authorizer.sign_fresh(payload)
-        } {
+        let signed = match authorizer.sign(payload) {
             Ok(signed) => signed,
             Err(error) => {
                 self.capability_ledger

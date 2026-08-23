@@ -49,7 +49,6 @@ const LEASE_BACKSTOP_MS: u64 = 12 * 60 * 60_000;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct PolicyParameters {
-    pub hello_cache_ms: Option<u64>,
     pub lease_duration_ms: u64,
     pub idle_threshold_seconds: u64,
     pub last_tab_grace_ms: u64,
@@ -65,28 +64,24 @@ impl PolicyLevel {
             // it bounds exposure if idle detection never fires (a suspended service worker, an
             // unreliable chrome.idle signal) instead of interrupting anyone in practice.
             Self::Critical => PolicyParameters {
-                hello_cache_ms: Some(0),
                 lease_duration_ms: LEASE_BACKSTOP_MS,
                 idle_threshold_seconds: 5 * 60,
                 last_tab_grace_ms: 0,
                 monitoring_only: false,
             },
             Self::Balanced => PolicyParameters {
-                hello_cache_ms: Some(10 * 60_000),
                 lease_duration_ms: LEASE_BACKSTOP_MS,
                 idle_threshold_seconds: 15 * 60,
                 last_tab_grace_ms: 2 * 60_000,
                 monitoring_only: false,
             },
             Self::Convenient => PolicyParameters {
-                hello_cache_ms: Some(4 * 60 * 60_000),
                 lease_duration_ms: LEASE_BACKSTOP_MS,
                 idle_threshold_seconds: 60 * 60,
                 last_tab_grace_ms: 15 * 60_000,
                 monitoring_only: false,
             },
             Self::Monitor => PolicyParameters {
-                hello_cache_ms: None,
                 lease_duration_ms: 0,
                 idle_threshold_seconds: 0,
                 last_tab_grace_ms: 0,

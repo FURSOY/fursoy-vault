@@ -3720,3 +3720,52 @@ ve karşılığında yedek güvenlik ağını tamamen ortadan kaldırırdı.
 (`LEASE_BACKSTOP_MS`, `PolicyLevel::parameters`) ve [extension/src/protocol.ts](extension/src/protocol.ts)
 (`policyParameters`). Eklenti tahliye alarmlarını kendi kopyasından sürdüğü için ikisi kaymamalıdır;
 her iki tarafta da değerleri sabitleyen testler eklendi.
+
+---
+
+### ADR-031 — Yetkilendirici `PlatformAuthorizer` arkasına alındı ve ölü jest cache'i silindi
+
+**Tarih:** 2026-08-23 · **Durum:** Kabul edildi · **Etkilenen:** [ADR-021](#adr-021--windows-hello-imzalama-arka-ucu-webauthndlle-taşınmıştır), Linux yol haritası
+
+**Bağlam.** Dispatcher, kullanıcı doğrulamasını **ismen** tanıyordu: somut `HelloAuthorizer` tipini
+tutuyor, Windows'a özgü bir hata dizesini (`hello_credential_missing`) tanıyarak yeniden kayıt
+kararı veriyor ve platformun kimlik yaşam döngüsünü kendisi yönetiyordu. Bu, Linux desteğinin
+kasa/lease mantığının ortasındaki otuz küsur noktaya dokunmasını gerektirirdi.
+
+Linux prototipi ([poc/linux-authorizer](poc/linux-authorizer)) hem swtpm'de hem CachyOS misafirindeki
+gerçek vTPM'de çalıştırıldı ve **soyutlamanın sanılandan küçük olduğunu** gösterdi: doğrulama zaten
+`impl CapabilityVerifier` üzerinden soyuttu, imza alanı iki arka uçta da aynı 64 ham bayt, ve
+`authenticator_data`'yı yorumlayan kod zaten Windows arka ucunun içindeydi.
+
+**Karar.**
+
+- `PlatformAuthorizer` trait'i tanımlandı: `CapabilitySigner + CapabilityVerifier` üzerine kimlik
+  yaşam döngüsünü (`open_or_create`, `open_existing`, `recover_if_credential_vanished`) ekliyor.
+- **Kimliğin kaybolduğuna karar verme yetkisi arka uca geçti.** Dispatcher artık hangi hata kodunun
+  "platform kimliği sildi" demek olduğunu bilmiyor; bunu bilen tarafa soruyor ve yalnızca arka uç
+  gerçekten yeniden kayıt yaptığında bir kez tekrar deniyor. Bu ayrım güvenlik açısından
+  gereklidir: kullanıcının iptal ettiği ya da doğrulamayı geçemediği bir istek, yeniden kayda
+  çevrilebilir olsaydı reddedilmiş bir kontrol taze bir kimliğe dönüştürülebilirdi.
+- `SignedCapability.authenticator_data` → `proof_context`. Tip değişmedi; anlamı "arka ucun
+  tanımladığı, imzanın kapsadığı ek bayt dizisi" olarak genelleştirildi. Windows WebAuthn verisini
+  koyup RP-id ve user-verified bayrağını kontrol eder; TPM arka ucu boş bırakır ve kontrol etmez,
+  çünkü orada doğrulama beyan edilen değil **yapısal** bir gerçektir — `authValue` ile oluşturulmuş
+  bir anahtar PIN olmadan hiç imzalayamaz. Bu alan host sürecinden hiç çıkmadığı (diske yazılmaz,
+  protokole girmez) için genelleştirmenin protokol ya da kasa maliyeti yoktur.
+- **Ölü jest cache'i tamamen silindi.** ADR-021 `hello_cache_ms`'i işlevsiz bırakmış ama kodda
+  saklamıştı. `has_cached_handle` her zaman `false` döndüğü için `sign_cached` hiç çağrılmıyor,
+  `use_cached` hiç doğru olmuyordu. Silinenler: `sign_fresh`/`sign_cached`/`has_cached_handle`/
+  `clear_cached_handle`, `authorize_inject`'in `use_cached_hello` parametresi, `GroupRuntime`'ın
+  `hello_cache_expires_at` alanı ve `PolicyParameters.hello_cache_ms`. Ölü bir kavramın etrafına
+  trait tasarlanamazdı.
+
+**Kabul edilen sınırlar.** `auth.cache.clear` protokol mesajı korunuyor: eklenti kilitlenmede
+gönderiyor ve artık temizlenecek bir cache olmasa da audit kaydı oturumun kilitlendiğini gösterdiği
+için değerli. Mesajı protokolden çıkarmak eklenti ve host'un birlikte sürüm atlamasını gerektirirdi.
+
+Inject audit'inin `detail_code`'u `hello_fresh`/`hello_cached` yerine `user_verified` oldu. Eski
+kayıtlar eski değerleri taşımaya devam eder; kodun okuduğu bir dize değildir, yalnızca deney
+belgelerinde geçer.
+
+**Doğrulama.** Windows davranışı değişmedi: 114 Rust testinin tamamı ve clippy refactor öncesi ve
+sonrasında aynı sonucu veriyor.

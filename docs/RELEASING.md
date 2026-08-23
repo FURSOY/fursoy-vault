@@ -12,7 +12,7 @@ the remaining `releases.win.json`/versioned package assets are the automatic-upd
 
 1. Update every project version and release-facing document, then merge the tested commit to
    `main`.
-2. Confirm the normal `release-quality` workflow passes on that commit.
+2. Confirm the normal `quality-gates` workflow passes on that commit.
 3. Create an annotated tag. Its message becomes the GitHub Release description:
 
    ```text
