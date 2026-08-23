@@ -8,7 +8,7 @@ use zeroize::Zeroizing;
 use super::model::Digest32;
 use crate::atomic_file;
 use crate::crypto::fill_random;
-use crate::{FcpError, FcpResult, dpapi};
+use crate::{FcpError, FcpResult, local_secret};
 
 const SNAPSHOT_KEY_BYTES: usize = 32;
 
@@ -27,7 +27,7 @@ pub(crate) struct SnapshotTagger {
 impl SnapshotTagger {
     pub(crate) fn load_or_create(path: &Path, journal_exists: bool) -> FcpResult<Self> {
         if path.exists() {
-            let plaintext = Zeroizing::new(dpapi::unprotect(&fs::read(path)?)?);
+            let plaintext = Zeroizing::new(local_secret::unprotect(&fs::read(path)?)?);
             let key = plaintext
                 .as_slice()
                 .try_into()
@@ -43,9 +43,9 @@ impl SnapshotTagger {
         }
         let mut key = Zeroizing::new([0u8; SNAPSHOT_KEY_BYTES]);
         fill_random(key.as_mut())?;
-        let protected = dpapi::protect(key.as_ref())?;
+        let protected = local_secret::protect(key.as_ref())?;
         atomic_file::write_verified(path, &protected, |candidate| {
-            let recovered = Zeroizing::new(dpapi::unprotect(candidate)?);
+            let recovered = Zeroizing::new(local_secret::unprotect(candidate)?);
             if recovered.as_slice() != key.as_ref() {
                 return Err(FcpError::Crypto(
                     "snapshot tag key write verification failed",

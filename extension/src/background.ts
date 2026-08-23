@@ -106,6 +106,10 @@ const OPERATION_REFERENCE_KEY = "fcp-operation-reference-v1";
 let loadedConfig: LoadedConfig | undefined;
 let configWaiters: Array<(value: LoadedConfig) => void> = [];
 let recoveryCandidates: RecoveryCandidate[] = [];
+// Optional, unlike REQUIRED_CAPABILITIES: a host that cannot observe processes is fully usable,
+// it just must not be offered the monitor-only level. Assumed absent until a handshake says
+// otherwise, so a stale value can never make the UI offer a level that would do nothing.
+let hostSupportsMonitoring = false;
 // Intentionally memory-only: a native port keeps the worker alive during transfer, while a
 // restart abandons the lease and lets handshake reconciliation fail closed. Cookie values never
 // enter extension storage merely to support chunk assembly.
@@ -283,6 +287,7 @@ async function handlePopupMessage(message: PopupMessage): Promise<Record<string,
     return {
       ok: true, connected: client?.ready === true, host,
       suggestedScope: guessScope(host), groups, recoveryCandidates, error, alert,
+      supportsMonitoring: hostSupportsMonitoring,
     };
   }
   if (message.type === "popup.log") {
@@ -506,6 +511,9 @@ async function openNativeConnection(): Promise<void> {
   nextClient = new NativeClient(await getOrCreateProfileId(), loadedConfig?.digest, handleHostMessage, flushPendingAdd, async () => {
     if (client !== nextClient) return;
     monitorDelivery.resetConnection();
+    // Re-learned from the next handshake. A host can be replaced by a different build across a
+    // reconnect, so carrying the old answer forward could offer a level the new one cannot honour.
+    hostSupportsMonitoring = false;
     // Scheduled first and unconditionally: awaitConfig() below only resolves once a config has
     // ever been adopted (cache or a successful handshake), which never happens if the very first
     // connection attempt in a profile fails before any config exists — gating the retry behind it
@@ -728,6 +736,7 @@ async function handleHandshakeAck(payload: Record<string, unknown>): Promise<voi
   if (!Array.isArray(hostCapabilities) || !REQUIRED_CAPABILITIES.every((capability) => hostCapabilities.includes(capability))) {
     throw new Error("native host capability mismatch");
   }
+  hostSupportsMonitoring = hostCapabilities.includes("process_monitoring");
   if (!Array.isArray(payload.recovery_candidates)) throw new Error("handshake recovery candidates must be an array");
   recoveryCandidates = payload.recovery_candidates.map(parseRecoveryCandidate);
   await adoptConfig(payload.config as AccountGroupsConfig, requiredString(payload, "config_digest"));

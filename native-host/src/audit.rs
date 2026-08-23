@@ -10,7 +10,7 @@ use zeroize::Zeroizing;
 
 use crate::atomic_file;
 use crate::crypto::fill_random;
-use crate::dpapi;
+use crate::local_secret;
 use crate::{FcpError, FcpResult};
 
 const AUDIT_SCHEMA_VERSION: u8 = 2;
@@ -423,7 +423,7 @@ impl AuditLogger {
             mac: encode_hex(mac),
         };
         let plaintext = Zeroizing::new(serde_json::to_vec(&anchor)?);
-        persist_dpapi_file(&anchor_path(&self.directory), &plaintext)
+        persist_protected_file(&anchor_path(&self.directory), &plaintext)
     }
 
     fn compact_expired_segments(&self) -> FcpResult<()> {
@@ -460,7 +460,7 @@ impl AuditLogger {
 fn load_or_create_key(directory: &Path) -> FcpResult<Zeroizing<[u8; AUDIT_KEY_BYTES]>> {
     let path = key_path(directory);
     if path.exists() {
-        let plaintext = Zeroizing::new(dpapi::unprotect(&fs::read(path)?)?);
+        let plaintext = Zeroizing::new(local_secret::unprotect(&fs::read(path)?)?);
         let key: [u8; AUDIT_KEY_BYTES] = plaintext
             .as_slice()
             .try_into()
@@ -477,7 +477,7 @@ fn load_or_create_key(directory: &Path) -> FcpResult<Zeroizing<[u8; AUDIT_KEY_BY
     }
     let mut key = Zeroizing::new([0u8; AUDIT_KEY_BYTES]);
     fill_random(key.as_mut())?;
-    persist_dpapi_file(&path, key.as_ref())?;
+    persist_protected_file(&path, key.as_ref())?;
     Ok(key)
 }
 
@@ -486,7 +486,7 @@ fn load_checkpoint(directory: &Path) -> FcpResult<Option<AuditCheckpoint>> {
     if !path.exists() {
         return Ok(None);
     }
-    let plaintext = Zeroizing::new(dpapi::unprotect(&fs::read(path)?)?);
+    let plaintext = Zeroizing::new(local_secret::unprotect(&fs::read(path)?)?);
     let checkpoint: AuditCheckpoint = serde_json::from_slice(&plaintext)?;
     if checkpoint.schema_version != AUDIT_SCHEMA_VERSION || decode_mac(&checkpoint.mac).is_err() {
         return Err(FcpError::Format("audit checkpoint is malformed".into()));
@@ -496,7 +496,7 @@ fn load_checkpoint(directory: &Path) -> FcpResult<Option<AuditCheckpoint>> {
 
 fn persist_checkpoint(directory: &Path, checkpoint: &AuditCheckpoint) -> FcpResult<()> {
     let plaintext = Zeroizing::new(serde_json::to_vec(checkpoint)?);
-    persist_dpapi_file(&checkpoint_path(directory), &plaintext)
+    persist_protected_file(&checkpoint_path(directory), &plaintext)
 }
 
 fn load_anchor(directory: &Path) -> FcpResult<Option<AuditAnchor>> {
@@ -509,7 +509,7 @@ fn load_anchor(directory: &Path) -> FcpResult<Option<AuditAnchor>> {
         }
         return Ok(None);
     }
-    let plaintext = Zeroizing::new(dpapi::unprotect(&fs::read(path)?)?);
+    let plaintext = Zeroizing::new(local_secret::unprotect(&fs::read(path)?)?);
     let anchor: AuditAnchor = serde_json::from_slice(&plaintext)?;
     if anchor.schema_version != AUDIT_SCHEMA_VERSION || decode_mac(&anchor.mac).is_err() {
         return Err(FcpError::Format("audit anchor is malformed".into()));
@@ -594,10 +594,10 @@ struct VerifiedTail {
     mac: [u8; 32],
 }
 
-fn persist_dpapi_file(path: &Path, plaintext: &[u8]) -> FcpResult<()> {
-    let protected = dpapi::protect(plaintext)?;
+fn persist_protected_file(path: &Path, plaintext: &[u8]) -> FcpResult<()> {
+    let protected = local_secret::protect(plaintext)?;
     atomic_file::write_verified(path, &protected, |candidate| {
-        let recovered = Zeroizing::new(dpapi::unprotect(candidate)?);
+        let recovered = Zeroizing::new(local_secret::unprotect(candidate)?);
         if recovered.as_slice() != plaintext {
             return Err(FcpError::Crypto("DPAPI write verification failed"));
         }
@@ -666,6 +666,9 @@ fn verify_mac(key: &[u8], bytes: &[u8], expected: &[u8; 32]) -> FcpResult<()> {
 }
 
 fn key_path(directory: &Path) -> PathBuf {
+    // The ".dpapi" suffix is historical: it named the Windows mechanism, and the Linux backend
+    // seals to the TPM instead. Renaming would orphan every existing installation's audit chain
+    // for a cosmetic gain, so the extension stays as the on-disk name on both platforms.
     directory.join("audit-key.dpapi")
 }
 

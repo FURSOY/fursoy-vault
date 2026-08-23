@@ -2,13 +2,17 @@ use std::io;
 use std::path::Path;
 
 fn main() {
+    #[cfg(windows)]
     fursoy_native_host::update::run_startup_hooks();
     let args = std::env::args().skip(1).collect::<Vec<_>>();
     if args.as_slice() == ["--check-update"] {
+        #[cfg(windows)]
         if let Err(error) = fursoy_native_host::update::check_and_apply() {
             eprintln!("companion update check failed: {error}");
             std::process::exit(1);
         }
+        #[cfg(not(windows))]
+        eprintln!("this build does not self-update; use your package manager");
         return;
     }
     // Setup launches the installed entry point once after its install callback. Registration is
@@ -44,6 +48,7 @@ fn main() {
         eprintln!("native host terminated fail-closed: {error}");
         std::process::exit(1);
     }
+    #[cfg(windows)]
     fursoy_native_host::update::trigger_background_check();
     let stdin = io::stdin();
     let stdout = io::stdout();

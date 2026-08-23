@@ -1,4 +1,4 @@
-import { enhanceSelect, enhanceSelects } from "./custom-select.js";
+import { enhanceSelect, enhanceSelects, setOptionAvailable } from "./custom-select.js";
 import { translate, type Locale } from "./i18n.js";
 import { currentLocale } from "./locale.js";
 import { isValidProtectionScope, normalizeProtectionScopeInput } from "./protocol.js";
@@ -34,7 +34,15 @@ interface PopupState {
   pending?: boolean;
   requestId?: string;
   reconnecting?: boolean;
+  /// Whether the host can observe processes at all. Absent or false means the monitor-only level
+  /// would silently do nothing, so it is not offered.
+  supportsMonitoring?: boolean;
 }
+
+/// Mirrors the last handshake. Rows are rebuilt on every refresh, and each carries its own policy
+/// select, so the answer has to be readable at the point a row is built rather than passed down
+/// through every call in between.
+let supportsMonitoring = false;
 
 
 let locale: Locale = "tr";
@@ -265,6 +273,8 @@ function policyOf(groupId: string): string | undefined {
 async function refresh(): Promise<void> {
   const state = await send({ type: "popup.state" }) ?? {};
   connectionWarning.hidden = state.connected === true;
+  supportsMonitoring = state.supportsMonitoring === true;
+  setOptionAvailable(policySelect, "monitor", supportsMonitoring);
   companionState.classList.toggle("offline", state.connected !== true);
   const companionLabel = companionState.querySelector<HTMLElement>("b");
   if (companionLabel !== null) companionLabel.textContent = state.connected === true ? t("options.connectedLabel") : t("options.disconnectedLabel");
@@ -353,6 +363,7 @@ function policyCell(group: GroupSummary): HTMLTableCellElement {
   select.addEventListener("change", () => { void changePolicy(group, select); });
   container.append(select);
   enhanceSelect(select);
+  setOptionAvailable(select, "monitor", supportsMonitoring);
   return container;
 }
 

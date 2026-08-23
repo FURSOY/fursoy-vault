@@ -117,6 +117,8 @@ fn error_category(error: &FcpError) -> &'static str {
         FcpError::Json(_) => "json",
         #[cfg(windows)]
         FcpError::Windows(_) => "windows_provider",
+        #[cfg(unix)]
+        FcpError::Tpm(_) => "tpm_provider",
         FcpError::Crypto(_) => "crypto",
         FcpError::Format(_) => "vault_format",
         FcpError::Protocol(_) => "protocol",

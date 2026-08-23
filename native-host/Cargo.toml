@@ -43,3 +43,12 @@ windows = { version = "0.62.2", features = [
 [target.'cfg(unix)'.dependencies]
 getrandom = "0.3"
 libc = "0.2"
+tss-esapi = "7"
+p256 = { version = "0.13", features = ["ecdsa"] }
+
+[features]
+# Development only: lets the Linux KEK talk to a software TPM simulator instead of a real device.
+# Never enable it for a build anyone else runs — the whole point of the KEK is that the private
+# half is held by hardware, and a simulator gives that guarantee up while still looking like it
+# works. Release builds must not pass --features.
+tpm-simulator = []

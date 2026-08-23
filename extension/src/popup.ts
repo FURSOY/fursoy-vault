@@ -1,4 +1,4 @@
-import { enhanceSelects, syncCustomSelect } from "./custom-select.js";
+import { enhanceSelects, setOptionAvailable, syncCustomSelect } from "./custom-select.js";
 import { translate, type Locale } from "./i18n.js";
 import { currentLocale } from "./locale.js";
 import { isValidProtectionScope, normalizeProtectionScopeInput } from "./protocol.js";
@@ -35,6 +35,9 @@ interface PopupState {
   alert?: StoredAlert;
   pending?: boolean;
   requestId?: string;
+  /// Whether the host can observe processes at all. Absent or false means the monitor-only level
+  /// would silently do nothing, so it is not offered.
+  supportsMonitoring?: boolean;
 }
 
 let locale: Locale = "tr";
@@ -262,6 +265,9 @@ async function refresh(): Promise<void> {
   const state = await send({ type: "popup.state", url: tab?.url }) ?? {};
   connectionWarning.hidden = state.connected === true;
   if (state.error !== undefined) showError(describeError(state.error)); else errorText.hidden = true;
+  const monitoring = state.supportsMonitoring === true;
+  setOptionAvailable(policySelect, "monitor", monitoring);
+  setOptionAvailable(currentPolicySelect, "monitor", monitoring);
 
   const groups = state.groups ?? [];
   latestGroups = groups;

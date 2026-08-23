@@ -109,6 +109,9 @@ export function enhanceSelect(select: HTMLSelectElement): void {
       item.classList.toggle("selected", selected);
       item.setAttribute("aria-selected", String(selected));
       item.disabled = option?.disabled ?? false;
+      // Mirrored, not just `disabled`: a level the host cannot honour should be absent from the
+      // list rather than present and greyed out, which would read as "temporarily unavailable".
+      item.hidden = option?.hidden ?? false;
     });
     if (select.disabled) close();
   };
@@ -173,6 +176,21 @@ export function enhanceSelect(select: HTMLSelectElement): void {
 
 export function syncCustomSelect(select: HTMLSelectElement): void {
   views.get(select)?.sync();
+}
+
+/// Shows or hides one option, keeping the enhanced dropdown in step with the underlying select.
+///
+/// A currently selected option is never hidden: something already set to that value must keep
+/// displaying it, or the control would show a value its own list does not offer.
+export function setOptionAvailable(
+  select: HTMLSelectElement,
+  value: string,
+  available: boolean,
+): void {
+  const option = Array.from(select.options).find((item) => item.value === value);
+  if (option === undefined) return;
+  option.hidden = !available && select.value !== value;
+  syncCustomSelect(select);
 }
 
 document.addEventListener("pointerdown", (event) => {

@@ -10,9 +10,10 @@ use sha2::{Digest, Sha256};
 use crate::atomic_file::write_verified;
 use crate::audit::{AuditLogger, unix_ms};
 use crate::config::{AccountGroup, AccountGroupsConfig, LoadedConfig, PolicyLevel, StorePolicy};
+use crate::crypto::authorizer::Authorizer;
 use crate::crypto::capability::{CapabilitySigner, PlatformAuthorizer};
 use crate::crypto::fill_random;
-use crate::crypto::hello::HelloAuthorizer;
+use crate::crypto::platform_kek::PlatformKek;
 use crate::lease::metadata::{LeaseMetadata, LeaseMetadataStore};
 use crate::lease::store::FileCapabilityLedgerStore;
 use crate::monitor::MonitorEngine;
@@ -59,6 +60,25 @@ const V7_REQUIRED_CAPABILITIES: &[&str] = &[
     "guarded_cookie_removal",
     "semantic_operation_status",
 ];
+/// Advertised only where the host can actually observe processes, which today means Windows: the
+/// check that makes an observation meaningful is an Authenticode signature, and Linux has nothing
+/// to verify against. The extension treats this as optional and hides the monitor-only protection
+/// level when it is absent, so a platform never offers a level that would silently do nothing.
+const PROCESS_MONITORING_CAPABILITY: &str = "process_monitoring";
+
+fn advertised_capabilities(protocol_version: u16) -> Vec<String> {
+    let base = if protocol_version == PROTOCOL_VERSION {
+        PROTOCOL_CAPABILITIES
+    } else {
+        V6_PROTOCOL_CAPABILITIES
+    };
+    let mut capabilities: Vec<String> = base.iter().map(|value| (*value).to_string()).collect();
+    if MonitorEngine::supports_monitoring() {
+        capabilities.push(PROCESS_MONITORING_CAPABILITY.to_string());
+    }
+    capabilities
+}
+
 const V6_PROTOCOL_CAPABILITIES: &[&str] = &[
     "chunked_cookies",
     "request_correlation",
@@ -111,7 +131,7 @@ pub struct NativeHostApp {
     config_digest: String,
     handshake_complete: bool,
     last_message_group: Option<Uuid>,
-    hello_authorizer: Option<HelloAuthorizer>,
+    hello_authorizer: Option<Authorizer>,
     monitor: MonitorEngine,
     negotiated_protocol: u16,
     connection_profile_id: Option<Uuid>,
@@ -121,7 +141,8 @@ fn build_group_runtime(paths: &DataPaths, definition: &AccountGroup) -> FcpResul
     let vault_store = VaultStore::new(&paths.vault_groups);
     let vault_exists = vault_store.path_for(definition.id).exists();
     let capability_store = FileCapabilityLedgerStore::new(paths.capability_path(definition.id));
-    let transactions = VaultTransactions::open(definition.id, vault_store, capability_store)?;
+    let kek = PlatformKek::at(&paths.kek_key);
+    let transactions = VaultTransactions::open(definition.id, kek, vault_store, capability_store)?;
     let lease_store = LeaseMetadataStore::new(paths.lease_path(definition.id));
     let mut lease = lease_store.load_or_initialize(definition.id, vault_exists)?;
     let mut operation_coordinator = OperationCoordinator::open(paths, definition.id)?;
@@ -417,14 +438,7 @@ impl NativeHostApp {
             groups: states,
             host_version: env!("CARGO_PKG_VERSION").to_string(),
             min_extension_version: MIN_EXTENSION_VERSION.into(),
-            capabilities: if handshake.protocol_version == PROTOCOL_VERSION {
-                PROTOCOL_CAPABILITIES
-            } else {
-                V6_PROTOCOL_CAPABILITIES
-            }
-            .iter()
-            .map(|value| (*value).to_string())
-            .collect(),
+            capabilities: advertised_capabilities(handshake.protocol_version),
             recovery_candidates,
         })])
     }
@@ -490,7 +504,7 @@ impl NativeHostApp {
             return Err(FcpError::Protocol("unknown recovery candidate".into()));
         }
         let candidate_paths = self.paths.sibling_profile(request.profile_id)?;
-        let authorizer = HelloAuthorizer::open_existing(&candidate_paths.hello_credential)?;
+        let authorizer = Authorizer::open_existing(&candidate_paths.hello_credential)?;
         let now = unix_ms()?;
         let mut nonce = [0u8; 32];
         fill_random(&mut nonce)?;
@@ -817,7 +831,7 @@ impl GroupRuntime {
         &mut self,
         message: Message,
         audit: &AuditLogger,
-        hello_authorizer: &mut Option<HelloAuthorizer>,
+        hello_authorizer: &mut Option<Authorizer>,
         hello_credential: &std::path::Path,
         negotiated_protocol: u16,
     ) -> FcpResult<Vec<Message>> {
@@ -896,7 +910,7 @@ impl GroupRuntime {
         &mut self,
         request: LeaseRequest,
         audit: &AuditLogger,
-        hello_authorizer: &mut Option<HelloAuthorizer>,
+        hello_authorizer: &mut Option<Authorizer>,
         hello_credential: &std::path::Path,
         negotiated_protocol: u16,
     ) -> FcpResult<Vec<Message>> {
@@ -1010,7 +1024,7 @@ impl GroupRuntime {
         &mut self,
         duration_ms: u64,
         audit: &AuditLogger,
-        hello_authorizer: &mut Option<HelloAuthorizer>,
+        hello_authorizer: &mut Option<Authorizer>,
         hello_credential: &std::path::Path,
     ) -> FcpResult<Vec<Message>> {
         if self.lease.state != GroupState::Sealed || !self.transactions.vault_exists() {
@@ -2110,6 +2124,7 @@ mod tests {
             legacy_capability_ledger: root.join("leases/capability-ledger.json"),
             account_groups_config,
             audit_directory: root.join("audit"),
+            kek_key: root.join("kek-key.json"),
             hello_credential: root.join("hello-credential.json"),
             operation_journals: root.join("operations/groups"),
             snapshot_integrity_key: root.join("operations/snapshot-key.dpapi"),

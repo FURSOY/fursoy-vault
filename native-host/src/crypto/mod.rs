@@ -1,6 +1,6 @@
 pub mod aead;
+pub mod authorizer;
 pub mod capability;
-pub mod hello;
 pub mod platform_kek;
 pub mod webauthn_codec;
 

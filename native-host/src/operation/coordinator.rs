@@ -369,7 +369,7 @@ mod tests {
 
     use super::*;
     use crate::crypto::aead::{DEK_BYTES, SecretDek};
-    use crate::crypto::platform_kek::WRAPPED_DEK_BYTES;
+    use crate::crypto::platform_kek::{PlatformKek, WRAPPED_DEK_BYTES};
     use crate::lease::store::FileCapabilityLedgerStore;
     use crate::operation::Digest32;
     use crate::test_support::{FailurePoint, fail_on_nth};
@@ -409,6 +409,7 @@ mod tests {
         );
         let transactions = VaultTransactions::open(
             group_id,
+            PlatformKek::at(&root.join("kek-key.json")),
             VaultStore::new(root.join("vault")),
             FileCapabilityLedgerStore::new(root.join("capability.json")),
         )

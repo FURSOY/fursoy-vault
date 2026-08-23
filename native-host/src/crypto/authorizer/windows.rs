@@ -1,3 +1,9 @@
+//! Windows backend: Windows Hello through the `webauthn.dll` platform authenticator.
+//!
+//! The PIN or biometric never reaches this process — the OS owns the dialog and hands back only a
+//! signed assertion. That is why `proof_context` carries WebAuthn `authenticatorData` here: the
+//! user-verified flag inside it is the only evidence this code gets that a human was checked.
+
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::path::Path;
@@ -48,7 +54,7 @@ const ORIGIN: &str = "https://fursoy-vault.local";
 const USER_NAME: &str = "fursoy-vault";
 const COSE_ALGORITHM_ES256: i32 = -7;
 
-pub struct HelloAuthorizer {
+pub struct Authorizer {
     credential_id: Vec<u8>,
     public_key_x: [u8; 32],
     public_key_y: [u8; 32],
@@ -86,7 +92,7 @@ struct CredentialRegistry {
     public_key_y_hex: String,
 }
 
-impl PlatformAuthorizer for HelloAuthorizer {
+impl PlatformAuthorizer for Authorizer {
     /// Opens an already-enrolled credential without mutating or replacing it.
     fn open_existing(credential_path: &Path) -> FcpResult<Self> {
         let apartment = ComApartment::initialize()?;
@@ -139,7 +145,7 @@ impl PlatformAuthorizer for HelloAuthorizer {
     }
 }
 
-impl HelloAuthorizer {
+impl Authorizer {
     fn recreate(credential_path: &Path) -> FcpResult<Self> {
         let apartment = ComApartment::initialize()?;
         if credential_path.exists() {
@@ -293,7 +299,7 @@ fn quarantine_registry(path: &Path) -> FcpResult<()> {
     Ok(())
 }
 
-fn create_authorizer(apartment: ComApartment, registry_path: &Path) -> FcpResult<HelloAuthorizer> {
+fn create_authorizer(apartment: ComApartment, registry_path: &Path) -> FcpResult<Authorizer> {
     let profile_user_id = hello_user_id(registry_path)?;
     let (credential_id, public_key_x, public_key_y) = create_credential(profile_user_id)?;
     let registry = CredentialRegistry {
@@ -315,7 +321,7 @@ fn create_authorizer(apartment: ComApartment, registry_path: &Path) -> FcpResult
         }
         Ok(())
     })?;
-    Ok(HelloAuthorizer {
+    Ok(Authorizer {
         credential_id,
         public_key_x,
         public_key_y,
@@ -426,13 +432,13 @@ fn hello_user_id(registry_path: &Path) -> FcpResult<[u8; 16]> {
     Ok(*profile_id.as_bytes())
 }
 
-impl CapabilitySigner for HelloAuthorizer {
+impl CapabilitySigner for Authorizer {
     fn sign(&self, payload: CapabilityPayload) -> FcpResult<SignedCapability> {
         self.sign_assertion(payload)
     }
 }
 
-impl CapabilityVerifier for HelloAuthorizer {
+impl CapabilityVerifier for Authorizer {
     fn verify_signature(&self, capability: &SignedCapability) -> FcpResult<()> {
         capability.payload.validate_shape()?;
         validate_authenticator_context(&capability.proof_context)?;

@@ -12,6 +12,10 @@ pub enum FcpError {
     /// `Io` or as one of the message-carrying variants instead.
     #[cfg(windows)]
     Windows(windows::core::Error),
+    /// A failure reported by the TPM stack. The Linux counterpart of `Windows`: both mean the
+    /// platform's own crypto provider refused or failed, as opposed to this code misusing it.
+    #[cfg(unix)]
+    Tpm(tss_esapi::Error),
     Crypto(&'static str),
     Format(String),
     Protocol(String),
@@ -30,6 +34,8 @@ impl Display for FcpError {
             Self::Json(error) => write!(formatter, "JSON error: {error}"),
             #[cfg(windows)]
             Self::Windows(error) => write!(formatter, "Windows API error: {error}"),
+            #[cfg(unix)]
+            Self::Tpm(error) => write!(formatter, "TPM error: {error}"),
             Self::Crypto(message) => write!(formatter, "cryptographic operation failed: {message}"),
             Self::Format(message) => write!(formatter, "vault format error: {message}"),
             Self::Protocol(message) => write!(formatter, "protocol error: {message}"),
@@ -49,6 +55,8 @@ impl Error for FcpError {
             Self::Json(error) => Some(error),
             #[cfg(windows)]
             Self::Windows(error) => Some(error),
+            #[cfg(unix)]
+            Self::Tpm(error) => Some(error),
             Self::Crypto(_)
             | Self::Format(_)
             | Self::Protocol(_)
@@ -74,5 +82,12 @@ impl From<serde_json::Error> for FcpError {
 impl From<windows::core::Error> for FcpError {
     fn from(value: windows::core::Error) -> Self {
         Self::Windows(value)
+    }
+}
+
+#[cfg(unix)]
+impl From<tss_esapi::Error> for FcpError {
+    fn from(value: tss_esapi::Error) -> Self {
+        Self::Tpm(value)
     }
 }

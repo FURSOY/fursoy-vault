@@ -17,6 +17,10 @@ pub struct DataPaths {
     pub account_groups_config: PathBuf,
     pub audit_directory: PathBuf,
     pub hello_credential: PathBuf,
+    /// Where a platform that has no OS-managed key store keeps the vault's key-encryption key.
+    /// Windows does not use it: NCrypt owns the KEK under a name and hands back a handle. It is
+    /// per-profile, so one profile's vault can never be unwrapped with another's key.
+    pub kek_key: PathBuf,
     pub operation_journals: PathBuf,
     pub snapshot_integrity_key: PathBuf,
 }
@@ -71,6 +75,7 @@ impl DataPaths {
             account_groups_config: root.join("config").join("account-groups.json"),
             audit_directory: root.join("audit"),
             hello_credential: root.join("hello-credential.json"),
+            kek_key: root.join("kek-key.json"),
             operation_journals: root.join("operations").join("groups"),
             snapshot_integrity_key: root.join("operations").join("snapshot-key.dpapi"),
             root,

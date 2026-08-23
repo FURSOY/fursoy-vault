@@ -1,4 +1,4 @@
-import { enhanceSelects } from "./custom-select.js";
+import { enhanceSelects, setOptionAvailable } from "./custom-select.js";
 import { translate, type Locale } from "./i18n.js";
 import { currentLocale } from "./locale.js";
 import { isValidProtectionScope, normalizeProtectionScopeInput } from "./protocol.js";
@@ -153,6 +153,9 @@ async function checkConnection(): Promise<void> {
   installCheck.disabled = false;
   if (state?.connected === true) {
     installStatus.textContent = t(locale, "onboarding.install.connected");
+    // Learned here rather than on the add-site step: this is the first moment a host has answered,
+    // and the level must already be gone by the time that step is shown.
+    setOptionAvailable(addsitePolicy, "monitor", state.supportsMonitoring === true);
     const candidates = parseRecoveryCandidates(state.recoveryCandidates);
     if (candidates.length > 0) {
       renderRecoveryCandidates(candidates);

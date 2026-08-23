@@ -3769,3 +3769,87 @@ belgelerinde geçer.
 
 **Doğrulama.** Windows davranışı değişmedi: 114 Rust testinin tamamı ve clippy refactor öncesi ve
 sonrasında aynı sonucu veriyor.
+
+---
+
+### ADR-032 — Linux desteği: TPM tabanlı ikinci platform
+
+**Tarih:** 2026-08-23 · **Durum:** Kabul edildi (uçtan uca donanım testi bekliyor) ·
+**Etkilenen:** [ADR-021](#adr-021--windows-hello-imzalama-arka-ucu-webauthndlle-taşınmıştır),
+[ADR-029](#adr-029--single-file-companion-installer-and-fail-safe-automatic-updates),
+[ADR-031](#adr-031--yetkilendirici-platformauthorizer-arkasına-alındı-ve-ölü-jest-cache’i-silindi)
+
+**Bağlam.** Native host'un 12.000 satırının yaklaşık 1.400'ü Windows'a bağlıydı; kalanı — dispatcher,
+kasa, lease, protokol, audit — platformdan bağımsızdı. Linux'un değerli olmasının sebebi ideolojik
+değil ölçülebilir: Chrome, Windows'ta App-Bound Encryption kullanıyor, Linux'ta çerezleri çoğu
+dağıtımda GNOME Keyring/KWallet ile ya da düpedüz zayıf korunan bir dosyada tutuyor. Korumanın
+katacağı fark orada daha büyük. Ayrıca hedef kitlenin bir kısmı (üretim sistemlerine erişen
+geliştirici ve yöneticiler) zaten Linux'ta.
+
+**Karar.**
+
+- **Kullanıcı doğrulaması: TPM'de PIN korumalı ECDSA P-256 anahtarı.** Linux'ta Windows Hello'nun
+  eşdeğeri — hem kullanıcıyı doğrulayan hem donanıma bağlı imza üreten bir sistem servisi — yok.
+  `authValue` ile oluşturulmuş bir TPM anahtarı doğru PIN verilmeden **hiç imzalayamaz**, yani
+  doğrulama beyan edilen bir bayrak değil **yapısal** bir gerçektir. Karşılığında `assert_requires_auth`
+  yükleme anında anahtarın gerçekten auth gerektirdiğini doğrular; bu kontrol olmadan argüman çöker.
+  Kısa bir PIN'i savunulabilir kılan şey TPM'in kendi sözlük saldırısı kilididir.
+- **PIN'i host toplar, eklenti değil.** `systemd-ask-password` ile: masaüstünde grafik ajana,
+  başsız sistemde konsola düşer. Eklentinin sorup native messaging ile göndermesi değerlendirildi ve
+  reddedildi — PIN o zaman tarayıcının bellek alanından geçerdi, ki tüm mimari tarayıcıya
+  güvenmemek üzerine kurulu. Çocuk sürecin stdout'u yakalanır, devralınmaz: bu sürecin stdout'u
+  Native Messaging akışının kendisidir.
+- **KEK profil başına.** Windows'ta NCrypt tek bir isimli anahtarı bütün profiller için paylaşıyor.
+  Linux'ta öyle bir sistem deposu olmadığı için TPM-sarmalı bloblar profil dizininde bir dosyada
+  durur — ve bu, Windows'takinden **daha güçlü** izolasyon: bir profilin kasası diğerinin
+  anahtarıyla açılamaz. Algoritma aynı kalır (RSA-2048 OAEP), böylece sarmalanmış DEK her iki
+  platformda da tam 256 bayttır ve **kasa formatı hiç değişmez**.
+- **Yerel sırlar TPM'e mühürlenir.** `dpapi` modülü `local_secret` olarak yeniden adlandırıldı;
+  audit zincirinin HMAC anahtarını ve snapshot bütünlük anahtarını korur. Bunlar kasanın gizliliği
+  değil **bütünlük kanıtıdır**: audit anahtarını okuyabilen biri inandırıcı sahte bir zincir
+  üretebilir, ki bu eksik zincirden daha kötüdür çünkü güvenilir görünür. `0600` dosya izni
+  değerlendirildi ve yetersiz bulundu: DPAPI hem başka kullanıcılara hem çevrimdışı disk erişimine
+  karşı koruyor, dosya izni yalnızca birincisini karşılardı.
+- **Simülatör derleme zamanı bayrağının arkasında.** Her iki TPM arka ucu varsayılan olarak yalnızca
+  `device:` TCTI kabul eder; swtpm için `--features tpm-simulator` gerekir. Çalışma zamanı ayarı
+  bilinçli olarak seçilmedi — ayar birinin açık bırakabileceği bir şeydir, ve sahip olmadığı bir
+  donanım korumasına güvenen bir kullanıcı en kötü sonuçtur.
+- **İzleme Linux'ta yok ve bu açıkça bildirilir.** [is_trusted_chrome](native-host/src/monitor/process.rs)
+  tarayıcıyı Authenticode imzasıyla tanır; Linux'ta doğrulanacak imza yoktur. Aynı isim altında daha
+  zayıf bir kontrol göndermek yerine host `process_monitoring` yeteneğini bildirmez ve eklenti
+  "yalnız izle" seviyesini gizler — hiçbir platform sessizce hiçbir şey yapmayacak bir koruma
+  seviyesi sunmaz. Bu yetenek **isteğe bağlıdır**; zorunlu listeye konsaydı Linux host'u bağlantıyı
+  hiç kuramazdı.
+- **Kendini güncelleme Linux'ta yok.** Velopack Windows'a özeldir ve orada uygulama kendi
+  kurulumunun sahibidir. Linux'ta ikilinin sahibi paket yöneticisidir; host'un kendini değiştirmeye
+  kalkması yanlış olur.
+- **Platform tesisatı `#[cfg]` ile bölündü:** atomik yazma (`MoveFileExW` ↔ `rename`+dizin `fsync`),
+  örnek kilidi (paylaşımsız handle ↔ `flock`), RNG (`BCryptGenRandom` ↔ `getrandom`), veri kökü
+  (`%LOCALAPPDATA%` ↔ `$XDG_DATA_HOME`).
+
+**Kabul edilen sınırlar.**
+
+Linux'ta izleme yoktur; "yalnız izle" koruma seviyesi orada mevcut değildir.
+
+Linux'ta kilit dosyası çıkışta silinmez. `flock`'u tutan dosyayı silmek yarış yaratır: silen taraf,
+dosyayı zaten açmış ikinci bir hosta karşı yarışır ve ikisi de yalnız olduğunu sanabilir. Boş bir
+artık dosya zararsızdır.
+
+**Bakım notları.**
+
+TPM'in çok az geçici nesne yuvası vardır (referans simülatöründe üç) ve her yükleme birini tüketir.
+Bütün TPM kodu birincil anahtarı her işlemde yeniden üretir (deterministiktir, kalıcı yuva
+tüketmez) ve **hata yolları dahil** her handle'ı temizler. Testler `--test-threads=1` ile
+çalıştırılmalıdır; paralel çalışırlarsa yuvalar tükenir ve gerçek sebebi hiç göstermeyen
+out-of-memory hatalarıyla düşerler. Bu yalnızca test kısıtıdır: üretimde instance lock tek bir
+host garantiler ve işlemler sıralıdır.
+
+`ADR-029`'un yayın sıralaması genişlemelidir: artık **her iki platformun** companion'ı
+yayınlanmadan mağaza başvurusu yapılmamalıdır, yoksa Linux kullanıcısı eklentiyi kurar ve
+companion'ı bulamaz.
+
+**Doğrulama.** Windows davranışı değişmedi: 114 Rust testi, clippy ve rustfmt dört fazın öncesinde
+ve sonrasında aynı sonucu veriyor. Linux'ta crate tam derleniyor ve 101 test simülatöre karşı
+geçiyor. TPM+PIN mekanizması ayrıca gerçek donanımda doğrulandı (CachyOS misafirinde vTPM,
+`poc/linux-authorizer`). **Henüz yapılmadı:** gerçek donanımda tarayıcı + eklenti + host zincirinin
+uçtan uca çalıştırılması.

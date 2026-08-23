@@ -1,4 +1,13 @@
+//! Windows KEK backend: the Platform Crypto Provider owns an RSA-2048 key under a name, so there
+//! is no key material for this code to persist and `key_path` is unused here.
+//!
+//! Every operation opens a fresh provider and key handle and drops both immediately. That is
+//! deliberate: a long-lived handle would be a decrypt oracle for the lifetime of the process, and
+//! the cost of reopening is irrelevant next to the user-verification step that gates the callers
+//! which matter.
+
 use std::ffi::c_void;
+use std::path::Path;
 
 use windows::Win32::Security::Cryptography::{
     BCRYPT_OAEP_PADDING_INFO, BCRYPT_SHA256_ALGORITHM, CERT_KEY_SPEC, MS_PLATFORM_CRYPTO_PROVIDER,
@@ -13,113 +22,99 @@ use windows::Win32::Security::OBJECT_SECURITY_INFORMATION;
 use windows::core::{PCWSTR, w};
 use zeroize::Zeroize;
 
+use super::{RSA_BITS, WRAPPED_DEK_BYTES};
 use crate::crypto::aead::{DEK_BYTES, SecretDek};
 use crate::{FcpError, FcpResult};
 
-// Renamed pre-launch (2026-08-08, ADR-023) while it is still free to do so: KEK_NAME is the
-// actual TPM/Platform Crypto Provider key name Windows uses to locate the persisted key, and
-// KEK_KEY_ID is stored alongside every wrapped DEK to identify which key wrapped it. Changing
-// either orphans any existing TPM-backed key and permanently undecrypts every already-vaulted
-// session — deliberately accepted now because no real user data exists yet; do not rename again
-// after launch without a real migration plan.
-const KEK_NAME: PCWSTR = w!("FURSOY.Vault.KEK.v1");
-pub const KEK_KEY_ID: [u8; 16] = *b"VAULT-KEK-v1\0\0\0\0";
-pub const RSA_BITS: u32 = 2048;
-pub const WRAPPED_DEK_BYTES: usize = 256;
+/// The provider-side name Windows locates the persisted key by. See the note on `KEK_KEY_ID`.
+pub(super) const KEK_NAME: PCWSTR = w!("FURSOY.Vault.KEK.v1");
 const NTE_BAD_KEYSET: u32 = 0x8009_0016;
 
-pub struct PlatformKek;
-
-impl PlatformKek {
-    pub fn ensure_exists() -> FcpResult<()> {
-        let provider = Provider::open()?;
-        provider.require_hardware_only()?;
-        match Key::open(&provider) {
-            Ok(key) => key.validate(),
-            Err(FcpError::Windows(error)) if error.code().0 as u32 == NTE_BAD_KEYSET => {
-                let key = Key::create(&provider)?;
-                key.validate()
-            }
-            Err(error) => Err(error),
+pub(super) fn ensure_exists(_key_path: &Path) -> FcpResult<()> {
+    let provider = Provider::open()?;
+    provider.require_hardware_only()?;
+    match Key::open(&provider) {
+        Ok(key) => key.validate(),
+        Err(FcpError::Windows(error)) if error.code().0 as u32 == NTE_BAD_KEYSET => {
+            let key = Key::create(&provider)?;
+            key.validate()
         }
+        Err(error) => Err(error),
     }
+}
 
-    pub(crate) fn wrap_dek(dek: &SecretDek) -> FcpResult<Vec<u8>> {
-        let provider = Provider::open()?;
-        provider.require_hardware_only()?;
-        let key = Key::open(&provider)?;
-        key.validate()?;
-        let padding = oaep_padding();
-        let padding_ptr = (&padding as *const BCRYPT_OAEP_PADDING_INFO).cast::<c_void>();
-        let mut wrapped_length = 0u32;
+pub(super) fn wrap_dek(_key_path: &Path, dek: &SecretDek) -> FcpResult<Vec<u8>> {
+    let provider = Provider::open()?;
+    provider.require_hardware_only()?;
+    let key = Key::open(&provider)?;
+    key.validate()?;
+    let padding = oaep_padding();
+    let padding_ptr = (&padding as *const BCRYPT_OAEP_PADDING_INFO).cast::<c_void>();
+    let mut wrapped_length = 0u32;
+    unsafe {
+        NCryptEncrypt(
+            key.0,
+            Some(dek.expose()),
+            Some(padding_ptr),
+            None,
+            &mut wrapped_length,
+            NCRYPT_PAD_OAEP_FLAG,
+        )?;
+    }
+    if wrapped_length as usize != WRAPPED_DEK_BYTES {
+        return Err(FcpError::Crypto("RSA-2048 wrapped DEK length is not 256"));
+    }
+    let mut wrapped = vec![0u8; wrapped_length as usize];
+    unsafe {
+        NCryptEncrypt(
+            key.0,
+            Some(dek.expose()),
+            Some(padding_ptr),
+            Some(&mut wrapped),
+            &mut wrapped_length,
+            NCRYPT_PAD_OAEP_FLAG,
+        )?;
+    }
+    wrapped.truncate(wrapped_length as usize);
+    Ok(wrapped)
+}
+
+pub(super) fn unwrap_dek(_key_path: &Path, wrapped: &[u8]) -> FcpResult<SecretDek> {
+    if wrapped.len() != WRAPPED_DEK_BYTES {
+        return Err(FcpError::Format(format!(
+            "wrapped DEK must be {WRAPPED_DEK_BYTES} bytes"
+        )));
+    }
+    let provider = Provider::open()?;
+    provider.require_hardware_only()?;
+    let key = Key::open(&provider)?;
+    key.validate()?;
+    let padding = oaep_padding();
+    let padding_ptr = (&padding as *const BCRYPT_OAEP_PADDING_INFO).cast::<c_void>();
+    let mut recovered = [0u8; DEK_BYTES];
+    let result = (|| -> FcpResult<SecretDek> {
+        let mut recovered_length = 0u32;
         unsafe {
-            NCryptEncrypt(
+            NCryptDecrypt(
                 key.0,
-                Some(dek.expose()),
+                Some(wrapped),
                 Some(padding_ptr),
-                None,
-                &mut wrapped_length,
+                Some(&mut recovered),
+                &mut recovered_length,
                 NCRYPT_PAD_OAEP_FLAG,
             )?;
         }
-        if wrapped_length as usize != WRAPPED_DEK_BYTES {
-            return Err(FcpError::Crypto("RSA-2048 wrapped DEK length is not 256"));
+        if recovered_length as usize != DEK_BYTES {
+            return Err(FcpError::Crypto("unwrapped DEK length is not 32"));
         }
-        let mut wrapped = vec![0u8; wrapped_length as usize];
-        unsafe {
-            NCryptEncrypt(
-                key.0,
-                Some(dek.expose()),
-                Some(padding_ptr),
-                Some(&mut wrapped),
-                &mut wrapped_length,
-                NCRYPT_PAD_OAEP_FLAG,
-            )?;
-        }
-        wrapped.truncate(wrapped_length as usize);
-        Ok(wrapped)
+        let secret = SecretDek::from_bytes(recovered);
+        recovered.zeroize();
+        Ok(secret)
+    })();
+    if result.is_err() {
+        recovered.zeroize();
     }
-
-    pub(crate) fn unwrap_dek(wrapped: &[u8]) -> FcpResult<SecretDek> {
-        if wrapped.len() != WRAPPED_DEK_BYTES {
-            return Err(FcpError::Format(format!(
-                "wrapped DEK must be {WRAPPED_DEK_BYTES} bytes"
-            )));
-        }
-        let provider = Provider::open()?;
-        provider.require_hardware_only()?;
-        // A fresh key handle is opened for every vault transaction and dropped immediately after
-        // unwrap. Inject callers must consume a Hello capability first; enrollment, eviction, and
-        // reconciliation deliberately use this silent primitive without a user-presence prompt.
-        let key = Key::open(&provider)?;
-        key.validate()?;
-        let padding = oaep_padding();
-        let padding_ptr = (&padding as *const BCRYPT_OAEP_PADDING_INFO).cast::<c_void>();
-        let mut recovered = [0u8; DEK_BYTES];
-        let result = (|| -> FcpResult<SecretDek> {
-            let mut recovered_length = 0u32;
-            unsafe {
-                NCryptDecrypt(
-                    key.0,
-                    Some(wrapped),
-                    Some(padding_ptr),
-                    Some(&mut recovered),
-                    &mut recovered_length,
-                    NCRYPT_PAD_OAEP_FLAG,
-                )?;
-            }
-            if recovered_length as usize != DEK_BYTES {
-                return Err(FcpError::Crypto("unwrapped DEK length is not 32"));
-            }
-            let secret = SecretDek::from_bytes(recovered);
-            recovered.zeroize();
-            Ok(secret)
-        })();
-        if result.is_err() {
-            recovered.zeroize();
-        }
-        result
-    }
+    result
 }
 
 struct Provider(NCRYPT_PROV_HANDLE);

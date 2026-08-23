@@ -61,6 +61,7 @@ impl PreparedVaultWrite {
 
 pub struct VaultTransactions {
     group_id: Uuid,
+    kek: PlatformKek,
     vault_store: VaultStore,
     capability_ledger: CapabilityLedger,
     capability_store: FileCapabilityLedgerStore,
@@ -69,6 +70,7 @@ pub struct VaultTransactions {
 impl VaultTransactions {
     pub fn open(
         group_id: Uuid,
+        kek: PlatformKek,
         vault_store: VaultStore,
         mut capability_store: FileCapabilityLedgerStore,
     ) -> FcpResult<Self> {
@@ -81,6 +83,7 @@ impl VaultTransactions {
         }
         Ok(Self {
             group_id,
+            kek,
             vault_store,
             capability_ledger,
             capability_store,
@@ -122,7 +125,7 @@ impl VaultTransactions {
     pub fn read_for_inject(&self, authorization: ConsumedCapability) -> FcpResult<VaultPayload> {
         self.require_authorization(&authorization, CapabilityOperation::Inject)?;
         let record = self.vault_store.read(self.group_id)?;
-        let dek = PlatformKek::unwrap_dek(&record.header.wrapped_dek)?;
+        let dek = self.kek.unwrap_dek(&record.header.wrapped_dek)?;
         let payload = record.open(&dek)?;
         drop(dek);
         Ok(payload)
@@ -165,7 +168,7 @@ impl VaultTransactions {
         if self.vault_store.path_for(self.group_id).exists() {
             let previous_bytes = self.vault_store.read_bytes(self.group_id)?;
             let existing = VaultRecord::decode(&previous_bytes)?;
-            let dek = PlatformKek::unwrap_dek(&existing.header.wrapped_dek)?;
+            let dek = self.kek.unwrap_dek(&existing.header.wrapped_dek)?;
             let previous = existing.open(&dek)?;
             if cookies.is_empty() {
                 let digest = Digest32::sha256(&previous_bytes);
@@ -211,9 +214,9 @@ impl VaultTransactions {
                 "cannot create an empty group vault".into(),
             ));
         }
-        PlatformKek::ensure_exists()?;
+        self.kek.ensure_exists()?;
         let dek = SecretDek::generate()?;
-        let wrapped_dek = PlatformKek::wrap_dek(&dek)?;
+        let wrapped_dek = self.kek.wrap_dek(&dek)?;
         let payload = VaultPayload {
             schema_version: PAYLOAD_SCHEMA_VERSION,
             vault_sequence: 1,

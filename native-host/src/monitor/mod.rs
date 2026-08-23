@@ -1,3 +1,7 @@
+/// Process observation is Windows-only. It identifies a trusted browser by Authenticode
+/// signature, and Linux has no equivalent to verify against, so rather than ship a weaker check
+/// under the same name the capability is simply not advertised there (see `supports_monitoring`).
+#[cfg(windows)]
 mod process;
 
 use std::collections::{HashSet, VecDeque};
@@ -18,6 +22,7 @@ pub struct MonitorEngine {
     pending: Arc<Mutex<VecDeque<MonitorEvent>>>,
     accepted_event_ids: HashSet<uuid::Uuid>,
     accepted_event_order: VecDeque<uuid::Uuid>,
+    #[cfg(windows)]
     _process_observer: Option<process::ProcessObserver>,
 }
 
@@ -33,17 +38,27 @@ impl MonitorEngine {
             pending: Arc::new(Mutex::new(VecDeque::new())),
             accepted_event_ids: HashSet::new(),
             accepted_event_order: VecDeque::new(),
+            #[cfg(windows)]
             _process_observer: None,
         }
     }
 
+    /// Whether this build can observe processes at all. The extension asks before offering the
+    /// monitor-only policy, so a platform without it never presents a protection level that would
+    /// silently do nothing.
+    pub const fn supports_monitoring() -> bool {
+        cfg!(windows)
+    }
+
     pub fn start() -> Self {
         let pending = Arc::new(Mutex::new(VecDeque::new()));
+        #[cfg(windows)]
         let observer = process::ProcessObserver::start(Arc::clone(&pending));
         Self {
             pending,
             accepted_event_ids: HashSet::new(),
             accepted_event_order: VecDeque::new(),
+            #[cfg(windows)]
             _process_observer: Some(observer),
         }
     }

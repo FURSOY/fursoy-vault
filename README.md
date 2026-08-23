@@ -38,6 +38,26 @@ powershell -File install/package-release.ps1
 Windows acceptance coverage and the hardware/manual rows are documented in
 `tests/acceptance/MATRIX.md`.
 
+### Running the Linux tests
+
+The Linux backends hold their keys in the TPM, so their tests need one, and they must not run in
+parallel:
+
+```text
+cargo test --lib -- --include-ignored --test-threads=1
+```
+
+A TPM has very few transient object slots — three on the reference simulator — and every load
+consumes one. Cargo's default parallelism exhausts them immediately and the run fails with
+out-of-memory errors that point nowhere near the real cause. This is a test-only constraint: the
+instance lock means exactly one host process ever touches the TPM, and it does so one operation at
+a time.
+
+Against a software simulator rather than real hardware, start `swtpm` and add
+`--features tpm-simulator` with `FCP_TPM_TCTI` set. Without that feature the backends refuse
+anything but a TPM character device, so a release build cannot be pointed at a simulator by
+accident.
+
 ## License and source
 
 Copyright contributors. Licensed under GPL-3.0-only; see `LICENSE`. Release assets include both the

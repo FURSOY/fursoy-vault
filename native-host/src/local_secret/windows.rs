@@ -1,3 +1,6 @@
+//! Windows backend: DPAPI binds the secret to the user's credentials, so no key material is this
+//! code's to manage and no extra file exists to lose.
+
 use windows::Win32::Foundation::{HLOCAL, LocalFree};
 use windows::Win32::Security::Cryptography::{
     CRYPT_INTEGER_BLOB, CRYPTPROTECT_UI_FORBIDDEN, CryptProtectData, CryptUnprotectData,
@@ -8,15 +11,15 @@ use crate::{FcpError, FcpResult};
 // Renamed pre-launch (2026-08-08, ADR-023) while it is still free to do so: this is DPAPI
 // entropy, not a display string. Changing it changes the derived key, making every existing
 // DPAPI-protected audit blob (audit-key.dpapi, audit-anchor.dpapi) undecryptable on next start —
-// deliberately accepted now because no real user data exists yet; do not rename again after
-// launch without a real migration plan.
+// deliberately accepted then because no real user data existed yet; do not rename after launch
+// without a real migration plan.
 const AUDIT_ENTROPY: &[u8] = b"FURSOY.Vault.Audit.v2";
 
-pub fn protect(plaintext: &[u8]) -> FcpResult<Vec<u8>> {
+pub(super) fn protect(plaintext: &[u8]) -> FcpResult<Vec<u8>> {
     transform(plaintext, true)
 }
 
-pub fn unprotect(ciphertext: &[u8]) -> FcpResult<Vec<u8>> {
+pub(super) fn unprotect(ciphertext: &[u8]) -> FcpResult<Vec<u8>> {
     transform(ciphertext, false)
 }
 
@@ -66,21 +69,4 @@ fn transform(input: &[u8], encrypt: bool) -> FcpResult<Vec<u8>> {
         let _ = LocalFree(Some(HLOCAL(output.pbData.cast())));
     }
     Ok(result)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn current_user_dpapi_round_trip_and_wrong_blob_rejection() {
-        let plaintext = b"audit-secret-fixture";
-        let protected = protect(plaintext).unwrap();
-        assert_ne!(protected, plaintext);
-        assert_eq!(unprotect(&protected).unwrap(), plaintext);
-        let mut damaged = protected;
-        let middle = damaged.len() / 2;
-        damaged[middle] ^= 0x40;
-        assert!(unprotect(&damaged).is_err());
-    }
 }

@@ -9,16 +9,20 @@ pub mod audit;
 pub mod config;
 pub mod crypto;
 pub mod dispatcher;
-pub mod dpapi;
 pub mod error;
 pub mod host_loop;
 pub mod instance_lock;
 pub mod lease;
+pub mod local_secret;
 pub mod monitor;
 pub(crate) mod operation;
 pub mod paths;
 pub mod protocol;
 pub mod transaction;
+/// Companion self-update. Windows-only by design: there the app owns its own installation and
+/// Velopack applies updates in place. On Linux the package manager owns the binary, so the host
+/// must never try to replace itself.
+#[cfg(windows)]
 pub mod update;
 pub mod vault;
 
