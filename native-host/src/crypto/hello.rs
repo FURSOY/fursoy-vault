@@ -333,7 +333,7 @@ fn create_credential(mut user_id: [u8; 16]) -> FcpResult<(Vec<u8>, [u8; 32], [u8
         .map_err(FcpError::from)?
         .as_bool()
     {
-        return Err(FcpError::HelloNotConfigured);
+        return Err(FcpError::UserVerificationNotConfigured);
     }
 
     let hwnd = unsafe { GetForegroundWindow() };

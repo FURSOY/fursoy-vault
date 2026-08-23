@@ -169,22 +169,45 @@ impl DataPaths {
 fn discover_root() -> FcpResult<PathBuf> {
     match std::env::var_os("FCP_DATA_DIR") {
         Some(override_path) => Ok(PathBuf::from(override_path)),
-        None => {
-            let local_app_data = std::env::var_os("LOCALAPPDATA").ok_or_else(|| {
+        None => platform_root(),
+    }
+}
+
+#[cfg(windows)]
+fn platform_root() -> FcpResult<PathBuf> {
+    let local_app_data = std::env::var_os("LOCALAPPDATA").ok_or_else(|| {
+        FcpError::Io(std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            "LOCALAPPDATA is unavailable",
+        ))
+    })?;
+    let local_app_data = PathBuf::from(local_app_data);
+    let root = local_app_data.join("FursoyVault");
+    // Renamed from FursoyCookieProtector. install/register.ps1 already moves this
+    // directory at install time; this is the fallback for a host run directly
+    // (dev/test) without going through the installer first.
+    migrate_one(&local_app_data.join("FursoyCookieProtector"), &root)?;
+    Ok(root)
+}
+
+/// XDG's data directory, which is where state that must survive and is not a cache belongs. The
+/// `$HOME/.local/share` fallback is the specification's own default for an unset `XDG_DATA_HOME`.
+/// There is no legacy directory to migrate here: no Linux build has ever shipped.
+#[cfg(unix)]
+fn platform_root() -> FcpResult<PathBuf> {
+    let base = match std::env::var_os("XDG_DATA_HOME") {
+        Some(value) if !value.is_empty() => PathBuf::from(value),
+        _ => {
+            let home = std::env::var_os("HOME").ok_or_else(|| {
                 FcpError::Io(std::io::Error::new(
                     std::io::ErrorKind::NotFound,
-                    "LOCALAPPDATA is unavailable",
+                    "neither XDG_DATA_HOME nor HOME is set",
                 ))
             })?;
-            let local_app_data = PathBuf::from(local_app_data);
-            let root = local_app_data.join("FursoyVault");
-            // Renamed from FursoyCookieProtector. install/register.ps1 already moves this
-            // directory at install time; this is the fallback for a host run directly
-            // (dev/test) without going through the installer first.
-            migrate_one(&local_app_data.join("FursoyCookieProtector"), &root)?;
-            Ok(root)
+            PathBuf::from(home).join(".local").join("share")
         }
-    }
+    };
+    Ok(base.join("fursoy-vault"))
 }
 
 fn migrate_legacy_profile(base: &Path, target: &Path, profile_id: Uuid) -> FcpResult<()> {

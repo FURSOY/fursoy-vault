@@ -115,12 +115,15 @@ fn error_category(error: &FcpError) -> &'static str {
     match error {
         FcpError::Io(_) => "io",
         FcpError::Json(_) => "json",
+        #[cfg(windows)]
         FcpError::Windows(_) => "windows_provider",
         FcpError::Crypto(_) => "crypto",
         FcpError::Format(_) => "vault_format",
         FcpError::Protocol(_) => "protocol",
         FcpError::Capability(_) => "capability",
-        FcpError::HelloNotConfigured => "hello_not_configured",
+        // Kept as the wire code the extension already switches on; the variant is
+        // platform-neutral now but the message it maps to is what users see.
+        FcpError::UserVerificationNotConfigured => "hello_not_configured",
     }
 }
 

@@ -19,6 +19,11 @@ serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 sha2 = "0.10.9"
 uuid = { version = "1.18", features = ["serde", "v4"] }
+zeroize = { version = "1.9.0", features = ["derive"] }
+
+# Velopack is the Windows companion installer/updater, and the windows crate is the whole Win32
+# surface. Both are target-gated so a Linux build neither pulls them nor needs a stand-in.
+[target.'cfg(windows)'.dependencies]
 velopack = "1.2.0"
 windows = { version = "0.62.2", features = [
     "Win32_Foundation",
@@ -34,4 +39,7 @@ windows = { version = "0.62.2", features = [
     "Win32_System_Wmi",
     "Win32_UI_WindowsAndMessaging",
 ] }
-zeroize = { version = "1.9.0", features = ["derive"] }
+
+[target.'cfg(unix)'.dependencies]
+getrandom = "0.3"
+libc = "0.2"

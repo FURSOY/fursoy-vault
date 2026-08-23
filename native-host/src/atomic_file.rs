@@ -1,16 +1,8 @@
 use std::fs::{self, OpenOptions};
 use std::io::Write;
-use std::os::windows::ffi::OsStrExt;
 use std::path::Path;
 
 use sha2::{Digest, Sha256};
-use windows::Win32::Foundation::CloseHandle;
-use windows::Win32::Storage::FileSystem::{
-    CreateFileW, FILE_FLAG_BACKUP_SEMANTICS, FILE_GENERIC_READ, FILE_GENERIC_WRITE,
-    FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE, FlushFileBuffers,
-    MOVEFILE_REPLACE_EXISTING, MOVEFILE_WRITE_THROUGH, MoveFileExW, OPEN_EXISTING,
-};
-use windows::core::PCWSTR;
 
 use crate::{FcpError, FcpResult};
 
@@ -146,7 +138,15 @@ fn temporary_path(target: &Path) -> FcpResult<std::path::PathBuf> {
     Ok(target.with_file_name(format!("{file_name}.tmp")))
 }
 
+/// Replaces `target` with `source` in one step, so a reader never observes a partial file and a
+/// crash leaves either the old contents or the new ones.
+#[cfg(windows)]
 fn atomic_replace(source: &Path, target: &Path) -> FcpResult<()> {
+    use windows::Win32::Storage::FileSystem::{
+        MOVEFILE_REPLACE_EXISTING, MOVEFILE_WRITE_THROUGH, MoveFileExW,
+    };
+    use windows::core::PCWSTR;
+
     let source_wide = wide_path(source);
     let target_wide = wide_path(target);
     unsafe {
@@ -159,8 +159,30 @@ fn atomic_replace(source: &Path, target: &Path) -> FcpResult<()> {
     Ok(())
 }
 
+/// POSIX `rename` is atomic over an existing target by definition, so this needs none of the
+/// flags the Windows path spells out. Durability is not implied — that is what `sync_directory`
+/// below is for, exactly as on Windows.
+#[cfg(unix)]
+fn atomic_replace(source: &Path, target: &Path) -> FcpResult<()> {
+    fs::rename(source, target)?;
+    Ok(())
+}
+
+/// Flushes the *directory entry*, not the file: the contents were already synced when the
+/// temporary file was written, but the rename that published them is itself only durable once the
+/// directory is flushed. Skipping this can leave a crash-recovered directory pointing at neither
+/// name.
+#[cfg(windows)]
 fn sync_directory(directory: &Path) -> FcpResult<()> {
+    use windows::Win32::Foundation::CloseHandle;
+    use windows::Win32::Storage::FileSystem::{
+        CreateFileW, FILE_FLAG_BACKUP_SEMANTICS, FILE_GENERIC_READ, FILE_GENERIC_WRITE,
+        FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE, FlushFileBuffers, OPEN_EXISTING,
+    };
+    use windows::core::PCWSTR;
+
     let directory_wide = wide_path(directory);
+    // FILE_FLAG_BACKUP_SEMANTICS is what makes CreateFileW accept a directory at all.
     let handle = unsafe {
         CreateFileW(
             PCWSTR(directory_wide.as_ptr()),
@@ -179,7 +201,17 @@ fn sync_directory(directory: &Path) -> FcpResult<()> {
     Ok(())
 }
 
+/// `fsync` on a directory descriptor is the POSIX equivalent, and opening a directory read-only is
+/// enough for it.
+#[cfg(unix)]
+fn sync_directory(directory: &Path) -> FcpResult<()> {
+    std::fs::File::open(directory)?.sync_all()?;
+    Ok(())
+}
+
+#[cfg(windows)]
 fn wide_path(path: &Path) -> Vec<u16> {
+    use std::os::windows::ffi::OsStrExt;
     path.as_os_str().encode_wide().chain(Some(0)).collect()
 }
 
