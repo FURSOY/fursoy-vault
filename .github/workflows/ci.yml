@@ -35,7 +35,10 @@ jobs:
         with:
           dotnet-version: "8.0.x"
       - name: Install pinned Velopack CLI
-        run: dotnet tool install --tool-path native-host/target/vpk-tool vpk --version 1.2.0
+        # Installed outside native-host/target on purpose. That directory is restored by
+        # rust-cache, which prunes what it restores, so a cached run would hand dotnet a
+        # half-present tool store and the install would fail on the missing assets file.
+        run: dotnet tool install --tool-path "${{ runner.temp }}/vpk-tool" vpk --version 1.2.0
 
       - name: Install extension dependencies
         working-directory: extension
@@ -78,7 +81,7 @@ jobs:
       - name: Build companion release package
         shell: pwsh
         working-directory: native-host
-        run: ./install/package-release.ps1 -VpkCommand (Resolve-Path ./target/vpk-tool/vpk.exe).Path
+        run: ./install/package-release.ps1 -VpkCommand (Resolve-Path "${{ runner.temp }}/vpk-tool/vpk.exe").Path
 
       - uses: actions/upload-artifact@v4
         with:
