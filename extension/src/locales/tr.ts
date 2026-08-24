@@ -14,7 +14,8 @@ export const tr: Record<string, string> = {
   "onboarding.chrome.localBody": "Oturumların bu bilgisayardan hiç çıkmaz.",
   "onboarding.chrome.accessTitle": "Sadece sen açabilirsin",
   "onboarding.chrome.accessBody": "Geri açmak için yüzün, parmak izin ya da PIN'in gerekir.",
-  "onboarding.chrome.companionMeta": "Windows 10/11 · 64 bit",
+  "onboarding.chrome.companionMeta.win": "Windows 10/11 · 64 bit",
+  "onboarding.chrome.companionMeta.linux": "Linux · 64 bit",
   "onboarding.chrome.doneCompanion": "Yardımcı uygulama bağlandı",
   "onboarding.chrome.doneVault": "Bilgisayarında şifreli kasa",
   "onboarding.chrome.doneCycle": "Kullanmadığında kendiliğinden kilitlenir",
@@ -29,26 +30,29 @@ export const tr: Record<string, string> = {
   "onboarding.install.title": "Yardımcı uygulamayı kur",
   "onboarding.install.body":
     "Tarayıcı eklentileri bilgisayarının güvenlik çipine tek başına ulaşamaz; kasayı açıp kapatan " +
-    "küçük bir Windows programı gerekiyor. İndir ve çalıştır — bir kez yapılıyor, sonraki " +
-    "güncellemeler kendiliğinden geliyor.",
-  "onboarding.install.helloNotice":
+    "küçük bir yardımcı program gerekiyor. Kur ve çalıştır — bir kez yapılıyor.",
+  "onboarding.install.helloNotice.win":
     "Windows hesabında yüz tanıma, parmak izi ya da PIN kurulu olmalı — kasayı bunlardan biriyle açacaksın.",
-  "onboarding.install.signingNotice":
+  "onboarding.install.helloNotice.linux":
+    "Kurulumda bir PIN belirleyeceksin; kasayı her açışında o PIN sorulacak. Bilgisayarında TPM 2.0 güvenlik çipi olmalı.",
+  "onboarding.install.signingNotice.win":
     "Windows \"Bilinmeyen yayımcı\" uyarısı gösterebilir; program henüz imzalı değil. " +
     "\"Daha fazla bilgi\" > \"Yine de çalıştır\" ile devam et.",
   "onboarding.install.downloadButton": "İndir",
   "onboarding.install.checkButton": "Bağlantıyı kontrol et",
   "onboarding.install.waiting": "Yardımcı uygulama bekleniyor…",
   "onboarding.install.connected": "Bağlandı.",
-  "onboarding.install.notConnected":
+  "onboarding.install.notConnected.win":
     "Henüz bağlanamadı. FURSOY Vault Setup'ın tamamlandığından emin ol, sonra bu sekmeyi yenileyip tekrar dene.",
+  "onboarding.install.notConnected.linux":
+    "Henüz bağlanamadı. Kurulum betiğini çalıştırdığından emin ol, sonra tarayıcıyı kapatıp açıp tekrar dene.",
   "onboarding.install.skip": "Şimdilik atla",
   "onboarding.recovery.title": "Eski bir kasa bulundu",
   "onboarding.recovery.body": "Bu bilgisayarda daha önce oluşturulmuş bir kasa var. Yüzün, parmak izin ya da PIN'inle geri bağlayabilirsin. Hangi siteleri içerdiği, sen onaylamadan gösterilmez.",
   "onboarding.recovery.recommended": "Önerilen",
   "onboarding.recovery.details": "{browser} · {count} korunan site · Son kullanım {date}",
-  "onboarding.recovery.button": "Windows Hello ile kurtar",
-  "onboarding.recovery.waiting": "Windows Hello onayı bekleniyor…",
+  "onboarding.recovery.button": "Kimliğini doğrulayarak kurtar",
+  "onboarding.recovery.waiting": "Onayın bekleniyor…",
   "onboarding.recovery.success": "Kasa yeniden bağlandı. Korunan siteler yükleniyor…",
   "onboarding.recovery.error": "Kasa geri getirilemedi. Kimlik doğrulamanı onayladığından ve yardımcı uygulamanın bağlı olduğundan emin ol.",
   "onboarding.recovery.startFresh": "Yeni kasa ile devam et",
@@ -105,11 +109,15 @@ export const tr: Record<string, string> = {
   "common.error.monitorRequiresUnlocked":
     "Yalnız izleme moduna geçmeden önce kilitli oturumu bir kez açın; aksi halde kasadaki tek oturum kopyası kaybolur.",
   "common.error.hostNotConnected": "Yardımcı uygulama bağlı değil.",
-  "common.error.upgradeRequired":
+  "common.error.upgradeRequired.win":
     "Yardımcı uygulamanın sürümü bu eklentiyle uyumlu değil. FURSOY Vault Setup'ı bir kez çalıştırın; sonraki güncellemeler kendiliğinden gelir.",
+  "common.error.upgradeRequired.linux":
+    "Yardımcı uygulamanın sürümü bu eklentiyle uyumlu değil. Paket yöneticinden güncelle ve tarayıcıyı yeniden başlat.",
   "common.error.unknownGroup": "Bu site zaten korunmuyor.",
-  "common.error.helloNotConfigured":
+  "common.error.helloNotConfigured.win":
     "Bu Windows hesabında Windows Hello (PIN, parmak izi veya yüz tanıma) kurulu değil. FURSOY Vault için gerekli — Ayarlar > Hesaplar > Oturum açma seçenekleri'nden bir PIN oluşturup tekrar deneyin.",
+  "common.error.helloNotConfigured.linux":
+    "Kasa için bir PIN belirlenmemiş. Korunan bir siteyi bir kez açmayı dene; PIN belirleme penceresi çıkacak.",
   "common.error.pinTooShort": "PIN en az 4 karakter olmalı. Tekrar dene.",
   "common.error.pinMismatch": "İki PIN aynı değildi. Tekrar dene.",
   "common.error.generic": "İşlem tamamlanamadı.",
@@ -179,7 +187,7 @@ export const tr: Record<string, string> = {
   "options.disconnectedLabel": "Bağlı değil",
   "options.topbar.eyebrow": "Yönetim merkezi",
   "options.topbar.title": "Oturum güvenliği",
-  "options.topbar.badge": "Windows Hello ile korunuyor",
+  "options.topbar.badge": "Kimlik doğrulamayla korunuyor",
   "options.hero.eyebrow": "Durum özeti",
   "options.hero.titleLine1": "Önemli oturumların,",
   "options.hero.titleLine2": "yalnızca sen açtığında açık.",
@@ -235,7 +243,7 @@ export const tr: Record<string, string> = {
   "unlock.trust.encryptedVault": "Şifreli kasa",
   "unlock.trust.autoRelock": "Otomatik yeniden kilitleme",
   "unlock.status.ready": "Bu sitenin oturumunu açmak için kimliğini doğrula.",
-  "unlock.button.ready": "Windows Hello ile aç",
+  "unlock.button.ready": "Kimliğini doğrula ve aç",
   "unlock.status.unlocking": "Onayın bekleniyor, ardından oturum geri gelecek…",
   "unlock.button.unlocking": "Onay bekleniyor…",
   "unlock.status.recovering": "Kasa toparlanıyor; birazdan tekrar deneyebilirsin.",

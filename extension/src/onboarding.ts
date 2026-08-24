@@ -1,6 +1,7 @@
 import { enhanceSelects, setOptionAvailable } from "./custom-select.js";
-import { translate, type Locale } from "./i18n.js";
-import { currentLocale } from "./locale.js";
+import { hasMessage, translate, type Locale } from "./i18n.js";
+import { applyPlatform, currentLocale } from "./locale.js";
+import type { Platform } from "./i18n.js";
 import { isValidProtectionScope, normalizeProtectionScopeInput } from "./protocol.js";
 
 type PolicyLevel = "critical" | "balanced" | "convenient" | "monitor";
@@ -15,10 +16,12 @@ interface RecoveryCandidate {
 
 const ONBOARDING_STEP_KEY = "fursoy.onboarding.step";
 
-// GitHub always redirects this exact URL to the latest release's same-named asset — see the
+// GitHub always redirects these exact URLs to the latest release's same-named asset — see the
 // matching comment in native-host/install/package-release.ps1. The friendly Setup filename stays
 // fixed while Velopack's versioned package/feed assets power automatic companion updates.
-const INSTALLER_DOWNLOAD_URL = "https://github.com/FURSOY/fursoy-vault/releases/latest/download/FURSOY-Vault-Setup.exe";
+const RELEASE_DOWNLOAD = "https://github.com/FURSOY/fursoy-vault/releases/latest/download";
+const INSTALLER_URL_WIN = `${RELEASE_DOWNLOAD}/FURSOY-Vault-Setup.exe`;
+const INSTALLER_URL_LINUX = `${RELEASE_DOWNLOAD}/fursoy-vault-linux-x86_64.tar.gz`;
 
 function required<T extends HTMLElement>(id: string): T {
   const element = document.getElementById(id);
@@ -92,9 +95,14 @@ function applyTranslations(locale: Locale): void {
   required<HTMLElement>("install-title").textContent = t(locale, "onboarding.install.title");
   required<HTMLElement>("install-body").textContent = t(locale, "onboarding.install.body");
   installDownload.textContent = t(locale, "onboarding.install.downloadButton");
-  installDownload.href = INSTALLER_DOWNLOAD_URL;
+  installDownload.href = platform === "win" ? INSTALLER_URL_WIN : INSTALLER_URL_LINUX;
   required<HTMLElement>("install-hello-notice").textContent = t(locale, "onboarding.install.helloNotice");
-  required<HTMLElement>("install-signing-notice").textContent = t(locale, "onboarding.install.signingNotice");
+  // Hidden rather than translated into something vague: the unsigned-installer warning is a
+  // Windows thing, and there is no Linux equivalent to soften it into.
+  const signingNotice = required<HTMLElement>("install-signing-notice");
+  const hasSigningNotice = hasMessage(locale, "onboarding.install.signingNotice");
+  signingNotice.hidden = !hasSigningNotice;
+  if (hasSigningNotice) signingNotice.textContent = t(locale, "onboarding.install.signingNotice");
   installCheck.textContent = t(locale, "onboarding.install.checkButton");
   installSkip.textContent = t(locale, "onboarding.install.skip");
   required<HTMLElement>("recovery-title").textContent = t(locale, "onboarding.recovery.title");
@@ -144,6 +152,7 @@ function requestScopePermission(scope: string): Promise<boolean> {
 }
 
 let locale: Locale = "tr";
+let platform: Platform = "win";
 
 async function checkConnection(): Promise<void> {
   installCheck.disabled = true;
@@ -297,6 +306,8 @@ doneFinish.addEventListener("click", () => {
 });
 
 void (async () => {
+  // Before any translation: the message table picks platform variants from this.
+  platform = await applyPlatform();
   locale = await currentLocale();
   document.documentElement.lang = locale;
   applyTranslations(locale);

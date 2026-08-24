@@ -1,5 +1,5 @@
 import { translate, type Locale } from "./i18n.js";
-import { currentLocale } from "./locale.js";
+import { applyPlatform, currentLocale } from "./locale.js";
 
 type UnlockStatus = "ready" | "unlocking" | "recovering" | "redirecting" | "error";
 
@@ -57,6 +57,8 @@ setInterval(() => {
 void sendUnlockMessage("unlock.status").then(handleResponse, () => render("error"));
 
 void (async () => {
+  // Before any translation: the message table picks platform variants from this.
+  await applyPlatform();
   locale = await currentLocale();
   applyTranslations();
 })();

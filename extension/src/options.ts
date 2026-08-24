@@ -1,6 +1,6 @@
 import { enhanceSelect, enhanceSelects, setOptionAvailable } from "./custom-select.js";
 import { translate, type Locale } from "./i18n.js";
-import { currentLocale } from "./locale.js";
+import { applyPlatform, currentLocale } from "./locale.js";
 import { isValidProtectionScope, normalizeProtectionScopeInput } from "./protocol.js";
 import { permissionOrigins, shouldOfferGrantAll } from "./site-permissions.js";
 
@@ -162,6 +162,8 @@ function applyTranslations(): void {
 }
 
 void (async () => {
+  // Before any translation: the message table picks platform variants from this.
+  await applyPlatform();
   locale = await currentLocale();
   applyTranslations();
   await refreshInitialState();

@@ -9,6 +9,8 @@ declare namespace chrome {
       onMessage: { addListener(callback: (message: unknown) => void): void };
       onDisconnect: { addListener(callback: () => void): void }; }
     function connectNative(name: string): Port;
+    interface PlatformInfo { os: string; arch: string }
+    function getPlatformInfo(callback: (info: PlatformInfo) => void): void;
     function sendMessage(message: unknown, callback?: (response: unknown) => void): void;
     interface MessageSender { tab?: tabs.Tab }
     const onMessage: { addListener(callback: (message: unknown, sender: MessageSender, respond: (value: unknown) => void) => boolean | void): void };

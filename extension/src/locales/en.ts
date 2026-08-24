@@ -13,7 +13,8 @@ export const en: Record<string, string> = {
   "onboarding.chrome.localBody": "Your sessions never leave this computer.",
   "onboarding.chrome.accessTitle": "Only you can open it",
   "onboarding.chrome.accessBody": "It takes your face, fingerprint or PIN to unlock.",
-  "onboarding.chrome.companionMeta": "Windows 10/11 · 64-bit",
+  "onboarding.chrome.companionMeta.win": "Windows 10/11 · 64-bit",
+  "onboarding.chrome.companionMeta.linux": "Linux · 64-bit",
   "onboarding.chrome.doneCompanion": "Helper app connected",
   "onboarding.chrome.doneVault": "Encrypted vault on your PC",
   "onboarding.chrome.doneCycle": "Locks itself when you're not using it",
@@ -27,27 +28,30 @@ export const en: Record<string, string> = {
 
   "onboarding.install.title": "Install the helper app",
   "onboarding.install.body":
-    "Browser extensions can't reach your PC's security chip on their own, so a small Windows " +
-    "program does the locking and unlocking. Download and run it — once is enough, later " +
-    "updates install themselves.",
-  "onboarding.install.helloNotice":
+    "Browser extensions can't reach your PC's security chip on their own, so a small helper " +
+    "program does the locking and unlocking. Install it — once is enough.",
+  "onboarding.install.helloNotice.win":
     "Your Windows account needs a face, fingerprint or PIN set up — that's what opens the vault.",
-  "onboarding.install.signingNotice":
+  "onboarding.install.helloNotice.linux":
+    "You'll choose a PIN during setup, and it is asked for each time the vault opens. Your computer needs a TPM 2.0 security chip.",
+  "onboarding.install.signingNotice.win":
     "Windows may warn about an \"Unknown publisher\" because the program isn't signed yet. " +
     "Choose \"More info\" > \"Run anyway\" to continue.",
   "onboarding.install.downloadButton": "Download",
   "onboarding.install.checkButton": "Check connection",
   "onboarding.install.waiting": "Waiting for the helper app…",
   "onboarding.install.connected": "Connected.",
-  "onboarding.install.notConnected":
+  "onboarding.install.notConnected.win":
     "Not connected yet. Make sure FURSOY Vault Setup completed, then reload this tab and try again.",
+  "onboarding.install.notConnected.linux":
+    "Not connected yet. Make sure the install script ran, then close and reopen your browser and try again.",
   "onboarding.install.skip": "Skip for now",
   "onboarding.recovery.title": "An existing vault was found",
   "onboarding.recovery.body": "This computer already has a vault from before. Reconnect it with your face, fingerprint or PIN. Which sites it holds stays hidden until you approve.",
   "onboarding.recovery.recommended": "Recommended",
   "onboarding.recovery.details": "{browser} · {count} protected sites · Last used {date}",
-  "onboarding.recovery.button": "Recover with Windows Hello",
-  "onboarding.recovery.waiting": "Waiting for Windows Hello approval…",
+  "onboarding.recovery.button": "Recover by verifying it's you",
+  "onboarding.recovery.waiting": "Waiting for your approval…",
   "onboarding.recovery.success": "Vault reconnected. Loading protected sites…",
   "onboarding.recovery.error": "The vault could not be recovered. Make sure you approved the check and the helper app is connected.",
   "onboarding.recovery.startFresh": "Continue with a new vault",
@@ -103,11 +107,15 @@ export const en: Record<string, string> = {
   "common.error.monitorRequiresUnlocked":
     "Unlock the locked session once before switching to monitor-only mode, or the vault's only copy of it will be lost.",
   "common.error.hostNotConnected": "The helper app isn't connected.",
-  "common.error.upgradeRequired":
+  "common.error.upgradeRequired.win":
     "The helper app's version doesn't match this extension. Run FURSOY Vault Setup once; later updates install themselves.",
+  "common.error.upgradeRequired.linux":
+    "The helper app's version doesn't match this extension. Update it through your package manager and restart the browser.",
   "common.error.unknownGroup": "This site isn't protected anymore.",
-  "common.error.helloNotConfigured":
+  "common.error.helloNotConfigured.win":
     "Windows Hello (PIN, fingerprint, or face) isn't set up on this Windows account. FURSOY Vault requires it — create a PIN under Settings > Accounts > Sign-in options and try again.",
+  "common.error.helloNotConfigured.linux":
+    "No PIN has been set for the vault yet. Open one of your protected sites once and you'll be asked to choose one.",
   "common.error.pinTooShort": "The PIN must be at least 4 characters. Try again.",
   "common.error.pinMismatch": "The two PINs didn't match. Try again.",
   "common.error.generic": "The operation couldn't be completed.",
@@ -177,7 +185,7 @@ export const en: Record<string, string> = {
   "options.disconnectedLabel": "Disconnected",
   "options.topbar.eyebrow": "Management center",
   "options.topbar.title": "Session security",
-  "options.topbar.badge": "Protected with Windows Hello",
+  "options.topbar.badge": "Protected by verifying it's you",
   "options.hero.eyebrow": "Status summary",
   "options.hero.titleLine1": "Your important sessions,",
   "options.hero.titleLine2": "open only when you open them.",
@@ -233,7 +241,7 @@ export const en: Record<string, string> = {
   "unlock.trust.encryptedVault": "Encrypted vault",
   "unlock.trust.autoRelock": "Automatic re-locking",
   "unlock.status.ready": "Verify it's you to open this site's session.",
-  "unlock.button.ready": "Unlock with Windows Hello",
+  "unlock.button.ready": "Verify it's you and unlock",
   "unlock.status.unlocking": "Waiting for your approval, then the session comes back…",
   "unlock.button.unlocking": "Waiting for approval…",
   "unlock.status.recovering": "The vault is recovering; you can try again shortly.",

@@ -11,7 +11,7 @@ import {
   validateMonitorEvent, type MonitorEvent, type MonitorSignal, type NotificationDecisionState,
 } from "./monitor.js";
 import { chainedEvictionAfterCompletion, decideStartup, shouldRetryReconciliation, stateAfterDisconnect, stateAfterHostError } from "./state-machine.js";
-import { currentLocale } from "./locale.js";
+import { applyPlatform, currentLocale } from "./locale.js";
 import type { Locale } from "./i18n.js";
 import { ConnectionReadiness } from "./connection-readiness.js";
 import { mayAbortWithEmptySnapshot, OperationCoordinator, type OperationReference } from "./operation-coordinator.js";
@@ -24,7 +24,7 @@ const EXTENSION_VERSION = chrome.runtime.getManifest().version;
 // (a narrow startup window) fall back to the default locale rather than waiting, since a toast
 // unrelated to the config handshake must not be blocked on it.
 let uiLocale: Locale = "tr";
-void currentLocale().then((resolved) => { uiLocale = resolved; });
+void applyPlatform().then(() => currentLocale()).then((resolved) => { uiLocale = resolved; });
 
 type GroupState = "uninitialized" | "sealed" | "unlocking" | "leased" | "evicting" | "degraded";
 type LeasePurpose = "inject" | "enroll";
