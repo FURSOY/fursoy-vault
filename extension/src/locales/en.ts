@@ -242,8 +242,9 @@ export const en: Record<string, string> = {
   "unlock.button.redirecting": "Opening the site…",
   "unlock.error.pinIncorrect": "That PIN is not right. You can try again.",
   "unlock.error.pinLockedOut":
-    "Too many wrong PINs, so the security chip has locked itself for a while. It will refuse even " +
-    "the right PIN until then — wait a little and try again.",
+    "Too many wrong PINs, so your computer's security chip has locked itself. It will refuse even " +
+    "the right PIN for a while — that is the protection that stops someone guessing their way in. " +
+    "Your vault is untouched; waiting 15-20 minutes is usually enough.",
   "unlock.status.error": "Couldn't unlock the session. You can try again.",
   "unlock.button.error": "Try again",
 

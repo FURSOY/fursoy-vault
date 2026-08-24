@@ -25,10 +25,12 @@ use sha2::{Digest, Sha256};
 use tss_esapi::attributes::ObjectAttributesBuilder;
 use tss_esapi::constants::response_code::Tss2ResponseCodeKind;
 use tss_esapi::constants::tss::{TPM2_RH_NULL, TPM2_ST_HASHCHECK};
+use tss_esapi::constants::{CapabilityType, PropertyTag};
 use tss_esapi::handles::KeyHandle;
 use tss_esapi::interface_types::algorithm::{HashingAlgorithm, PublicAlgorithm};
 use tss_esapi::interface_types::ecc::EccCurve;
 use tss_esapi::interface_types::resource_handles::Hierarchy;
+use tss_esapi::structures::CapabilityData;
 use tss_esapi::structures::{
     Auth, Digest as TpmDigest, EccPoint, EccScheme, EccSignature, HashScheme, HashcheckTicket,
     KeyDerivationFunctionScheme, Private, Public, PublicBuilder, PublicEccParametersBuilder,
@@ -59,6 +61,9 @@ const MINIMUM_PIN_LENGTH: usize = 4;
 const PROMPT_TIMEOUT_SECONDS: u32 = 120;
 /// Shown on the prompt window so the user can tell which application is asking.
 const PROMPT_TITLE: &str = "FURSOY Vault";
+/// Warn from this many attempts down. Showing a count at every attempt on a TPM that tolerates
+/// dozens would be noise; staying silent on one that tolerates three would be negligent.
+const LOW_ATTEMPT_WARNING: u32 = 3;
 
 /// A pointer and a public-key cache — not a secret. The private key exists only inside the TPM and
 /// the stored private area is encrypted to it, so this file is useless on another machine.
@@ -120,7 +125,16 @@ impl CapabilitySigner for Authorizer {
     fn sign(&self, payload: CapabilityPayload) -> FcpResult<SignedCapability> {
         payload.validate_shape()?;
         let message = payload.canonical_bytes();
-        let pin = prompt_pin("Enter your FURSOY Vault PIN to unlock this session")?;
+
+        // Asked before prompting, not after failing. A TPM decides for itself how few wrong
+        // attempts it tolerates, and the one this was first run against allows three before
+        // locking for roughly seventeen minutes — so a person who mistypes twice is one keystroke
+        // away from being shut out, and has no way to know it unless told.
+        let lockout = lockout_state()?;
+        if lockout.locked {
+            return Err(FcpError::UserActionable("pin_locked_out"));
+        }
+        let pin = prompt_pin(&unlock_prompt(&lockout))?;
 
         let signature = with_key(&self.registry, |context, key| {
             context
@@ -229,6 +243,55 @@ fn enroll(credential_path: &Path) -> FcpResult<Authorizer> {
     })();
     let _ = context.flush_context(parent.into());
     result
+}
+
+/// What the TPM will currently tolerate. `remaining` is how many wrong PINs are left before it
+/// locks; `None` means the TPM would not say, in which case nothing is claimed rather than a
+/// number being guessed.
+struct LockoutState {
+    locked: bool,
+    remaining: Option<u32>,
+}
+
+fn lockout_state() -> FcpResult<LockoutState> {
+    let mut context = open_context()?;
+    let read = |context: &mut Context, tag: PropertyTag| -> Option<u32> {
+        let (data, _) = context
+            .get_capability(CapabilityType::TpmProperties, u32::from(tag), 1)
+            .ok()?;
+        match data {
+            CapabilityData::TpmProperties(list) => list
+                .find(tag)
+                .map(tss_esapi::structures::TaggedProperty::value),
+            _ => None,
+        }
+    };
+    let counter = read(&mut context, PropertyTag::LockoutCounter);
+    let maximum = read(&mut context, PropertyTag::MaxAuthFail);
+    Ok(match (counter, maximum) {
+        (Some(counter), Some(maximum)) => LockoutState {
+            locked: counter >= maximum,
+            remaining: Some(maximum.saturating_sub(counter)),
+        },
+        // Unreadable counters must not block an unlock: a wrong PIN still fails safely on its own,
+        // so the cost of guessing wrong here is a missing hint, not a missing check.
+        _ => LockoutState {
+            locked: false,
+            remaining: None,
+        },
+    })
+}
+
+fn unlock_prompt(lockout: &LockoutState) -> String {
+    let base = "Enter your FURSOY Vault PIN to unlock this session";
+    match lockout.remaining {
+        Some(remaining) if remaining <= LOW_ATTEMPT_WARNING => format!(
+            "{base}
+
+Attempts left before the security chip locks: {remaining}"
+        ),
+        _ => base.to_owned(),
+    }
 }
 
 // ---------------------------------------------------------------------------------------------

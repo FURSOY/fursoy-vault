@@ -104,7 +104,6 @@ fn take_field(bytes: &[u8]) -> Option<(&[u8], &[u8])> {
     let (length, rest) = bytes.split_at_checked(2)?;
     let length = usize::from(u16::from_le_bytes([length[0], length[1]]));
     rest.split_at_checked(length)
-        .map(|(field, rest)| (field, rest))
 }
 
 // ---------------------------------------------------------------------------------------------
