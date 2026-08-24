@@ -240,6 +240,10 @@ export const en: Record<string, string> = {
   "unlock.button.recovering": "Recovering…",
   "unlock.status.redirecting": "The session is ready; opening the site…",
   "unlock.button.redirecting": "Opening the site…",
+  "unlock.error.pinIncorrect": "That PIN is not right. You can try again.",
+  "unlock.error.pinLockedOut":
+    "Too many wrong PINs, so the security chip has locked itself for a while. It will refuse even " +
+    "the right PIN until then — wait a little and try again.",
   "unlock.status.error": "Couldn't unlock the session. You can try again.",
   "unlock.button.error": "Try again",
 

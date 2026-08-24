@@ -242,6 +242,10 @@ export const tr: Record<string, string> = {
   "unlock.button.recovering": "Kasa toparlanıyor…",
   "unlock.status.redirecting": "Oturum hazır; site açılıyor…",
   "unlock.button.redirecting": "Site açılıyor…",
+  "unlock.error.pinIncorrect": "PIN yanlış. Tekrar deneyebilirsin.",
+  "unlock.error.pinLockedOut":
+    "Çok fazla yanlış PIN denendi ve güvenlik çipi bir süreliğine kilitlendi. Doğru PIN'i girsen " +
+    "bile bir süre kabul etmeyecek; biraz bekleyip tekrar dene.",
   "unlock.status.error": "Oturum açılamadı. Yeniden deneyebilirsin.",
   "unlock.button.error": "Yeniden dene",
 

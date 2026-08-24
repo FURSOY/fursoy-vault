@@ -23,6 +23,7 @@ use p256::ecdsa::{Signature as P256Signature, VerifyingKey};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use tss_esapi::attributes::ObjectAttributesBuilder;
+use tss_esapi::constants::response_code::Tss2ResponseCodeKind;
 use tss_esapi::constants::tss::{TPM2_RH_NULL, TPM2_ST_HASHCHECK};
 use tss_esapi::handles::KeyHandle;
 use tss_esapi::interface_types::algorithm::{HashingAlgorithm, PublicAlgorithm};
@@ -35,7 +36,7 @@ use tss_esapi::structures::{
 };
 use tss_esapi::traits::{Marshall, UnMarshall};
 use tss_esapi::tss2_esys::TPMT_TK_HASHCHECK;
-use tss_esapi::{Context, TctiNameConf};
+use tss_esapi::{Context, Error as TssError, TctiNameConf};
 use zeroize::Zeroizing;
 
 use crate::atomic_file::write_verified;
@@ -139,7 +140,7 @@ impl CapabilitySigner for Authorizer {
                         validation,
                     )
                 })
-                .map_err(|_| FcpError::Capability("user verification failed".into()))?;
+                .map_err(signing_failure)?;
             raw_signature(&signature)
         })?;
 
@@ -329,6 +330,23 @@ impl PromptTool {
         } else {
             Ok(Some(pin))
         }
+    }
+}
+
+/// Turns a signing refusal into something the user can act on.
+///
+/// The lockout case matters most: after enough wrong PINs the TPM stops accepting the right one
+/// too, for a recovery interval it decides. Reported as a plain failure it looks like the correct
+/// PIN has stopped working, which is the point at which someone concludes their vault is lost.
+fn signing_failure(error: TssError) -> FcpError {
+    let kind = match error {
+        TssError::Tss2Error(code) => code.kind(),
+        TssError::WrapperError(_) => None,
+    };
+    match kind {
+        Some(Tss2ResponseCodeKind::AuthFail) => FcpError::UserActionable("pin_incorrect"),
+        Some(Tss2ResponseCodeKind::Lockout) => FcpError::UserActionable("pin_locked_out"),
+        _ => FcpError::Capability("user verification failed".into()),
     }
 }
 

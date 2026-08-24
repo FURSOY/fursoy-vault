@@ -622,6 +622,13 @@ async function handleHostMessage(message: WireMessage): Promise<void> {
       const pendingLease = state.pendingLeaseRequest;
       state.pendingLeaseRequest = undefined;
       state.evictionRequestPending = false;
+      // Carry the host's own code to the unlock page. A navigation unlock happens on its own
+      // document, so an error that only reaches the popup is an error nobody sees: the person is
+      // looking at the unlock screen, waiting.
+      if (state.navigationUnlockRequestTabId !== undefined) {
+        state.navigationUnlockRequestTabId = undefined;
+        state.navigationUnlockError = code;
+      }
       const recovery = stateAfterHostError(state.groupState, pendingLease);
       state.groupState = recovery.state;
       state.reconciliation = recovery.reconciliation;
@@ -670,7 +677,9 @@ async function handleHostMessage(message: WireMessage): Promise<void> {
         state.groupState = "sealed";
         if (state.navigationUnlockRequestTabId !== undefined) {
           state.navigationUnlockRequestTabId = undefined;
-          state.navigationUnlockError = "hello_rejected_or_unlock_denied";
+          // The deny reason is the host's, not a guess: "the user refused" and "the vault is busy"
+          // are different things to be told.
+          state.navigationUnlockError = requiredString(message.payload, "reason");
         }
       }
       state.lastEvent = `lease_deny:${requiredString(message.payload, "reason")}`;

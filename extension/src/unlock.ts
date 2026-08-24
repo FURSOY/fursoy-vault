@@ -61,10 +61,25 @@ void (async () => {
   applyTranslations();
 })();
 
+/// Maps a host error code to a message. Anything not listed here falls back to the generic wording
+/// rather than showing a code, but the cases that a person can actually do something about are
+/// listed — this page is where the PIN is entered, so a failure here is one they are standing in
+/// front of and waiting on.
+const ERROR_KEYS: Record<string, string> = {
+  pin_incorrect: "unlock.error.pinIncorrect",
+  pin_locked_out: "unlock.error.pinLockedOut",
+  pin_too_short: "common.error.pinTooShort",
+  pin_mismatch: "common.error.pinMismatch",
+  hello_not_configured: "common.error.helloNotConfigured",
+};
+
+let lastErrorKey: string | undefined;
+
 function handleResponse(response: unknown): void {
   const result = response as UnlockResponse | undefined;
   const status = result?.status ?? "error";
   if (status === "ready" || status === "error") requestActive = false;
+  lastErrorKey = status === "error" ? ERROR_KEYS[result?.error ?? ""] : undefined;
   render(status);
 }
 
@@ -93,7 +108,7 @@ function render(status: UnlockStatus): void {
       button.disabled = true;
       break;
     case "error":
-      statusText.textContent = t("unlock.status.error");
+      statusText.textContent = lastErrorKey === undefined ? t("unlock.status.error") : t(lastErrorKey);
       buttonLabel.textContent = t("unlock.button.error");
       button.disabled = requestActive;
       break;
