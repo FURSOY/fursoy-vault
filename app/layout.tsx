@@ -8,8 +8,8 @@ const spaceMono = Space_Mono({ variable: "--font-mono", subsets: ["latin"], weig
 export const metadata: Metadata = {
   metadataBase: new URL("https://fursoy.com"),
   title: { default: "FURSOY Vault — Local session protection", template: "%s · FURSOY Vault" },
-  description: "Protect selected Chrome sessions in a local encrypted Windows vault and restore them only after Windows Hello approval.",
-  keywords: ["FURSOY Vault", "Windows Hello", "Chrome session protection", "local cookie vault", "open source security"],
+  description: "Protect selected browser sessions in an encrypted vault on your own machine and restore them only after you verify it is you.",
+  keywords: ["FURSOY Vault", "Windows Hello", "TPM", "browser session protection", "local cookie vault", "open source security"],
   alternates: { canonical: "/" },
   authors: [{ name: "FURSOY", url: "https://fursoy.com" }],
   creator: "FURSOY",

@@ -15,8 +15,8 @@ test("renders the FURSOY Vault homepage", async () => {
   const html = await response.text();
   assert.match(html, /FURSOY Vault/);
   assert.match(html, /Close the session/);
-  assert.match(html, /Windows Hello/);
-  assert.match(html, /Windows companion currently unsigned/);
+  assert.match(html, /verify it is you/);
+  assert.match(html, /Companion app currently unsigned/);
   assert.match(html, /releases\/latest\/download\/FURSOY-Vault-Setup\.exe/);
   assert.match(html, /SoftwareApplication/);
   assert.match(html, /rel="canonical" href="https:\/\/fursoy\.com\/?"/);
@@ -52,7 +52,8 @@ test("renders the official download page and signing status", async () => {
   const response = await render("/download");
   assert.equal(response.status, 200);
   const html = await response.text();
-  assert.match(html, /Download Windows companion/);
+  assert.match(html, /Download for Windows/);
+  assert.match(html, /Download for Linux/);
   assert.match(html, /FURSOY-Vault-Setup\.exe/);
   assert.match(html, /Code signing status/);
   assert.match(html, /Unknown publisher/);
