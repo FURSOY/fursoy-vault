@@ -88,3 +88,62 @@ jobs:
             extension/target/fursoy-vault-extension-v*.zip
             extension/target/fursoy-vault-extension-v*.zip.sha256
             native-host/target/velopack/*
+
+  # The Windows job cannot see any of this: everything behind #[cfg(unix)] is invisible to a
+  # compiler targeting Windows, so the Linux backends were reaching main with no format check, no
+  # lint and no test run at all. The extension is platform-independent and stays with the job above.
+  linux-gates:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Kept in step with native-host/rust-toolchain.toml, exactly as the Windows job is.
+      - uses: dtolnay/rust-toolchain@1.98.0
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: native-host
+
+      # tss2 is a C library the tss-esapi crate links against; swtpm is a software TPM, which is
+      # what the tests run against since a runner has no TPM device of its own.
+      - name: Install TPM toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libtss2-dev swtpm swtpm-tools
+
+      - name: Rust format
+        working-directory: native-host
+        run: cargo fmt --all -- --check
+      # Deliberately without --features tpm-simulator: this is the shape a release build has, and
+      # the simulator feature only relaxes which TPM the code will talk to.
+      - name: Rust clippy
+        working-directory: native-host
+        run: cargo clippy --locked --all-targets -- -D warnings
+
+      - name: Start software TPM
+        run: |
+          mkdir -p /tmp/swtpm-state
+          swtpm socket --tpm2 --tpmstate dir=/tmp/swtpm-state \
+            --ctrl type=tcp,port=2322 --server type=tcp,port=2321 \
+            --flags not-need-init,startup-clear --daemon
+          # Fail here rather than inside a confusing test failure if the simulator did not come up.
+          for _ in $(seq 1 20); do pgrep -x swtpm >/dev/null && exit 0; sleep 0.25; done
+          echo "swtpm did not start" >&2
+          exit 1
+
+      # --test-threads=1 is required, not tidiness: a TPM has very few transient object slots
+      # (three on this simulator) and every load consumes one, so parallel tests exhaust them and
+      # fail with out-of-memory errors that point nowhere near the cause.
+      - name: Rust tests
+        working-directory: native-host
+        env:
+          FCP_TPM_TCTI: swtpm:host=127.0.0.1,port=2321
+        run: cargo test --locked --features tpm-simulator -- --include-ignored --test-threads=1
+
+      # The install scripts have no other coverage, and a mistake in them is a machine that cannot
+      # reach its vault.
+      - name: Shell scripts
+        run: |
+          sudo apt-get install -y --no-install-recommends shellcheck
+          shellcheck native-host/install/linux/*.sh
