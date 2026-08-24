@@ -44,8 +44,15 @@ use crate::crypto::webauthn_codec::{hex_decode, hex_encode};
 use crate::protocol::messages::{CapabilityPayload, SignedCapability};
 use crate::{FcpError, FcpResult};
 
-/// Short enough to be memorable, long enough that the TPM's lockout has something to defend.
-const MINIMUM_PIN_LENGTH: usize = 6;
+/// Matches Windows Hello's own floor, and rests on the same assumption: the TPM's dictionary-attack
+/// lockout is what makes a short PIN defensible, since guessing is rate-limited by hardware rather
+/// than by length alone.
+///
+/// There is no option to drop this to zero. An empty PIN is an empty `authValue`, which a TPM
+/// treats as no authorisation requirement at all — the key would sign for anyone, and the entire
+/// argument that a signature proves user verification would collapse. This is a correctness bound,
+/// not a usability setting.
+const MINIMUM_PIN_LENGTH: usize = 4;
 /// Long enough for someone to walk to their machine, short enough that a forgotten prompt does not
 /// hold a vault operation open indefinitely.
 const PROMPT_TIMEOUT_SECONDS: u32 = 120;
@@ -175,15 +182,17 @@ impl CapabilityVerifier for Authorizer {
 // ---------------------------------------------------------------------------------------------
 
 fn enroll(credential_path: &Path) -> FcpResult<Authorizer> {
-    let pin = prompt_pin("Choose a PIN for FURSOY Vault")?;
+    // The requirement is in the prompt rather than only in the rejection: a user who has to fail
+    // once to discover the rule has already been told too late.
+    let pin = prompt_pin(&format!(
+        "Choose a PIN for FURSOY Vault (at least {MINIMUM_PIN_LENGTH} characters)"
+    ))?;
     if pin.chars().count() < MINIMUM_PIN_LENGTH {
-        return Err(FcpError::Capability(format!(
-            "the PIN must be at least {MINIMUM_PIN_LENGTH} characters"
-        )));
+        return Err(FcpError::UserActionable("pin_too_short"));
     }
     let confirmation = prompt_pin("Enter the same PIN again to confirm")?;
     if *pin != *confirmation {
-        return Err(FcpError::Capability("the two PINs did not match".into()));
+        return Err(FcpError::UserActionable("pin_mismatch"));
     }
 
     let mut context = open_context()?;

@@ -110,6 +110,8 @@ export const tr: Record<string, string> = {
   "common.error.unknownGroup": "Bu site zaten korunmuyor.",
   "common.error.helloNotConfigured":
     "Bu Windows hesabında Windows Hello (PIN, parmak izi veya yüz tanıma) kurulu değil. FURSOY Vault için gerekli — Ayarlar > Hesaplar > Oturum açma seçenekleri'nden bir PIN oluşturup tekrar deneyin.",
+  "common.error.pinTooShort": "PIN en az 4 karakter olmalı. Tekrar dene.",
+  "common.error.pinMismatch": "İki PIN aynı değildi. Tekrar dene.",
   "common.error.generic": "İşlem tamamlanamadı.",
   "common.error.permissionDenied": "Chrome izni verilmedi.",
   "common.unprotectWarning": "“{scope}” korumadan çıkarılacak ve kasası kalıcı olarak silinecek. Devam edilsin mi?",

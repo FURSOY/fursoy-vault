@@ -20,6 +20,14 @@ pub enum FcpError {
     Format(String),
     Protocol(String),
     Capability(String),
+    /// A failure the user can act on, carrying the wire code the extension switches on.
+    ///
+    /// Ordinary errors are deliberately flattened to a category before crossing the protocol,
+    /// because their text can contain OS or provider detail. These are safe to send verbatim
+    /// because the payload is a fixed vocabulary chosen here, never a message from elsewhere — and
+    /// they are worth sending, because "the PIN is too short" is only useful if it reaches the
+    /// person who typed it.
+    UserActionable(&'static str),
     /// The platform has no user-verification method enrolled for this account — no Windows Hello
     /// PIN, fingerprint or face. Distinct from a verification that was attempted and refused: this
     /// one is fixed in the OS settings, not by trying again, and the extension turns it into a
@@ -40,6 +48,7 @@ impl Display for FcpError {
             Self::Format(message) => write!(formatter, "vault format error: {message}"),
             Self::Protocol(message) => write!(formatter, "protocol error: {message}"),
             Self::Capability(message) => write!(formatter, "capability rejected: {message}"),
+            Self::UserActionable(code) => write!(formatter, "user action required: {code}"),
             Self::UserVerificationNotConfigured => write!(
                 formatter,
                 "no user verification method is set up for this account"
@@ -61,6 +70,7 @@ impl Error for FcpError {
             | Self::Format(_)
             | Self::Protocol(_)
             | Self::Capability(_)
+            | Self::UserActionable(_)
             | Self::UserVerificationNotConfigured => None,
         }
     }

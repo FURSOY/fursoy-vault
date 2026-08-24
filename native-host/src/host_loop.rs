@@ -123,6 +123,9 @@ fn error_category(error: &FcpError) -> &'static str {
         FcpError::Format(_) => "vault_format",
         FcpError::Protocol(_) => "protocol",
         FcpError::Capability(_) => "capability",
+        // The payload is the wire code itself; see the variant's documentation for why this one
+        // is safe to forward when the others are not.
+        FcpError::UserActionable(code) => code,
         // Kept as the wire code the extension already switches on; the variant is
         // platform-neutral now but the message it maps to is what users see.
         FcpError::UserVerificationNotConfigured => "hello_not_configured",

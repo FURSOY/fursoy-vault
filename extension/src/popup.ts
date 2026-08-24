@@ -404,6 +404,8 @@ function describeError(code: string | undefined): string {
     case "upgrade_required": return t("common.error.upgradeRequired");
     case "unknown_group": return t("common.error.unknownGroup");
     case "hello_not_configured": return t("common.error.helloNotConfigured");
+    case "pin_too_short": return t("common.error.pinTooShort");
+    case "pin_mismatch": return t("common.error.pinMismatch");
     default: return t("common.error.generic");
   }
 }

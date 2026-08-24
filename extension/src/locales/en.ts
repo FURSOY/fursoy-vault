@@ -108,6 +108,8 @@ export const en: Record<string, string> = {
   "common.error.unknownGroup": "This site isn't protected anymore.",
   "common.error.helloNotConfigured":
     "Windows Hello (PIN, fingerprint, or face) isn't set up on this Windows account. FURSOY Vault requires it — create a PIN under Settings > Accounts > Sign-in options and try again.",
+  "common.error.pinTooShort": "The PIN must be at least 4 characters. Try again.",
+  "common.error.pinMismatch": "The two PINs didn't match. Try again.",
   "common.error.generic": "The operation couldn't be completed.",
   "common.error.permissionDenied": "Chrome permission was denied.",
   "common.unprotectWarning": "“{scope}” will be removed from protection and its vault permanently deleted. Continue?",
