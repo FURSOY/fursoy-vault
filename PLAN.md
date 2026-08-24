@@ -3774,7 +3774,7 @@ sonrasında aynı sonucu veriyor.
 
 ### ADR-032 — Linux desteği: TPM tabanlı ikinci platform
 
-**Tarih:** 2026-08-23 · **Durum:** Kabul edildi (uçtan uca donanım testi bekliyor) ·
+**Tarih:** 2026-08-23 · **Durum:** Kabul edildi · 
 **Etkilenen:** [ADR-021](#adr-021--windows-hello-imzalama-arka-ucu-webauthndlle-taşınmıştır),
 [ADR-029](#adr-029--single-file-companion-installer-and-fail-safe-automatic-updates),
 [ADR-031](#adr-031--yetkilendirici-platformauthorizer-arkasına-alındı-ve-ölü-jest-cache’i-silindi)
@@ -3827,6 +3827,22 @@ geliştirici ve yöneticiler) zaten Linux'ta.
   örnek kilidi (paylaşımsız handle ↔ `flock`), RNG (`BCryptGenRandom` ↔ `getrandom`), veri kökü
   (`%LOCALAPPDATA%` ↔ `$XDG_DATA_HOME`).
 
+**Sözlük saldırısı koruması yalnızca PIN'i olan anahtarda.** Gerçek donanımda ortaya çıkan ve
+simülatörde hiç tetiklenmeyen bir tasarım hatası: TPM'in DA kilidi, DA korumasına tabi *bütün*
+nesneleri reddeder. KEK ve mühürlenmiş audit anahtarının `authValue`'su yoktur — onları koruyan şey
+TPM'e sahip olmaktır — ama başlangıçta onlar da DA korumalıydı. Sonuç, imzalama anahtarındaki
+yanlış PIN'lerin kasayı tamamen okunamaz yapması ve host'un hiç başlayamamasıydı; kullanıcı
+yalnızca "yardımcı uygulama bağlı değil" görüyordu. Bu, DA korumasının önlemeye çalıştığı şeyden
+daha kötü bir sonuçtur. Artık yalnızca imzalama anahtarı DA korumasındadır: `authValue`'su PIN'dir
+ve kilit, dört karakterlik bir PIN ile çevrimdışı aramanın arasındaki tek şeydir.
+
+**Kilit durumu PIN sorulmadan önce okunur.** Test edilen çip yalnızca **üç** yanlış denemeye izin
+veriyor ve bir hakkı ~17 dakikada iade ediyor; sayaç yeniden başlatmayla sıfırlanmıyor (sıfırlansa
+koruma etkisiz olurdu). Kalan hak, üçe veya altına düştüğünde istem penceresinde gösterilir.
+Kilitliyken istem hiç açılmaz — kabul edilemeyecek bir PIN'i yazdırmak, kullanıcıya PIN'inin yanlış
+olduğunu öğretir. Kilitlenme mesajı ayrıca **kasanın yerinde durduğunu** söyler: bu cümle olmadan,
+doğru PIN'in reddedilmesinden çıkarılacak makul sonuç kasanın kaybedildiğidir.
+
 **Kabul edilen sınırlar.**
 
 Linux'ta izleme yoktur; "yalnız izle" koruma seviyesi orada mevcut değildir.
@@ -3844,6 +3860,11 @@ tüketmez) ve **hata yolları dahil** her handle'ı temizler. Testler `--test-th
 out-of-memory hatalarıyla düşerler. Bu yalnızca test kısıtıdır: üretimde instance lock tek bir
 host garantiler ve işlemler sıralıdır.
 
+CI yalnızca `windows-latest` üzerinde koşuyor, dolayısıyla `#[cfg(unix)]` kodu hiçbir kapıdan
+geçmiyor — bu oturumda Windows'ta görünmeyen bir clippy uyarısı Linux'ta birikmişti. Sürümden önce
+workflow'a bir Linux işi eklenmelidir; testleri `--test-threads=1` ile ve bir simülatöre karşı
+çalıştırmalıdır.
+
 `ADR-029`'un yayın sıralaması genişlemelidir: artık **her iki platformun** companion'ı
 yayınlanmadan mağaza başvurusu yapılmamalıdır, yoksa Linux kullanıcısı eklentiyi kurar ve
 companion'ı bulamaz.
@@ -3851,5 +3872,9 @@ companion'ı bulamaz.
 **Doğrulama.** Windows davranışı değişmedi: 114 Rust testi, clippy ve rustfmt dört fazın öncesinde
 ve sonrasında aynı sonucu veriyor. Linux'ta crate tam derleniyor ve 101 test simülatöre karşı
 geçiyor. TPM+PIN mekanizması ayrıca gerçek donanımda doğrulandı (CachyOS misafirinde vTPM,
-`poc/linux-authorizer`). **Henüz yapılmadı:** gerçek donanımda tarayıcı + eklenti + host zincirinin
-uçtan uca çalıştırılması.
+`poc/linux-authorizer`).
+
+Uçtan uca zincir — tarayıcı, eklenti, host — CachyOS misafirinde gerçek vTPM ile doğrulandı
+(2026-08-24): kurulum, PIN belirleme, kasalama, geri alma, yanlış PIN, kilitlenme ve kurtarma.
+
+**Henüz yapılmadı:** CI'da Linux işi (aşağıdaki nota bakın) ve paketleme.
