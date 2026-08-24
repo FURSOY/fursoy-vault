@@ -15,8 +15,36 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # Built on its own runner and handed to the publishing job, because a Linux binary cannot be
+  # produced on the Windows one: the companion links against the system tss2 library.
+  build-linux:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.98.0
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: native-host
+      - name: Install TPM toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libtss2-dev
+      - name: Package Linux companion
+        working-directory: native-host
+        # Pinned to the tag's commit date so the archive is byte-identical for a given tag no
+        # matter when it is rebuilt, which is what makes the published checksum verifiable.
+        run: |
+          SOURCE_DATE_EPOCH=$(git log -1 --format=%ct) bash install/linux/package-release.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux-companion
+          if-no-files-found: error
+          path: native-host/target/linux-package/*.tar.gz*
+
   build-publish:
     runs-on: windows-latest
+    needs: build-linux
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
@@ -113,6 +141,12 @@ jobs:
         working-directory: native-host
         run: ./install/package-release.ps1 -VpkCommand (Resolve-Path ./target/vpk-tool/vpk.exe).Path
 
+      - name: Fetch the Linux companion
+        uses: actions/download-artifact@v4
+        with:
+          name: linux-companion
+          path: linux-companion
+
       - name: Assemble unsigned release assets
         shell: pwsh
         run: |
@@ -130,6 +164,13 @@ jobs:
           Copy-Item -LiteralPath "${{ steps.version.outputs.extension_hash }}" -Destination $releaseRoot
           Copy-Item -LiteralPath "${{ steps.version.outputs.store_zip }}" -Destination $releaseRoot
           Copy-Item -LiteralPath "${{ steps.version.outputs.store_hash }}" -Destination $releaseRoot
+          # The onboarding page and the website both link to this exact filename, so a release
+          # without it leaves both pointing at a 404.
+          $linuxArchive = "linux-companion/fursoy-vault-linux-x86_64.tar.gz"
+          if (-not (Test-Path -LiteralPath $linuxArchive)) { throw "The Linux companion archive was not produced." }
+          Get-ChildItem -LiteralPath "linux-companion" -File | ForEach-Object {
+            Copy-Item -LiteralPath $_.FullName -Destination $releaseRoot
+          }
 
           $companionHash = (Get-FileHash (Join-Path $releaseRoot "FURSOY-Vault-Setup.exe") -Algorithm SHA256).Hash.ToLowerInvariant()
           [System.IO.File]::WriteAllText(

@@ -425,7 +425,7 @@ dependencies = [
 
 [[package]]
 name = "fursoy-native-host"
-version = "0.5.9"
+version = "0.6.0"
 dependencies = [
  "aes-gcm",
  "getrandom 0.3.4",
