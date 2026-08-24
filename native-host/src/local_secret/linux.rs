@@ -135,6 +135,9 @@ fn create_parent(context: &mut Context) -> FcpResult<KeyHandle> {
         .with_user_with_auth(true)
         .with_restricted(true)
         .with_decrypt(true)
+        // This parent has no authValue, so dictionary-attack protection guards nothing here while
+        // making it fail whenever the TPM is locked out over some other object's PIN.
+        .with_no_da(true)
         .build()
         .map_err(FcpError::from)?;
 
@@ -178,6 +181,10 @@ fn sealed_template() -> FcpResult<Public> {
         .with_decrypt(false)
         .with_sign_encrypt(false)
         .with_restricted(false)
+        // No authValue guards this object either; unsealing needs the TPM, not a secret the user
+        // types. Leaving it under DA protection meant a locked-out TPM took the audit chain with
+        // it, so the host could not even start.
+        .with_no_da(true)
         .build()
         .map_err(FcpError::from)?;
 

@@ -433,6 +433,9 @@ fn create_parent(context: &mut Context) -> FcpResult<KeyHandle> {
         .with_user_with_auth(true)
         .with_restricted(true)
         .with_decrypt(true)
+        // This parent has no authValue, so dictionary-attack protection guards nothing here while
+        // making it fail whenever the TPM is locked out over some other object's PIN.
+        .with_no_da(true)
         .build()
         .map_err(FcpError::from)?;
 
@@ -474,6 +477,9 @@ fn signing_key_template() -> FcpResult<Public> {
         .with_user_with_auth(true)
         .with_sign_encrypt(true)
         .with_restricted(false)
+        // Deliberately left under dictionary-attack protection, unlike every other object here:
+        // its authValue *is* the PIN, and the TPM's lockout is the only thing standing between a
+        // four-character PIN and someone guessing it offline.
         .build()
         .map_err(FcpError::from)?;
 
