@@ -49,6 +49,8 @@ const MINIMUM_PIN_LENGTH: usize = 6;
 /// Long enough for someone to walk to their machine, short enough that a forgotten prompt does not
 /// hold a vault operation open indefinitely.
 const PROMPT_TIMEOUT_SECONDS: u32 = 120;
+/// Shown on the prompt window so the user can tell which application is asking.
+const PROMPT_TITLE: &str = "FURSOY Vault";
 
 /// A pointer and a public-key cache — not a secret. The private key exists only inside the TPM and
 /// the stored private area is encrypted to it, so this file is useless on another machine.
@@ -223,40 +225,102 @@ fn enroll(credential_path: &Path) -> FcpResult<Authorizer> {
 // PIN collection
 // ---------------------------------------------------------------------------------------------
 
-/// Asks through `systemd-ask-password`, which routes to a graphical agent on a desktop and to the
-/// console otherwise, so this works on a headless machine too.
+/// Asks the user for their PIN, out of band from the browser.
 ///
-/// Two details matter. The child's stdout is captured rather than inherited: this process's stdout
-/// *is* the Native Messaging stream, and a prompt written there would corrupt the protocol. And
-/// `--no-tty` keeps it from trying to claim a terminal this process does not own.
+/// The tool is chosen at run time rather than fixed, because there is no single answer that works
+/// everywhere. `systemd-ask-password` was tried first and is wrong for a desktop: it queues the
+/// request under /run/systemd/ask-password and waits for an *agent* to display it, which is how
+/// boot-time and disk-unlock prompts work. Desktop sessions run no such agent, so the call simply
+/// blocks until it times out and the user sees nothing at all. It is kept as the last resort
+/// because it is the only one that works on a headless machine.
+///
+/// Two details matter whichever tool runs. The child's stdout is captured rather than inherited:
+/// this process's stdout *is* the Native Messaging stream, and a prompt written there would
+/// corrupt the protocol. And a non-zero exit is treated as refusal, not as an empty PIN.
 fn prompt_pin(prompt: &str) -> FcpResult<Zeroizing<String>> {
-    let output = Command::new("systemd-ask-password")
-        .arg("--no-tty")
-        .arg(format!("--timeout={PROMPT_TIMEOUT_SECONDS}"))
-        .arg("--icon=security-high")
-        .arg("--id=fursoy-vault")
-        .arg(prompt)
-        .output()
-        .map_err(|_| {
-            FcpError::Capability(
-                "could not ask for the PIN: systemd-ask-password is unavailable".into(),
-            )
-        })?;
+    let graphical =
+        std::env::var_os("WAYLAND_DISPLAY").is_some() || std::env::var_os("DISPLAY").is_some();
 
-    if !output.status.success() {
-        return Err(FcpError::Capability(
-            "the PIN prompt was cancelled or timed out".into(),
-        ));
+    let mut attempted = false;
+    if graphical {
+        for tool in [PromptTool::KDialog, PromptTool::Zenity] {
+            match tool.ask(prompt) {
+                Ok(Some(pin)) => return Ok(pin),
+                // The tool ran and the user said no. Falling through to another prompt would ask
+                // again after an explicit refusal, which is both confusing and a way to nag
+                // someone into approving something they declined.
+                Ok(None) => return Err(cancelled()),
+                Err(()) => attempted = true,
+            }
+        }
     }
-    let pin = Zeroizing::new(
-        String::from_utf8(output.stdout)
-            .map_err(|_| FcpError::Capability("the PIN was not valid text".into()))?,
-    );
-    let trimmed = Zeroizing::new(pin.trim_end_matches(['\n', '\r']).to_owned());
-    if trimmed.is_empty() {
-        return Err(FcpError::Capability("no PIN was entered".into()));
+
+    match PromptTool::SystemdAskPassword.ask(prompt) {
+        Ok(Some(pin)) => Ok(pin),
+        Ok(None) => Err(cancelled()),
+        Err(()) if graphical && attempted => Err(FcpError::Capability(
+            "no PIN prompt is available: install kdialog or zenity".into(),
+        )),
+        Err(()) => Err(FcpError::Capability(
+            "no PIN prompt is available on this system".into(),
+        )),
     }
-    Ok(trimmed)
+}
+
+fn cancelled() -> FcpError {
+    FcpError::Capability("the PIN prompt was dismissed".into())
+}
+
+#[derive(Clone, Copy)]
+enum PromptTool {
+    KDialog,
+    Zenity,
+    SystemdAskPassword,
+}
+
+impl PromptTool {
+    /// `Ok(Some)` is a PIN, `Ok(None)` is the user declining, and `Err(())` means this tool is not
+    /// usable here — the only case where trying the next one is right.
+    fn ask(self, prompt: &str) -> Result<Option<Zeroizing<String>>, ()> {
+        let mut command = match self {
+            Self::KDialog => {
+                let mut command = Command::new("kdialog");
+                command
+                    .arg("--title")
+                    .arg(PROMPT_TITLE)
+                    .arg("--password")
+                    .arg(prompt);
+                command
+            }
+            Self::Zenity => {
+                let mut command = Command::new("zenity");
+                command.arg("--password").arg("--title").arg(PROMPT_TITLE);
+                command
+            }
+            Self::SystemdAskPassword => {
+                let mut command = Command::new("systemd-ask-password");
+                command
+                    .arg("--no-tty")
+                    .arg(format!("--timeout={PROMPT_TIMEOUT_SECONDS}"))
+                    .arg("--icon=security-high")
+                    .arg("--id=fursoy-vault")
+                    .arg(prompt);
+                command
+            }
+        };
+
+        let output = command.output().map_err(|_| ())?;
+        if !output.status.success() {
+            return Ok(None);
+        }
+        let raw = Zeroizing::new(String::from_utf8(output.stdout).map_err(|_| ())?);
+        let pin = Zeroizing::new(raw.trim_end_matches(['\n', '\r']).to_owned());
+        if pin.is_empty() {
+            Ok(None)
+        } else {
+            Ok(Some(pin))
+        }
+    }
 }
 
 fn auth_from(pin: &str) -> FcpResult<Auth> {
