@@ -8,6 +8,8 @@ The extension needs a companion app on the same machine:
 [Windows](https://github.com/FURSOY/fursoy-vault/releases/latest/download/FURSOY-Vault-Setup.exe) ·
 [Linux](https://github.com/FURSOY/fursoy-vault/releases/latest/download/fursoy-vault-linux-x86_64.tar.gz)
 
+![A protected session, locked until the user verifies it is them](extension/store-assets/screenshots/03-windows-hello-unlock-1280x800.png)
+
 FURSOY Vault is a session-cookie vault for Chromium browsers on Windows and Linux. It removes
 cookies for sites the user explicitly protects, stores them encrypted behind the machine's TPM, and
 restores them after a fresh user verification — Windows Hello on Windows, a TPM-held PIN on Linux.
