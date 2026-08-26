@@ -1,10 +1,19 @@
 # FURSOY Vault
 
-FURSOY Vault is a Windows session-cookie vault for Chromium browsers. It removes cookies for sites
-the user explicitly protects, stores them encrypted by TPM/Windows Hello, and restores them after a
-fresh Hello approval. It is deliberately narrower than a password manager or a general
-browser-security suite: it protects browser cookie sessions, not localStorage, IndexedDB,
-service-worker state, downloaded files, passwords, or a compromised Windows account.
+**[Install from the Chrome Web Store](https://chromewebstore.google.com/detail/fursoy-vault/ibjddphkjppgkdbegjibddbjkagdlaea)** ·
+[fursoy.com](https://fursoy.com) ·
+[Releases](https://github.com/FURSOY/fursoy-vault/releases)
+
+The extension needs a companion app on the same machine:
+[Windows](https://github.com/FURSOY/fursoy-vault/releases/latest/download/FURSOY-Vault-Setup.exe) ·
+[Linux](https://github.com/FURSOY/fursoy-vault/releases/latest/download/fursoy-vault-linux-x86_64.tar.gz)
+
+FURSOY Vault is a session-cookie vault for Chromium browsers on Windows and Linux. It removes
+cookies for sites the user explicitly protects, stores them encrypted behind the machine's TPM, and
+restores them after a fresh user verification — Windows Hello on Windows, a TPM-held PIN on Linux.
+It is deliberately narrower than a password manager or a general browser-security suite: it protects
+browser cookie sessions, not localStorage, IndexedDB, service-worker state, downloaded files,
+passwords, or a compromised user account.
 
 The product has four policies: Critical, Balanced and Convenient actively vault cookies; Monitor
 only records best-effort signals and never mutates browser state. Monitoring is detection, not an
@@ -12,8 +21,9 @@ EDR or process blocker. Each regular browser profile receives an isolated vault 
 incognito is unsupported.
 
 The extension ships a fixed id, so the single Chrome Web Store package also runs in Edge, Brave,
-Vivaldi and other Chromium browsers on Windows; the installer registers the Native Messaging host
-under each of their keys. Firefox and Safari are not supported — they use a different Native
+Vivaldi and other Chromium browsers on both platforms. On Windows the installer registers the
+Native Messaging host under each browser's key; on Linux `register.sh` writes the equivalent
+manifest into each browser's directory. Firefox and Safari are not supported — they use a different Native
 Messaging registration model.
 
 Chrome profiles are intentionally isolated and a vault can never be listed, copied or claimed by
@@ -21,6 +31,8 @@ another profile. Clearing extension storage or uninstalling the extension theref
 profile's existing vault unavailable; no automatic cross-profile recovery or escrow path exists.
 
 ## Build and verify
+
+Windows:
 
 ```text
 cd extension
@@ -35,8 +47,21 @@ dotnet tool install --global vpk --version 1.2.0
 powershell -File install/package-release.ps1
 ```
 
-Windows acceptance coverage and the hardware/manual rows are documented in
-`tests/acceptance/MATRIX.md`.
+Linux:
+
+```text
+cd extension
+npm ci
+npm run package
+
+cd ../native-host
+cargo fmt --all -- --check
+cargo clippy --locked --all-targets -- -D warnings
+cargo test --release --locked
+bash install/linux/package-release.sh
+```
+
+Acceptance coverage and the hardware/manual rows are documented in `tests/acceptance/MATRIX.md`.
 
 ### Running the Linux tests
 
@@ -73,12 +98,13 @@ project maintainer. See the full [privacy policy](PRIVACY.md).
 Windows release binaries follow the [project code signing policy](CODE_SIGNING_POLICY.md). The
 Windows companion is currently unsigned and may show **Unknown publisher**. Every release includes
 SHA-256 checksums and is built, tested, and published from a version tag by GitHub Actions; see the
-[release process](docs/RELEASING.md).
+[release process](docs/RELEASING.md). Linux has no equivalent publisher gate; that archive is
+reproducible for a given tag, so its published checksum can be reproduced from source.
 
 ## Support the project
 
-FURSOY Vault is built and maintained by one person, and it is free under GPL-3.0. There is no
-company behind it, no paid tier and no telemetry to monetise.
+FURSOY Vault is built and maintained by one person and published under GPL-3.0. There is no
+company behind it and no telemetry to monetise.
 
 The one thing money would change today is **code signing**. A Windows code-signing certificate
 costs a few hundred dollars a year, which the project does not currently cover. Until it does,
