@@ -1,6 +1,6 @@
 # FURSOY Vault website
 
-Official product website for [FURSOY Vault](https://github.com/FURSOY/fursoy-vault), built with React, Vinext and Cloudflare Workers.
+Official product website for [FURSOY Vault](https://github.com/FURSOY/fursoy-vault), built with React, Vinext and Cloudflare Workers. This repository is the **reference implementation** of the FURSOY Web Design Standard — see `FURSOY_WEB_GUIDELINES.md` in this directory.
 
 ## Local development
 
