@@ -19,7 +19,7 @@ test("renders the FURSOY Vault homepage", async () => {
   assert.match(html, /Companion app currently unsigned/);
   assert.match(html, /releases\/latest\/download\/FURSOY-Vault-Setup\.exe/);
   assert.match(html, /SoftwareApplication/);
-  assert.match(html, /rel="canonical" href="https:\/\/fursoy\.com\/?"/);
+  assert.match(html, /rel="canonical" href="https:\/\/vault\.fursoy\.com\/?"/);
   assert.doesNotMatch(html, /development preview|loading skeleton|Starter Project/i);
 });
 
@@ -41,9 +41,9 @@ test("serves search discovery files", async () => {
     render("/manifest.webmanifest"),
   ]);
   assert.equal(robots.status, 200);
-  assert.match(await robots.text(), /Sitemap: https:\/\/fursoy\.com\/sitemap\.xml/);
+  assert.match(await robots.text(), /Sitemap: https:\/\/vault\.fursoy\.com\/sitemap\.xml/);
   assert.equal(sitemap.status, 200);
-  assert.match(await sitemap.text(), /https:\/\/fursoy\.com\/privacy/);
+  assert.match(await sitemap.text(), /https:\/\/vault\.fursoy\.com\/privacy/);
   assert.equal(manifest.status, 200);
   assert.match(await manifest.text(), /FURSOY Vault/);
 });

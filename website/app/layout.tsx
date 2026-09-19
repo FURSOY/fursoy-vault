@@ -6,12 +6,12 @@ const manrope = Manrope({ variable: "--font-manrope", subsets: ["latin"] });
 const spaceMono = Space_Mono({ variable: "--font-mono", subsets: ["latin"], weight: ["400", "700"] });
 
 export const metadata: Metadata = {
-  metadataBase: new URL("https://fursoy.com"),
+  metadataBase: new URL("https://vault.fursoy.com"),
   title: { default: "FURSOY Vault — Local session protection", template: "%s · FURSOY Vault" },
   description: "Protect selected browser sessions in an encrypted vault on your own machine and restore them only after you verify it is you.",
   keywords: ["FURSOY Vault", "Windows Hello", "TPM", "browser session protection", "local cookie vault", "open source security"],
   alternates: { canonical: "/" },
-  authors: [{ name: "FURSOY", url: "https://fursoy.com" }],
+  authors: [{ name: "FURSOY", url: "https://vault.fursoy.com" }],
   creator: "FURSOY",
   publisher: "FURSOY",
   category: "Security software",
@@ -27,7 +27,7 @@ export const metadata: Metadata = {
       "max-video-preview": -1,
     },
   },
-  openGraph: { title: "FURSOY Vault", description: "Close the session. Keep the access.", url: "https://fursoy.com", siteName: "FURSOY Vault", images: [{ url: "/og.png", width: 1731, height: 909 }], type: "website" },
+  openGraph: { title: "FURSOY Vault", description: "Close the session. Keep the access.", url: "https://vault.fursoy.com", siteName: "FURSOY Vault", images: [{ url: "/og.png", width: 1731, height: 909 }], type: "website" },
   twitter: { card: "summary_large_image", title: "FURSOY Vault", description: "Close the session. Keep the access.", images: ["/og.png"] },
   icons: { icon: "/app-icon.png", apple: "/app-icon.png" },
 };

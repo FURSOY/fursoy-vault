@@ -28,6 +28,6 @@ Authenticate once with `npx wrangler login`, then publish with:
 npm run deploy:cloudflare
 ```
 
-In Cloudflare, open **Workers & Pages → fursoy-vault-website → Settings → Domains & Routes**, add `fursoy.com` as a custom domain, then add `www.fursoy.com` or redirect it to the apex domain.
+In Cloudflare, open **Workers & Pages → fursoy (the Vault website worker) → Settings → Domains & Routes** and add `vault.fursoy.com` as a custom domain. The apex `fursoy.com` serves the FURSOY brand hub; legacy Vault paths on the apex redirect here.
 
 The public website contains no analytics, telemetry, form processing or database bindings.

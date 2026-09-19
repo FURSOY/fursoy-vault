@@ -2,7 +2,7 @@
 
 **Status:** Canonical source of truth for all FURSOY product websites.
 **Reference implementation:** the FURSOY Vault website that lives next to this file (`app/globals.css`, `app/layout.tsx`, `app/page.tsx`).
-**Applies to:** every public FURSOY website (currently `fursoy.com` / Vault, the FURSOY Mail site, the Fon Takip public pages, and any future FURSOY site).
+**Applies to:** every public FURSOY website (currently `vault.fursoy.com` (Vault), `mail.fursoy.com` (Mail), `portfolyom.fursoy.com` (Fon Takip), `fursoy.com` (brand hub), and any future FURSOY site).
 
 The goal is **not** identical sites. Each product may have its own identity, content and page
 composition. The goal is that every FURSOY site is recognizably part of the same product family.
@@ -19,6 +19,7 @@ short fallback in that repository's `website/WEBSITE_RULES.md`.
 - Section 2 (**REFERENCE**) lists concrete values taken from the reference implementation. Adapt them freely to content and product needs; they are examples of the system in use, not requirements.
 - Sections 3–10 cover surfaces, layouts, motion, SEO and conventions.
 - Out of scope: application UIs (desktop/mobile app screens), dashboards, and non-public pages.
+- Repository layout: when a repository contains product code **plus** its public website, the site lives in a `/website` directory (e.g. `fursoy-vault/website/`, `fursoy-mail/website/`). A repository that is **only** a website may keep the site at the repository root (e.g. the FURSOY brand hub). Do not nest a website-only repository under `/website`.
 
 ---
 
