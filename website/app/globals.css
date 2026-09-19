@@ -15,27 +15,27 @@
   --white:#fff;
   --shadow:0 24px 80px rgba(8,47,49,.12);
   /* Ink-family dark surfaces (sections, cards, footer) */
-  --dark-surface:var(--dark-surface);
+  --dark-surface:#0c292a;
   --dark-surface-raised:#102f30;
-  --dark-footer:var(--dark-footer);
-  --dark-line:var(--dark-line);
-  --dark-line-soft:var(--dark-line-soft);
+  --dark-footer:#082526;
+  --dark-line:#315252;
+  --dark-line-soft:#294647;
   /* Teal text accents (light surfaces → dark surfaces) */
   --teal-text:#0794a0;
   --teal-deep:#078c98;
-  --teal-link:var(--teal-link);
+  --teal-link:#078f9a;
   --teal-glow:#6ce1dd;
   --ink-raised:#155051;
   /* Muted text ladder (light surfaces) */
   --text-lead:#506866;
   --text-muted:#647876;
   --text-soft:#6e817e;
-  --text-dim:var(--text-dim);
-  --text-body:var(--text-body);
+  --text-dim:#71817f;
+  --text-body:#637673;
   /* Chips & status */
   --chip-bg:#e5f8f6;
   --chip-soft:#e0f7f4;
-  --chip-text:var(--chip-text);
+  --chip-text:#07949d;
   --success:#177e83;
   --success-bg:#e8f8f6;
   /* Layout system */
